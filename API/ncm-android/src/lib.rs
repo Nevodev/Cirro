@@ -265,6 +265,11 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeLoginStatus<'l
 /// 分开处理，否则网络抖一下就会被当成"这首歌不能放"。
 ///
 /// 响应里的 `expi` 是直链有效期（实测 1200 秒），很短，所以不要提前批量换好囤起来。
+///
+/// `gain`（dB）和 `peak`（线性峰值，0..1）是网易云自己算好的响度数据，供客户端做响度归一。
+/// 实测 `gain` 会取正值（最高 +14.75 dB，即"这首歌偏轻，需要提"），所以不能拿它当衰减系数用；
+/// `peak` 用来算提升上限，`gain` 乘上 `peak` 会越过 1.0 的歌约占 4%，必须钳。
+/// 没有这两项时返回 null，客户端按"不做处理"走。
 #[no_mangle]
 pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeSongUrl<'local>(
     mut env: JNIEnv<'local>,
@@ -292,6 +297,8 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeSongUrl<'local
                 "type": first["type"].as_str().unwrap_or(""),
                 "size": first["size"].as_i64().unwrap_or(0),
                 "expi": first["expi"].as_i64().unwrap_or(0),
+                "gain": first["gain"].as_f64(),
+                "peak": first["peak"].as_f64(),
                 "message": if url.is_empty() {
                     first["message"]
                         .as_str()

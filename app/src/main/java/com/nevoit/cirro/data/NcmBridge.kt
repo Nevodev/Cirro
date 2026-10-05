@@ -93,6 +93,8 @@ object NcmBridge {
             type = body.type,
             sizeBytes = body.size,
             expiresInSeconds = body.expi,
+            gainDb = body.gain,
+            peak = body.peak,
         )
     }
 
@@ -141,5 +143,7 @@ private data class BridgeResponse(
     val type: String = "",
     val size: Long = 0,
     val expi: Long = 0,
+    val gain: Double? = null,
+    val peak: Double? = null,
     val songs: List<Song> = emptyList(),
 )

@@ -5,6 +5,8 @@ import androidx.annotation.OptIn
 import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.ResolvingDataSource
@@ -24,13 +26,17 @@ import com.nevoit.cirro.data.SongUnavailableException
  * MediaSessionService 还能顺带拿到通知栏、锁屏控制和耳机线控——这几样自己写一遍
  * 只会更长也更容易出错。
  */
+@OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
 
     private var session: MediaSession? = null
 
+    /** 响度归一挂在音频输出链上，换歌时由数据源那层喂 gain（见 [mediaSourceFactory]）。 */
+    private val loudness = LoudnessAudioProcessor()
+
     override fun onCreate() {
         super.onCreate()
-        val player = ExoPlayer.Builder(this)
+        val player = ExoPlayer.Builder(this, AudioRenderersFactory(this, loudness))
             .setMediaSourceFactory(mediaSourceFactory())
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -41,6 +47,14 @@ class PlaybackService : MediaSessionService() {
             )
             .setHandleAudioBecomingNoisy(true)
             .build()
+
+        // 响度数据是跟着 resolve 来的，但"该用哪一首的"只有这里知道：ExoPlayer 会预读下一首，
+        // 下一首的 resolve 可能在当前这首还没放完时就跑完了。所以切换时按 id 选一次。
+        player.addListener(object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                loudness.selectTrack(mediaItem?.mediaId?.toLongOrNull())
+            }
+        })
 
         session = MediaSession.Builder(this, player).build()
     }
@@ -67,13 +81,16 @@ class PlaybackService : MediaSessionService() {
      *
      * 换链接发生在 ExoPlayer 自己的加载线程上，不在主线程——Rust 侧是阻塞调用，
      * 放主线程会 ANR。
+     *
+     * 顺带把这首歌的响度记下来：直链和 `gain` / `peak` 本来就在同一个响应里，一起拿最省事。
+     * 只记不设——这里拿到的可能是预读的下一首，见 [LoudnessAudioProcessor] 的类注释。
      */
-    @OptIn(UnstableApi::class)
     private fun mediaSourceFactory(): DefaultMediaSourceFactory {
         val resolver = ResolvingDataSource.Resolver { spec ->
             val id = spec.uri.songIdOrNull()
                 ?: throw SongUnavailableException("无法识别的歌曲地址")
             val audio = NcmBridge.songUrl(id).getOrThrow()
+            loudness.rememberTrack(id, audio.gainDb, audio.peak)
             spec.withUri(audio.url.toUri())
         }
         return DefaultMediaSourceFactory(
