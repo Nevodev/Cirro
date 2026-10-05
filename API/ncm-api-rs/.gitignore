@@ -1,0 +1,26 @@
+# Build artifacts
+/target/
+**/*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+
+# Local secrets & generated files (NEVER commit)
+cookie.txt
+login_qr.svg
+qr*.html
+qrlogin.log
+diag.log

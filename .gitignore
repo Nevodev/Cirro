@@ -1,0 +1,27 @@
+# ===== Android / Gradle =====
+*.iml
+.gradle
+/build
+/captures
+.externalNativeBuild
+.cxx
+/local.properties
+local.properties
+*.apk
+*.aab
+
+# ===== IDE（本地配置，不入库）=====
+/.idea/
+
+# ===== Kotlin =====
+.kotlin/
+
+# ===== Rust / Cargo（API/ 下的构建产物，体积很大）=====
+target/
+**/*.rs.bk
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+/.workbuddy
