@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+      网易云返回的音频直链是 http（如 http://m801.music.126.net/...），targetSdk 28 起
+      系统默认禁明文，ExoPlayer 会抛 CleartextNotPermittedException。CDN 本身支持 https，
+      但接口返回什么就用什么才稳妥（换节点/换地区不保证），所以只对网易系域名开口子。
+
+      注意这是"允许"不是"强制"：接口请求仍然走 https，不会因此被降级。
+    -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">126.net</domain>
+        <domain includeSubdomains="true">163.com</domain>
+    </domain-config>
+</network-security-config>

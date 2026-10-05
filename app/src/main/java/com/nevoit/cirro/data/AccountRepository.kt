@@ -1,0 +1,101 @@
+package com.nevoit.cirro.data
+
+import android.util.Log
+import com.nevoit.cirro.data.model.Session
+import com.nevoit.cirro.data.model.UserProfile
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/**
+ * 登录态的唯一真相源：谁想读"现在登录了没、是谁"，只读 [session]。
+ *
+ * 凭据分两处：cookie 密文在 [SessionStore]，明文只在原生层的内存里。两边靠 [restore] 对齐——
+ * 冷启动先解密出 cookie 塞回原生层，再问一次 [NcmBridge.loginStatus] 确认它还有效。
+ *
+ * 所有写操作都跑在 [scope]（Application 级）而不是某个 ViewModel 的 scope 里：登录成功后
+ * LoginActivity 马上就 finish 了，跟着它的 scope 会被取消，cookie 就存不下去。
+ */
+class AccountRepository(
+    private val store: SessionStore,
+    private val scope: CoroutineScope,
+) {
+
+    private val _session = MutableStateFlow<Session>(Session.Unknown)
+    val session: StateFlow<Session> = _session.asStateFlow()
+
+    /** 冷启动调用一次：把磁盘上的登录态恢复到原生层。 */
+    fun restore() {
+        scope.launch {
+            val cookie = withContext(Dispatchers.IO) { store.readCookie() }
+            if (cookie == null) {
+                _session.value = Session.LoggedOut
+                return@launch
+            }
+
+            NcmBridge.setCookie(cookie)
+
+            val status = NcmBridge.loginStatus()
+            val profile = status.getOrNull()
+            when {
+                // 请求本身失败：cookie 未必坏，留在磁盘里下次启动再验，界面按离线处理
+                status.isFailure -> _session.value = Session.Offline
+
+                profile != null -> _session.value = Session.LoggedIn(profile)
+
+                else -> {
+                    // 确实没登录，清掉免得每次启动都白发一次请求
+                    forgetCookie()
+                    _session.value = Session.LoggedOut
+                }
+            }
+        }
+    }
+
+    /**
+     * 扫码确认后调用。[cookie] 为空说明原生层没拿到 Set-Cookie，那就不落盘，
+     * 但仍然去问一次登录态——cookie 有时已经在原生层的客户端里了。
+     */
+    fun onLoginSucceeded(cookie: String?) {
+        scope.launch {
+            persistCookie(cookie)
+
+            // 先落一个占位资料：登录态是确定的，头像晚一步到不该让登录卡片又冒出来
+            _session.value = Session.LoggedIn(UserProfile())
+
+            val profile = NcmBridge.loginStatus().getOrNull() ?: return@launch
+            _session.value = Session.LoggedIn(profile)
+        }
+    }
+
+    fun logout() {
+        scope.launch {
+            forgetCookie()
+            _session.value = Session.LoggedOut
+        }
+    }
+
+    private suspend fun persistCookie(cookie: String?) {
+        if (cookie.isNullOrEmpty()) return
+        // 落盘失败不该连着登录态一起丢：本次会话照样是登录的，只是下次冷启动要重扫
+        val saved = withContext(Dispatchers.IO) {
+            runCatching { store.writeCookie(cookie) }.getOrDefault(false)
+        }
+        if (!saved) {
+            Log.w(Tag, "cookie 落盘失败，这次登录不会跨进程保留")
+        }
+    }
+
+    private suspend fun forgetCookie() {
+        withContext(Dispatchers.IO) { runCatching { store.clear() } }
+        NcmBridge.clearCookie()
+    }
+
+    private companion object {
+        const val Tag = "AccountRepository"
+    }
+}
