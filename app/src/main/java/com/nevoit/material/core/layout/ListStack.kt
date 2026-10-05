@@ -32,15 +32,14 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.layout.Layout
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kyant.shapes.RoundedRectangle
 import com.kyant.shapes.UnevenRoundedRectangle
-import com.nevoit.cirro.R
 import com.nevoit.material.core.component.Icon
+import com.nevoit.material.core.component.InternalIcons
 import com.nevoit.material.core.component.Switch
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.interaction.DimIndication
@@ -665,7 +664,7 @@ private fun ListRowLayout(
             when (accessory) {
                 ListRowAccessory.Chevron -> {
                     Icon(
-                        painter = painterResource(R.drawable.ic_navigate_indicator),
+                        imageVector = InternalIcons.ChevronRight,
                         contentDescription = null,
                         tint = MaterialTheme.colors.contentVariant.copy(alpha = .2f),
                         modifier = Modifier.size(
@@ -677,7 +676,7 @@ private fun ListRowLayout(
 
                 ListRowAccessory.SelectIndicator -> {
                     Icon(
-                        painter = painterResource(R.drawable.ic_select_indicator),
+                        imageVector = InternalIcons.ChevronUpDown,
                         contentDescription = null,
                         tint = MaterialTheme.colors.contentVariant.copy(alpha = .2f),
                         modifier = Modifier.size(
