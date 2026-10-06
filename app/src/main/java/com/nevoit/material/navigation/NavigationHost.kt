@@ -11,6 +11,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -100,6 +101,19 @@ private class NavigationPageLifecycleOwner(
     }
 }
 
+// Host-level controls for callers outside the page tree (a persistent bottom bar that
+// wants to pop back to the root when a tab is tapped).
+@Stable
+class NavigationHostHandle internal constructor(
+    private val closeTopInternal: () -> Unit,
+    private val hasPagesAboveRoot: () -> Boolean,
+) {
+    /** Closes every page above the root. No-op when already at the root. */
+    fun closeToRoot() {
+        while (hasPagesAboveRoot()) closeTopInternal()
+    }
+}
+
 /**
  * Renders every entry in [navigator] and coordinates page transitions, system back handling,
  * saveable state, lifecycle state, and per-page ViewModel stores.
@@ -113,6 +127,7 @@ private class NavigationPageLifecycleOwner(
  * a two-pane layout each measure their own pane, which is what makes that layout work — and
  * [underlayTranslation], [scrimColor], [scrimAlpha] and [transitionModifier] are optional visual
  * policy hooks; they do not participate in back-stack or lifecycle decisions.
+ * [onHostReady] hands out a [NavigationHostHandle] once, for callers outside the page tree.
  *
  * Ported from `Bilineo/.../core/navigation`, with two changes for Compose Multiplatform: the window
  * width is measured by the host itself rather than read from `LocalWindowInfo`, and system back goes
@@ -132,6 +147,7 @@ fun <D : Any> NavigationHost(
     scrimColor: Color = Color.Black,
     scrimAlpha: Float = 0.6f,
     transitionModifier: (Modifier, isTransitioning: Boolean) -> Modifier = { page, _ -> page },
+    onHostReady: (NavigationHostHandle) -> Unit = {},
     content: @Composable NavigationScope<D>.() -> Unit,
 ) {
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
@@ -222,6 +238,14 @@ fun <D : Any> NavigationHost(
             transition.targetProgress = 0f
             transition.isPageTransitioning = true
         }
+
+        val hostHandle = remember(navigator) {
+            NavigationHostHandle(
+                closeTopInternal = { closeTop() },
+                hasPagesAboveRoot = { navigator.backStack.size > 1 },
+            )
+        }
+        LaunchedEffect(hostHandle) { onHostReady(hostHandle) }
 
         Box(modifier = Modifier.fillMaxSize()) {
             val entryTransitions = visibleEntries.map { entry -> transitions.getValue(entry.id) }

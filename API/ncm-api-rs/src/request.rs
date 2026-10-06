@@ -104,6 +104,11 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
+    /// 内部访问原始 cookie 串
+    pub(crate) fn raw_cookie(&self) -> Option<&str> {
+        self.cookie.as_deref()
+    }
+
     /// 创建新的 API 客户端
     pub fn new(cookie: Option<String>) -> Self {
         let client = reqwest::Client::builder()

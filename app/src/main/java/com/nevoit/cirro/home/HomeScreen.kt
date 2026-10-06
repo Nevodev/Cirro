@@ -1,0 +1,798 @@
+package com.nevoit.cirro.home
+
+import android.content.Intent
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableIntState
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.crossfade
+import coil3.request.transformations
+import com.kyant.shapes.RoundedRectangle
+import com.nevoit.cirro.R
+import com.nevoit.cirro.data.model.CollectionKind
+import com.nevoit.cirro.data.model.Session
+import com.nevoit.cirro.data.model.Song
+import com.nevoit.cirro.login.LoginActivity
+import com.nevoit.cirro.palette.CoverPalette
+import com.nevoit.cirro.playback.PlaybackConnection
+import com.nevoit.cirro.ui.ReflectionTransformation
+import com.nevoit.material.core.component.HGap
+import com.nevoit.material.core.component.Icon
+import com.nevoit.material.core.component.PageHeader
+import com.nevoit.material.core.component.Text
+import com.nevoit.material.core.component.VGap
+import com.nevoit.material.core.interaction.rememberFlingBehavior
+import com.nevoit.material.core.layout.VerticalStack
+import com.nevoit.material.core.modifier.smoothGradient
+import com.nevoit.material.core.utility.NavigationBarSpacer
+import com.nevoit.material.theme.MaterialTheme
+import com.nevoit.material.theme.tokens.Springs
+import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.koinInject
+
+private val CardWidth = 216.dp
+private val CardRise = 72.dp
+private val CardHeight = CardWidth + CardRise
+
+private val CardPadding = 16.dp
+
+private const val CreditLines = 2
+
+private const val CreditSeparator = ", "
+private const val CreditSuffix = "等"
+
+private const val Placeholder = "\u00A0"
+
+private val ShelfPadding = 12.dp
+
+/**
+ * 雷达歌单区的区标题，**写死**。
+ *
+ * 接口也给了个标题，但那是「obviouslynev的雷达歌单」——带动加载中先空一块、数据回来再蹦出
+ * 一串用户名，不如固定四个字稳。
+ */
+private const val RadarShelfTitle = "雷达歌单"
+
+/**
+ * 「最近播放」的区标题，**写死**。
+ *
+ * 原来这块叫「最近常听」（跟着接口 `data.title` 走），现在数据源换成了听歌记录的专辑维度，
+ * 接口那边根本没有标题，正好自己定一个说人话的：里面放的就是最近听过的专辑。
+ */
+private const val RecentShelfTitle = "最近播放"
+
+/** 歌单卡：正方形封面 + 下方歌单名（+ 可选的一行小字）。 */
+private val PlaylistCardSize = 152.dp
+private val PlaylistCardCorner = 12.dp
+
+/** 点入口卡 / 横滑卡时要去的详情页目的地：种类、id、清洗过的显示名。 */
+typealias OpenCollection = (kind: CollectionKind, id: Long, titleHint: String, coverHint: String) -> Unit
+
+@Composable
+fun HomeRoute(
+    session: Session,
+    onOpenCollection: OpenCollection = { _, _, _, _ -> },
+    modifier: Modifier = Modifier,
+) {
+    when (session) {
+        is Session.LoggedIn -> LoggedInHome(onOpenCollection, modifier)
+        Session.LoggedOut -> LoggedOutHome(modifier)
+        Session.Unknown, Session.Offline -> PlainHome(modifier)
+    }
+}
+
+@Composable
+private fun LoggedInHome(
+    onOpenCollection: OpenCollection,
+    modifier: Modifier = Modifier,
+) {
+    val viewModel: HomeViewModel = koinViewModel()
+    val playback = koinInject<PlaybackConnection>()
+    val state by viewModel.state.collectAsState()
+
+    // 列表期把封面的主色预取好：用户点进详情页时背景色已经在缓存里，第一帧就有
+    val palette = koinInject<CoverPalette>()
+    val coverUrls = remember(state) {
+        buildList {
+            state.entries.forEach { entry -> addAll(entry.detail.dataOrNull?.covers.orEmpty()) }
+            state.shelf.dataOrNull?.forEach { card -> addAll(card.covers) }
+            state.recent.dataOrNull?.forEach { card -> addAll(card.covers) }
+        }.distinct()
+    }
+    LaunchedEffect(coverUrls) { coverUrls.forEach(palette::prefetch) }
+
+    HomeContent(
+        state = state,
+        onRetry = viewModel::refresh,
+        onPlay = { songs, index -> playback.playSongs(songs, index) },
+        onOpenCollection = onOpenCollection,
+        modifier = modifier,
+    )
+}
+
+@Composable
+private fun LoggedOutHome(modifier: Modifier = Modifier) {
+    VerticalStack(modifier = modifier.fillMaxSize()) {
+        item { HomeTitle() }
+        item { LoginCard(modifier = Modifier.padding(horizontal = 12.dp)) }
+    }
+}
+
+@Composable
+private fun PlainHome(modifier: Modifier = Modifier) {
+    VerticalStack(modifier = modifier.fillMaxSize()) {
+        item { HomeTitle() }
+    }
+}
+
+@Composable
+private fun HomeTitle() {
+    PageHeader(
+        title = "主页",
+        modifier = Modifier.padding(horizontal = 12.dp),
+    )
+}
+
+@Composable
+private fun HomeContent(
+    state: HomeUiState,
+    onRetry: () -> Unit,
+    onPlay: (List<Song>, Int) -> Unit,
+    onOpenCollection: OpenCollection,
+    modifier: Modifier = Modifier,
+) {
+    VerticalStack(modifier = modifier.fillMaxSize()) {
+        item { HomeTitle() }
+
+        item {
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(horizontal = ShelfPadding),
+                horizontalArrangement = Arrangement.spacedBy(ShelfPadding),
+                flingBehavior = rememberFlingBehavior(),
+            ) {
+                items(state.entries) { entry ->
+                    EntryCard(entry = entry, onRetry = onRetry, onOpen = onOpenCollection)
+                }
+            }
+        }
+
+        if (state.showRecent) {
+            item {
+                VGap(36.dp)
+                SectionTitle(text = RecentShelfTitle)
+                VGap(16.dp)
+                PlaylistShelf(
+                    shelf = state.recent,
+                    kind = CollectionKind.ALBUM,
+                    onRetry = onRetry,
+                    onOpen = onOpenCollection,
+                    revealNewItems = true,
+                )
+            }
+        }
+
+        item {
+            VGap(36.dp)
+            SectionTitle(text = RadarShelfTitle)
+            VGap(16.dp)
+            PlaylistShelf(
+                shelf = state.shelf,
+                kind = CollectionKind.PLAYLIST,
+                onRetry = onRetry,
+                onOpen = onOpenCollection,
+                showBadge = true
+            )
+        }
+
+        item {
+            VGap(36.dp)
+            SectionTitle(text = state.style.dataOrNull?.title ?: "歌曲推荐")
+            VGap(16.dp)
+            StyleShelf(
+                picks = state.style,
+                onPlay = onPlay,
+                onRetry = onRetry
+            )
+        }
+
+        item {
+            VGap(36.dp)
+            VGap(144.dp)
+            NavigationBarSpacer()
+        }
+    }
+}
+
+@Composable
+fun SectionTitle(
+    text: String,
+) {
+    Text(
+        text = text,
+        style = MaterialTheme.type.title4Emphasized,
+        fontWeight = FontWeight.Medium,
+        color = MaterialTheme.colors.content,
+        minLines = 1,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(horizontal = ShelfPadding * 2),
+    )
+}
+
+/**
+ * 一张入口卡片。
+ *
+ * **结构恒定**：卡片壳、封面层、渐变层、文字层一直都在，接口回来的只是"封面图"和"署名"。
+ * 所以加载中就是一块还没有图的底色块——标题早就写在那儿了，不摆"正在加载"，也不换布局。
+ *
+ * 卡片是**入口**不是内容：点它带着清洗过的标题进详情页；只有加载失败时点它才是重试。
+ */
+@Composable
+private fun EntryCard(
+    entry: HomeEntry,
+    onRetry: () -> Unit,
+    onOpen: OpenCollection,
+    modifier: Modifier = Modifier,
+) {
+    val detail = entry.detail.dataOrNull
+    val failed = entry.detail is Section.Failed
+    val covers = rememberCovers(detail?.covers.orEmpty())
+
+    Box(
+        modifier = modifier
+            .width(CardWidth)
+            .height(CardHeight)
+            .clip(RoundedRectangle(20.dp))
+            .background(MaterialTheme.colors.scrimNormal)
+            .clickable {
+                if (failed) onRetry() else onOpen(entry.kind, entry.id, entry.title, entry.detail.dataOrNull?.covers?.firstOrNull().orEmpty())
+            },
+    ) {
+        AsyncImage(
+            model = coverModel(covers.current),
+            contentDescription = null,
+            onError = { covers.advance() },
+            contentScale = ContentScale.FillBounds,
+            modifier = Modifier.fillMaxSize(),
+        )
+
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth()
+                .height(CardRise * 2f)
+                .smoothGradient(
+                    color = Color.Black,
+                    start = 0.0f,
+                    end = 1.5f,
+                    intensity = 0.5f,
+                )
+        )
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .graphicsLayer {
+                    blendMode = BlendMode.Plus
+                }
+                .fillMaxWidth()
+                .padding(horizontal = CardPadding)
+                .padding(bottom = CardPadding),
+        ) {
+            Text(
+                text = entry.title,
+                style = MaterialTheme.type.subHeadline2,
+                color = Color.White.copy(.4f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            VGap(2.dp)
+            Text(
+                text = entry.detail.credit(),
+                style = MaterialTheme.type.subHeadline,
+                color = Color.White.copy(alpha = 0.6f),
+                minLines = CreditLines,
+                maxLines = CreditLines,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlaylistShelf(
+    shelf: Section<List<ShelfCard>>,
+    kind: CollectionKind,
+    onRetry: () -> Unit,
+    onOpen: OpenCollection,
+    showBadge: Boolean = false,
+    revealNewItems: Boolean = false,
+) {
+    val listState = rememberLazyListState()
+    Box {
+        LazyRow(
+            state = listState,
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = ShelfPadding),
+            horizontalArrangement = Arrangement.spacedBy(ShelfPadding),
+            flingBehavior = rememberFlingBehavior(),
+        ) {
+            items(shelf.dataOrNull.orEmpty(), key = { it.id }) { card ->
+                PlaylistCard(
+                    card = card,
+                    showBadge = showBadge,
+                    onClick = { onOpen(kind, card.id, card.title, card.covers.firstOrNull().orEmpty()) },
+                )
+            }
+        }
+
+        if (shelf is Section.Failed) {
+            ShelfFailure(onRetry)
+        }
+    }
+
+    if (revealNewItems) {
+        LaunchedEffect(shelf.dataOrNull) {
+            // LazyRow 按「第一个可见 item 的 key」锚定滚动位置：新卡插进队首时，
+            // 旧首卡原地不动、视口左让一位，新卡就落在画面外了。用户还停在开头
+            // 附近时滚回去把它亮出来；已经滑到深处就看也不看，不抢用户的手。
+            if (listState.firstVisibleItemIndex <= 1) {
+                listState.animateScrollToItem(0)
+            }
+        }
+    }
+}
+
+/**
+ * 「曲风推荐」横滑带：小标题 + 一列三首的歌曲列表。
+ *
+ * 小标题是接口给的（「听过的 Tritonal 为你定制」），所以加载中它先是空的——
+ * 但那一行的位置一直在，标题行、带子高度都不变。
+ *
+ * 点某一首会把**整块**歌变成播放队列，从这一首开始往下听。
+ */
+@Composable
+private fun StyleShelf(
+    picks: Section<StylePicks>,
+    onPlay: (List<Song>, Int) -> Unit,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val picksData = picks.dataOrNull
+    val columns = picksData?.columns.orEmpty()
+    val songs = picksData?.songs.orEmpty()
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+    ) {
+        LazyRow(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = ShelfPadding),
+            horizontalArrangement = Arrangement.spacedBy(ShelfPadding),
+            flingBehavior = rememberFlingBehavior(),
+        ) {
+            itemsIndexed(columns) { index, column ->
+                // 整块是一个队列，所以点第几列第几首要换算成这批歌里的第几首。
+                val start = columns.take(index).sumOf { it.size }
+                SongColumn(
+                    column = column,
+                    startIndex = start,
+                    songs = songs,
+                    onPlay = onPlay,
+                )
+            }
+        }
+
+        if (picks is Section.Failed) {
+            ShelfFailure(onRetry)
+        }
+    }
+}
+
+/** 某个区拉不到内容时的提示，摆在横滑带的起点。 */
+@Composable
+private fun BoxScope.ShelfFailure(onRetry: () -> Unit) {
+    Text(
+        text = "加载失败 · 点按重试",
+        style = MaterialTheme.type.footnote,
+        color = MaterialTheme.colors.contentVariant,
+        modifier = Modifier
+            .align(Alignment.CenterStart)
+            .padding(horizontal = ShelfPadding)
+            .clickable { onRetry() },
+    )
+}
+
+/** 正方形封面 + 下方歌单名（+ 可选的一行小字）。整张卡就是详情页入口。 */
+@Composable
+private fun LazyItemScope.PlaylistCard(
+    card: ShelfCard,
+    showBadge: Boolean = false,
+    onClick: () -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
+    val covers = rememberCovers(card.covers)
+
+    Column(
+        modifier = modifier
+            .animateItem(placementSpec = Springs.crisp())
+            .width(PlaylistCardSize)
+            .clip(RoundedRectangle(PlaylistCardCorner))
+            .clickable(onClick = onClick)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(PlaylistCardSize)
+                .clip(RoundedRectangle(PlaylistCardCorner))
+        ) {
+            AsyncImage(
+                model = listCoverModel(covers.current),
+                contentDescription = null,
+                onError = { covers.advance() },
+                contentScale = ContentScale.Crop,
+            )
+            if (showBadge) {
+                Image(
+                    painter = painterResource(R.drawable.cirro_logo_badge),
+                    contentDescription = null,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                        .size(20.dp)
+                )
+            }
+        }
+        VGap(8.dp)
+        Text(
+            text = card.title,
+            style = MaterialTheme.type.subHeadline,
+            color = MaterialTheme.colors.content,
+            minLines = 1,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+        // 小字是**可选**的：只有能给出一行有意义的副标题时才占这一行。
+        // 雷达歌单那排就不给——那儿除了歌单名没有别的可说，硬凑一行只会让卡片变高、变空。
+        val subtitle = card.subtitle
+        if (subtitle != null) {
+            Text(
+                text = subtitle,
+                style = MaterialTheme.type.footnote,
+                color = MaterialTheme.colors.contentVariant,
+                minLines = 1,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 4.dp),
+            )
+        }
+    }
+}
+
+/** 曲风推荐的一列：三首叠着放，行高全部对齐封面。 */
+@Composable
+private fun SongColumn(
+    column: List<Song>,
+    startIndex: Int,
+    songs: List<Song>,
+    onPlay: (List<Song>, Int) -> Unit,
+) {
+    val width = LocalWindowInfo.current.containerDpSize.width - 48.dp
+    Column(
+        modifier = Modifier.width(width),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        column.forEachIndexed { index, song ->
+            SongRow(
+                song = song,
+                onClick = { onPlay(songs, startIndex + index) },
+            )
+        }
+    }
+}
+
+/**
+ * 一列里的一首歌：封面 + 歌名/歌手 + 右侧播放键。
+ *
+ * 整行和右边那颗键走的是**同一个动作**（从这首起播整块队列）——按钮只是把"这儿能点"
+ * 明摆出来，不是另一个入口。哪天整行改成进歌曲页，这两个才需要分家。
+ */
+@Composable
+private fun SongRow(
+    song: Song,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .clip(RoundedRectangle(8.dp))
+            .clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AsyncImage(
+            model = listCoverModel(song.cover),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .aspectRatio(1f)
+                .fillMaxHeight()
+                .clip(RoundedRectangle(8.dp)),
+        )
+        HGap(12.dp)
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = song.name,
+                style = MaterialTheme.type.subHeadline,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colors.content,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = song.artistText,
+                style = MaterialTheme.type.footnote,
+                color = MaterialTheme.colors.contentVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(CircleShape)
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.play_fill),
+                contentDescription = "播放",
+                modifier = Modifier.size(28.dp),
+                tint = MaterialTheme.colors.content,
+            )
+        }
+    }
+}
+
+/**
+ * 封面请求：按卡片真实的像素尺寸要图，再挂上倒影变换。
+ *
+ * 要的尺寸就是 [CardWidth] × [CardHeight]，而变换的输出宽度等于输入宽度、高度是宽度的 4/3，
+ * 于是输出跟布局盒子一个像素对一个像素，不会被二次缩放。地址为空时返回 null，
+ * Coil 什么都不画，露出卡片底色。
+ */
+@Composable
+private fun coverModel(url: String?): Any? {
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val width = with(density) { CardWidth.roundToPx() }
+    val height = with(density) { CardHeight.roundToPx() }
+
+    return remember(url, width, height) {
+        url?.let {
+            ImageRequest.Builder(context)
+                .data(it)
+                .size(width, height)
+                .transformations(
+                    ReflectionTransformation(
+                        squareDp = CardWidth.value,
+                        riseDp = CardRise.value,
+                    )
+                )
+                .crossfade(true)
+                .build()
+        }
+    }
+}
+
+/**
+ * 列表里那些小封面的请求：只挂一个淡入，其余交给 Coil。
+ *
+ * 跟 [coverModel] 的区别就在这儿 —— 大卡要倒影、要按卡片像素尺寸出图；这里的图和布局盒子
+ * 一一对应，让 Coil 按量到的大小自己解码就行，指了尺寸反而多一层。
+ *
+ * 地址为 null 或空时返回 null，Coil 什么都不画，露出底色。
+ */
+@Composable
+private fun listCoverModel(url: String?): Any? {
+    val context = LocalContext.current
+    return remember(url, context) {
+        url?.takeIf { it.isNotEmpty() }?.let {
+            ImageRequest.Builder(context)
+                .data(it)
+                .crossfade(true)
+                .build()
+        }
+    }
+}
+
+/**
+ * 一张封面的候选表，外加"现在试到第几张"。
+ *
+ * 当前该加载哪张要走 [current] 拿，**由调用方在自己的组合里读** —— Compose 只在"读状态的
+ * 那个作用域"里重组：要是这里先把 `index` 读成一个 `url` 再返回，换图那一下只会重组本函数
+ * 自己那个组，调用方那一层不重组，`AsyncImage` 拿到的还是旧模型，"顺延"就不会生效。
+ *
+ * 网易云的专辑图**不保证还在 CDN 上**：实测「时光雷达」首曲那张返回 404，接口却照样下发
+ * URL。所以判空字符串是不够的，只有 Coil 真的加载失败才算数 —— [advance] 就挂在
+ * `AsyncImage` 的 `onError` 上。
+ */
+private class CoverActualCandidates(
+    private val urls: List<String>,
+    private val index: MutableIntState,
+) {
+    /** 当前该加载的那张。全挂完为 null，Coil 走 fallback（什么都不画）。 */
+    val current: String? get() = urls.getOrNull(index.intValue)
+
+    /** 当前这张图挂了，换下一张。已经是最后一张就什么都不做，所以不会死循环。 */
+    fun advance() {
+        if (index.intValue < urls.lastIndex) index.intValue++
+    }
+}
+
+/**
+ * 把候选封面 [covers] 包成一个可顺延的封面位。
+ *
+ * 顺序就是优先级，从第一张往后试；列表内容一变（换歌单、刷新）就从头再试 ——
+ * `remember` 的 key 用列表本身，而它来自 data class，内容一样就算同一个 key，
+ * 重组不会把"已经试到第几张"打回去。
+ */
+@Composable
+private fun rememberCovers(covers: List<String>): CoverActualCandidates {
+    val urls = remember(covers) { covers.filter { it.isNotEmpty() } }
+    val index = remember(urls) { mutableIntStateOf(0) }
+    return remember(urls, index) { CoverActualCandidates(urls, index) }
+}
+
+/** 署名那行随状态变，但始终占着同样的位置（恒定 [CreditLines] 行）。 */
+@Composable
+private fun Section<EntryDetail>.credit(): String = when (this) {
+    is Section.Ready -> data.artists.toCredit()
+    is Section.Failed -> "加载失败 · 点按重试"
+    Section.Loading -> Placeholder
+}
+
+/**
+ * 把歌手名字排成署名：用分隔符连接，**最多 [CreditLines] 行**，末尾挂一个「等」。
+ *
+ * 不能按个数截 —— 名字长短差得远（"周杰伦" 三个字，一串英文能占半行），固定取几个会让
+ * 有的卡空半行、有的卡溢出。所以这里**按排版量**来：名字一个个往里加，量到"加上它再挂个等
+ * 就超行数"就停手。量一次是纯文本布局、不落绘制，而且结果进 [remember] 就不再算。
+ *
+ * 还有一处要照顾：前面几个名字刚好把上面的行填满时，「等」会被挤到下一行**孤零零一个**。
+ * 遇到这种就再从剩下的名字里挑一个**最短的**塞进去 —— 短的才保证能和「等」待在同一行。
+ *
+ * 拼接和截断只发生在这里，数据层给的是拆开的名字（[EntryDetail.artists]）。
+ */
+@Composable
+private fun List<String>.toCredit(): String {
+    val measurer = rememberTextMeasurer()
+    val style = MaterialTheme.type.footnote
+    val width = with(LocalDensity.current) { (CardWidth - CardPadding * 2).roundToPx() }
+
+    return remember(this, style, width) {
+        if (isEmpty()) return@remember ""
+
+        val constraints = Constraints(maxWidth = width)
+
+        fun layoutOf(text: String) = measurer.measure(
+            text = AnnotatedString(text),
+            style = style,
+            maxLines = CreditLines,
+            constraints = constraints,
+        )
+
+        /** [text] 排得进 [CreditLines] 行，且末行不是孤零零一个「等」。 */
+        fun isTidy(text: String): Boolean {
+            val layout = layoutOf(text)
+            return !layout.hasVisualOverflow && layout.getLineStart(layout.lineCount - 1) != text.lastIndex
+        }
+
+        val builder = StringBuilder()
+        var count = 0
+
+        for (name in this) {
+            val candidate = if (count == 0) name else builder.toString() + CreditSeparator + name
+            val probe = layoutOf(candidate + CreditSuffix)
+
+            // 第一个名字再长也收下（否则署名整行空着）；之后一溢出就停手。
+            if (count > 0 && probe.hasVisualOverflow) break
+
+            if (count == 0) builder.append(name) else builder.append(CreditSeparator).append(name)
+            count++
+
+            // 行数已经占满，再多放一个就溢出了。
+            if (probe.lineCount >= CreditLines) break
+        }
+
+        if (count > 0 && !isTidy(builder.toString() + CreditSuffix)) {
+            val prefix = builder.toString() + CreditSeparator
+            val companion = drop(count)
+                .filter { isTidy(prefix + it + CreditSuffix) }
+                .minByOrNull { it.length }
+            if (companion != null) builder.append(CreditSeparator).append(companion)
+        }
+
+        builder.append(CreditSuffix).toString()
+    }
+}
+
+/** 未登录时摆在首页的登录入口。 */
+@Composable
+fun LoginCard(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    Box(
+        modifier = modifier
+            .clip(MaterialTheme.specs.cardShape)
+            .aspectRatio(256f / 160f)
+            .fillMaxWidth()
+            .clickable {
+                context.startActivity(Intent(context, LoginActivity::class.java))
+            }
+    ) {
+        Image(
+            painter = painterResource(R.drawable.cirro_header),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize()
+        )
+        Text(
+            text = "登录网易云账号以开始使用",
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 24.dp)
+                .graphicsLayer {
+                    blendMode = BlendMode.Plus
+                    alpha = 0.8f
+                },
+            style = MaterialTheme.type.subHeadline,
+            color = Color.White,
+        )
+    }
+}

@@ -9,6 +9,7 @@
 pub mod api;
 pub mod crypto;
 pub mod error;
+pub mod ncbl;
 pub mod request;
 pub mod util;
 

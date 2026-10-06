@@ -474,6 +474,8 @@ mod playmode_intelligence_list;
 mod playmode_song_vector;
 mod related_allvideo;
 mod related_playlist;
+mod relay_play_state_submit;
+mod scrobble_v1;
 mod starpick_comments_summary;
 mod weblog;
 

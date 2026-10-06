@@ -4,6 +4,8 @@ use std::sync::LazyLock;
 
 pub const API_DOMAIN: &str = "https://interface.music.163.com";
 pub const DOMAIN: &str = "https://music.163.com";
+/// 客户端日志上报域名（听歌打卡 weblog 走这里才计数）
+pub const CL_DOMAIN: &str = "https://clientlog.music.163.com";
 pub const ENCRYPT: bool = true;
 pub const ENCRYPT_RESPONSE: bool = false;
 pub const CLIENT_SIGN: &str = "18:C0:4D:B9:8F:FE@@@453832335F384641365F424635335F303030315F303031425F343434415F343643365F333638332@@@@@@6ff673ef74955b38bce2fa8562d95c976ed4758b1227c4e9ee345987cee17bc9";

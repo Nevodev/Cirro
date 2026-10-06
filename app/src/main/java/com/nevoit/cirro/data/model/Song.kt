@@ -21,5 +21,5 @@ data class Song(
     val durationMs: Long = 0,
     val fee: Int = 0,
 ) {
-    val artistText: String get() = artists.joinToString(" / ")
+    val artistText: String get() = artists.joinToString(" & ")
 }

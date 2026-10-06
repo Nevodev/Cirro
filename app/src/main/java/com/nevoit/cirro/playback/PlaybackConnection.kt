@@ -10,6 +10,7 @@ import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.nevoit.cirro.data.NcmBridge
+import com.nevoit.cirro.data.model.Song
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -118,6 +119,31 @@ class PlaybackConnection(context: Context, private val scope: CoroutineScope) {
             }
 
             controller.setMediaItem(song.toMediaItem())
+            controller.prepare()
+            controller.play()
+        }
+    }
+
+    /**
+     * 把整批歌作为播放队列，从 [startIndex] 开始播。
+     *
+     * 列表里点某一首，听感上该接着往下听，所以不是"只播这一首"，而是"把这份列表变成队列"。
+     * 队列里存的是元数据，直链仍由数据源层临播前才换（见 `songUri` 的说明）。
+     */
+    fun playSongs(songs: List<Song>, startIndex: Int) {
+        if (songs.isEmpty()) return
+        val index = startIndex.coerceIn(0, songs.lastIndex)
+
+        scope.launch(Dispatchers.Main) {
+            _state.value = _state.value.copy(error = null)
+
+            val controller = controller
+            if (controller == null) {
+                _state.value = _state.value.copy(error = "播放器还没准备好")
+                return@launch
+            }
+
+            controller.setMediaItems(songs.map { it.toMediaItem() }, index, 0L)
             controller.prepare()
             controller.play()
         }

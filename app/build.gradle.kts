@@ -4,6 +4,28 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+// 签名接线跟 PearWall 同一套：MOMENTO_SIGNING_* 四个属性（gradle.properties 或环境变量），
+// 配齐了 release/debug 都用签名构建；一个都没配则静默跳过（出未签名包）。配置一半会直接报错。
+fun signingProperty(name: String) =
+    providers.gradleProperty(name).orElse(providers.environmentVariable(name))
+
+val signingStoreFile = signingProperty("MOMENTO_SIGNING_STORE_FILE")
+val signingStorePassword = signingProperty("MOMENTO_SIGNING_STORE_PASSWORD")
+val signingKeyAlias = signingProperty("MOMENTO_SIGNING_KEY_ALIAS")
+val signingKeyPassword = signingProperty("MOMENTO_SIGNING_KEY_PASSWORD")
+val signingProperties = listOf(
+    signingStoreFile,
+    signingStorePassword,
+    signingKeyAlias,
+    signingKeyPassword,
+)
+val hasSigningProperties = signingProperties.any { it.isPresent }
+val isSigningConfigured = signingProperties.all { it.isPresent }
+
+check(!hasSigningProperties || isSigningConfigured) {
+    "Cirro signing requires all MOMENTO_SIGNING_* properties to be configured"
+}
+
 android {
     namespace = "com.nevoit.cirro"
     compileSdk {
@@ -14,14 +36,32 @@ android {
         applicationId = "com.nevoit.cirro"
         minSdk = 30
         targetSdk = 37
-        versionCode = 1
+        versionCode = 4
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        if (isSigningConfigured) {
+            create("nev") {
+                storeFile = file(signingStoreFile.get())
+                storePassword = signingStorePassword.get()
+                keyAlias = signingKeyAlias.get()
+                keyPassword = signingKeyPassword.get()
+            }
+        }
+    }
     buildTypes {
+        debug {
+            if (isSigningConfigured) {
+                signingConfig = signingConfigs.getByName("nev")
+            }
+        }
         release {
+            if (isSigningConfigured) {
+                signingConfig = signingConfigs.getByName("nev")
+            }
             optimization {
                 enable = false
             }

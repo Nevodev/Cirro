@@ -1,19 +1,16 @@
 package com.nevoit.cirro
 
 import android.Manifest
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,17 +20,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -41,26 +38,26 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import coil3.compose.AsyncImage
 import com.nevoit.cirro.data.AccountRepository
+import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.Session
-import com.nevoit.cirro.login.LoginActivity
+import com.nevoit.cirro.detail.CollectionRoute
+import com.nevoit.cirro.home.HomeRoute
 import com.nevoit.cirro.playback.MiniPlayer
 import com.nevoit.cirro.playback.PlaybackConnection
+import com.nevoit.cirro.ui.BottomShade
 import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.NavigationBar
 import com.nevoit.material.core.component.NavigationBarItem
-import com.nevoit.material.core.component.OutlinedButton
-import com.nevoit.material.core.component.PageHeader
-import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
-import com.nevoit.material.core.layout.VerticalStack
 import com.nevoit.material.navigation.CrossfadeNavContainer
+import com.nevoit.material.navigation.NavigationHost
+import com.nevoit.material.navigation.NavigationHostHandle
+import com.nevoit.material.navigation.rememberNavigator
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.local.ProvideContentColor
+import kotlinx.serialization.Serializable
 import org.koin.compose.koinInject
-
-// TODO(临时): 内容入口还没做，先内置一首歌把播放链路跑通。做搜索/每日推荐时连同 Home 里那个按钮一起删。
-private const val BuiltInSongId = 3412169601L
 
 data class NavItem(
     val iconRes: Int,
@@ -81,28 +78,75 @@ enum class MainDestinations {
     Search
 }
 
+/**
+ * 导航目的地：默认页是底部标签页，往上推统一详情页。
+ *
+ * 必须可序列化——导航栈要用 JSON 存下来过进程重建（见 [rememberNavigator]）。
+ */
+@Serializable
+sealed interface MainDestination {
+
+    /** 标签页（主页/探索/资源库/搜索）+ 顶栏，整份就是导航的根页。 */
+    @Serializable
+    data object Tabs : MainDestination
+
+    /**
+     * 统一详情页（歌单 / 专辑 / 每日推荐）。
+     *
+     * [titleHint] 是入口卡上**已经清洗过**的显示名——雷达歌单接口里的名字是
+     * 「推荐语|雷达名」拼死的一串，直接拿来当详情页标题会带脏东西，所以让首页把
+     * 干净的名字捎过来；没有 hint 就退回详情接口的原始标题。
+     */
+    @Serializable
+    data class Collection(
+        val kind: CollectionKind,
+        val id: Long,
+        val titleHint: String = "",
+        // 入口处的封面串：取色缓存按整串 URL 做 key，用它才保证第一帧命中
+        val coverHint: String = "",
+    ) : MainDestination
+}
+
 @Composable
 fun BoxScope.Main() {
+    val navigator = rememberNavigator<MainDestination>(MainDestination.Tabs)
+    var hostHandle by remember { mutableStateOf<NavigationHostHandle?>(null) }
+    // 标签选中状态架在导航外面：底栏（导航外、常驻）和标签页（根页内）都要用它
     var selectedIndex by rememberSaveable { mutableIntStateOf(0) }
     val accountRepository = koinInject<AccountRepository>()
     val playbackConnection = koinInject<PlaybackConnection>()
     val session by accountRepository.session.collectAsState()
     val playback by playbackConnection.state.collectAsState()
 
-    val playBuiltIn = rememberNotificationAwarePlay { playbackConnection.playSong(BuiltInSongId) }
+    RequestNotificationPermissionOnce()
 
     Box(modifier = Modifier.fillMaxSize()) {
-        CrossfadeNavContainer(
-            destination = MainDestinations.entries[selectedIndex],
-            destinations = MainDestinations.entries
-        ) { destination ->
-            when (destination) {
-                MainDestinations.Home -> Home(session, playBuiltIn)
-                MainDestinations.Explore -> {}
-                MainDestinations.Library -> {}
-                MainDestinations.Search -> {}
+        NavigationHost(
+            navigator = navigator,
+            onHostReady = { hostHandle = it },
+        ) {
+            when (val destination = destination) {
+                MainDestination.Tabs -> Box(modifier = Modifier.fillMaxSize()) {
+                    MainTabs(
+                        session = session,
+                        selectedIndex = selectedIndex,
+                        onSelect = { selectedIndex = it },
+                        onOpenCollection = { kind, id, titleHint, coverHint ->
+                            navigate(MainDestination.Collection(kind, id, titleHint, coverHint))
+                        },
+                    )
+                }
+
+                is MainDestination.Collection -> CollectionRoute(
+                    kind = destination.kind,
+                    id = destination.id,
+                    titleHint = destination.titleHint,
+                    coverHint = destination.coverHint,
+                    onBack = ::back,
+                )
             }
         }
+
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -128,80 +172,108 @@ fun BoxScope.Main() {
                     )
                 },
                 selectedIndex = selectedIndex,
-                onSelect = { selectedIndex = it },
+                onSelect = { index ->
+                    selectedIndex = index
+                    // 详情页还盖在上面时点标签：切标签的同时把详情页收掉
+                    hostHandle?.closeToRoot()
+                },
                 modifier = Modifier.fillMaxWidth()
             )
         }
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .padding(12.dp)
-                .fillMaxWidth()
-                .height(48.dp)
-        ) {
-            ProvideContentColor(MaterialTheme.colors.onSecondaryContainer) {
-                Row(
+    }
+}
+
+/** 导航根页：底部标签页 + 顶栏。MiniPlayer 和底栏不在这儿——它们常驻在导航之外。 */
+@Composable
+private fun BoxScope.MainTabs(
+    session: Session,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit,
+    onOpenCollection: (CollectionKind, Long, String, String) -> Unit,
+) {
+    CrossfadeNavContainer(
+        destination = MainDestinations.entries[selectedIndex],
+        destinations = MainDestinations.entries
+    ) { destination ->
+        when (destination) {
+            MainDestinations.Home -> HomeRoute(
+                session = session,
+                onOpenCollection = onOpenCollection,
+            )
+
+            MainDestinations.Explore -> {}
+            MainDestinations.Library -> {}
+            MainDestinations.Search -> {}
+        }
+    }
+
+    // 底部 shade 归页面自己画：标签页用主题底色，详情页进来换封面色
+    BottomShade(color = MaterialTheme.colors.pageBackground)
+
+    // top bar
+    Box(
+        modifier = Modifier
+            .align(Alignment.TopCenter)
+            .statusBarsPadding()
+            .padding(12.dp)
+            .fillMaxWidth()
+            .height(48.dp)
+    ) {
+        ProvideContentColor(MaterialTheme.colors.onSecondaryContainer) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+            ) {
+                Box(
                     modifier = Modifier
-                        .align(Alignment.CenterEnd)
+                        .clip(CircleShape)
+                        .size(48.dp)
+                        .background(MaterialTheme.colors.secondaryContainer),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .size(48.dp)
-                            .background(MaterialTheme.colors.secondaryContainer),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        val avatarUrl = (session as? Session.LoggedIn)?.profile?.avatarUrl
-                        if (avatarUrl.isNullOrEmpty()) {
-                            Icon(
-                                painter = painterResource(R.drawable.person),
-                                tint = MaterialTheme.colors.onSecondaryContainer,
-                                contentDescription = "我的"
-                            )
-                        } else {
-                            AsyncImage(
-                                model = avatarUrl,
-                                contentDescription = "我的",
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop,
-                            )
-                        }
-                    }
-                    HGap()
-                    Box(
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .size(48.dp)
-                            .background(MaterialTheme.colors.secondaryContainer)
-                            .clickable {},
-                        contentAlignment = Alignment.Center
-                    ) {
+                    val avatarUrl = (session as? Session.LoggedIn)?.profile?.avatarUrl
+                    if (avatarUrl.isNullOrEmpty()) {
                         Icon(
-                            painter = painterResource(R.drawable.ellipsis),
-                            contentDescription = "更多"
+                            painter = painterResource(R.drawable.person),
+                            tint = MaterialTheme.colors.onSecondaryContainer,
+                            contentDescription = "我的"
+                        )
+                    } else {
+                        AsyncImage(
+                            model = avatarUrl,
+                            contentDescription = "我的",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
                         )
                     }
+                }
+                HGap()
+                Box(
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .size(48.dp)
+                        .background(MaterialTheme.colors.secondaryContainer)
+                        .clickable {},
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ellipsis),
+                        contentDescription = "更多"
+                    )
                 }
             }
         }
     }
 }
 
-/**
- * 播之前先确保通知权限。
- *
- * Android 13 起没有 POST_NOTIFICATIONS，前台服务的通知不会显示——音乐照放，但状态栏上
- * 空的，看起来很像"播放坏了"。被拒绝也照播，不拿权限去卡播放本身。
- */
 @Composable
-private fun rememberNotificationAwarePlay(onPlay: () -> Unit): () -> Unit {
+private fun RequestNotificationPermissionOnce() {
     val context = LocalContext.current
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { onPlay() }
+    ) {}
 
-    return {
+    LaunchedEffect(Unit) {
         val needsPermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 ContextCompat.checkSelfPermission(
                     context,
@@ -210,66 +282,6 @@ private fun rememberNotificationAwarePlay(onPlay: () -> Unit): () -> Unit {
 
         if (needsPermission) {
             launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            onPlay()
         }
-    }
-}
-
-@Composable
-fun Home(session: Session, onPlayBuiltIn: () -> Unit) {
-    VerticalStack(modifier = Modifier.fillMaxSize()) {
-        item {
-            PageHeader(
-                title = NavItems.Home.item.label,
-                modifier = Modifier.padding(horizontal = 12.dp)
-            )
-        }
-        // 已登录、登录态还没查出来、或只是离线没验证成时，都不该劝人去登录
-        if (session is Session.LoggedOut) {
-            item {
-                LoginCard(modifier = Modifier.padding(horizontal = 12.dp))
-            }
-        }
-        item {
-            OutlinedButton(
-                onClick = onPlayBuiltIn,
-                modifier = Modifier.padding(horizontal = 12.dp),
-            ) {
-                Text("播放内置歌曲（临时入口）")
-            }
-        }
-    }
-}
-
-@Composable
-fun LoginCard(modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-    Box(
-        modifier = modifier
-            .clip(MaterialTheme.specs.cardShape)
-            .aspectRatio(256f / 160f)
-            .fillMaxWidth()
-            .clickable {
-                context.startActivity(Intent(context, LoginActivity::class.java))
-            }
-    ) {
-        Image(
-            painter = painterResource(R.drawable.cirro_header),
-            contentDescription = null,
-            modifier = Modifier.fillMaxSize()
-        )
-        Text(
-            text = "登录网易云账号以开始使用",
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 24.dp)
-                .graphicsLayer {
-                    blendMode = BlendMode.Plus
-                    alpha = 0.8f
-                },
-            style = MaterialTheme.type.subHeadline,
-            color = Color.White,
-        )
     }
 }

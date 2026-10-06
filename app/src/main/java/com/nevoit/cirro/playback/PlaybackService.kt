@@ -18,6 +18,11 @@ import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.nevoit.cirro.data.NcmBridge
 import com.nevoit.cirro.data.SongUnavailableException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 /**
  * 播放器宿主。
@@ -30,6 +35,15 @@ import com.nevoit.cirro.data.SongUnavailableException
 class PlaybackService : MediaSessionService() {
 
     private var session: MediaSession? = null
+
+    /** 听歌打卡是尽力而为的后台请求，走 IO 线程，服务销毁时随之取消。 */
+    private val scrobbleScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** 当前（或刚切走的）那首歌的 id，配合 [playingDurationMs] 做打卡。 */
+    private var playingSongId: Long? = null
+
+    /** 当前这首的完整时长，在第一次 READY 后取一次。 */
+    private var playingDurationMs: Long = C.TIME_UNSET
 
     /** 响度归一挂在音频输出链上，换歌时由数据源那层喂 gain（见 [mediaSourceFactory]）。 */
     private val loudness = LoudnessAudioProcessor()
@@ -50,9 +64,41 @@ class PlaybackService : MediaSessionService() {
 
         // 响度数据是跟着 resolve 来的，但"该用哪一首的"只有这里知道：ExoPlayer 会预读下一首，
         // 下一首的 resolve 可能在当前这首还没放完时就跑完了。所以切换时按 id 选一次。
+        // 顺带做听歌打卡：开始播报 startplay，完整听完才报 play——跟官方客户端一样是两条。
         player.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 loudness.selectTrack(mediaItem?.mediaId?.toLongOrNull())
+
+                // 自动切下一首 = 上一首完整播完了，涨听歌排行
+                val finishedId = playingSongId
+                if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO && finishedId != null) {
+                    val time = (playingDurationMs / 1000).coerceAtLeast(1)
+                    scrobbleScope.launch { NcmBridge.scrobble(finishedId, "", time).getOrNull() }
+                }
+
+                playingSongId = mediaItem?.mediaId?.toLongOrNull()
+                playingDurationMs = C.TIME_UNSET
+
+                // 开始播就报 startplay（进最近播放），不等结束
+                val startedId = playingSongId
+                if (startedId != null) {
+                    scrobbleScope.launch { NcmBridge.scrobbleStart(startedId, "").getOrNull() }
+                }
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_READY && playingDurationMs == C.TIME_UNSET) {
+                    playingDurationMs = session?.player?.duration ?: C.TIME_UNSET
+                }
+                // 队列的最后一首播完会停在 ENDED（不再触发 AUTO 切换），单独补上报
+                if (playbackState == Player.STATE_ENDED) {
+                    val id = playingSongId
+                    if (id != null) {
+                        val time =
+                            ((session?.player?.currentPosition ?: 0) / 1000).coerceAtLeast(1)
+                        scrobbleScope.launch { NcmBridge.scrobble(id, "", time).getOrNull() }
+                    }
+                }
             }
         })
 
@@ -68,6 +114,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        scrobbleScope.cancel()
         session?.run {
             player.release()
             release()

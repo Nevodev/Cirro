@@ -126,6 +126,178 @@ fn jni_in(env: &mut JNIEnv, value: &JString) -> String {
     }
 }
 
+/// 取若干候选键里第一个存在的字符串。
+fn pick_str<'a>(v: &'a serde_json::Value, keys: &[&str]) -> &'a str {
+    keys.iter()
+        .find_map(|k| v.get(*k).and_then(|x| x.as_str()))
+        .unwrap_or("")
+}
+
+fn pick_i64(v: &serde_json::Value, keys: &[&str]) -> i64 {
+    keys.iter()
+        .find_map(|k| v.get(*k).and_then(|x| x.as_i64()))
+        .unwrap_or(0)
+}
+
+/// 图片 URL 归一化：把 CDN 主机号 `pN.music.126.net` 统一成 `p1.music.126.net`。
+///
+/// 🔴 网易的图片 CDN 每次请求可能随机换主机号（同一张图这次给 p3 下次给 p4），
+/// 文件由加密路径（`/xxx==/id.jpg`）定位，主机号只是镜像。但对 Coil 来说
+/// 缓存 key 就是 URL 字符串——字符串一变就是"新图"，界面上闪一次重载。
+/// 实测一次 `play-record/song/list`（169 张封面）里绝大多数的 pN 都在变。
+/// 归一后同一张图永远同一个 URL，Coil 命中缓存，不再闪。
+fn canon_pic(url: &str) -> String {
+    if let Some(start) = url.find("://p") {
+        let host_start = start + 4; // "://p" 之后
+        let digits = url[host_start..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .count();
+        if digits > 0 && url[host_start + digits..].starts_with(".music.126.net") {
+            let mut out = String::with_capacity(url.len());
+            out.push_str(&url[..host_start]);
+            out.push('1');
+            out.push_str(&url[host_start + digits..]);
+            return out;
+        }
+    }
+    url.to_string()
+}
+
+/// 把网易云的歌曲对象拍平成扁平结构（Kotlin 侧只认这一种形状）。
+///
+/// 上游同一个"歌曲"有三种形状，字段名各不相同：
+/// - `song_detail` / `recommend_songs`（每日推荐）：`ar` / `al` / `dt`
+/// - `personalized_newsong`：字段在 `song` 里，且封面在外层 `item.picUrl`
+/// - `personal_fm`：`artists` / `album` / `duration`
+///
+/// 三者的数组元素都是 `{id, name}`，专辑都有 `name` / `picUrl` —— 只有父键名和时长名不同，
+/// 所以在这里按候选键依次取，Kotlin 侧不必感知上游差异。
+fn flatten_song(node: &serde_json::Value, cover_fallback: Option<&str>) -> serde_json::Value {
+    let artists: Vec<&str> = ["ar", "artists"]
+        .iter()
+        .find_map(|k| node.get(*k).and_then(|x| x.as_array()))
+        .map(|a| a.iter().filter_map(|x| x["name"].as_str()).collect())
+        .unwrap_or_default();
+
+    let album = ["al", "album"]
+        .iter()
+        .find_map(|k| node.get(*k).filter(|x| x.is_object()));
+
+    let album_cover = album.and_then(|a| a["picUrl"].as_str()).unwrap_or("");
+    let cover = cover_fallback
+        .filter(|s| !s.is_empty())
+        .map(canon_pic)
+        .unwrap_or_else(|| canon_pic(album_cover));
+
+    serde_json::json!({
+        "id": pick_i64(node, &["id"]),
+        "name": pick_str(node, &["name"]),
+        "artists": artists,
+        "album": album.and_then(|a| a["name"].as_str()).unwrap_or(""),
+        "cover": cover,
+        "durationMs": pick_i64(node, &["dt", "duration"]),
+        "fee": pick_i64(node, &["fee"]),
+    })
+}
+
+/// 宽松取整数：首页那几个 id 和播放量有时是数字、有时是字符串，两种都要认。
+fn pick_i64_loose(v: &serde_json::Value, keys: &[&str]) -> i64 {
+    keys.iter()
+        .find_map(|k| {
+            let x = v.get(*k)?;
+            x.as_i64().or_else(|| x.as_str().and_then(|s| s.parse().ok()))
+        })
+        .unwrap_or(0)
+}
+
+/// 取字符串数组，非字符串元素直接丢掉（首页的 `labelTexts`）。
+fn pick_str_array(v: &serde_json::Value) -> Vec<String> {
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 拍平首页区块里的一条歌单。
+///
+/// 首页的歌单**不是标准的 `playlist` 对象**，而是"资源 + UI"两层：名字在
+/// `uiElement.mainTitle.title`，封面在 `uiElement.image.imageUrl`，播放量直接挂在
+/// `resourceExtInfo.playCount` 上（**没有 `extInfo` 那一层**，别多取一级）。歌单本身该有的
+/// `trackCount` / `creator` 一个都没有，所以只能给出这几个字段。
+///
+/// 🔴 `resourceId` 实测是**字符串**（`"17547744753"`），所以必须走 `pick_i64_loose`；
+/// 用 `as_i64()` 会一条不剩地变成 0，界面就是一片空白。
+fn flatten_home_playlist(creative: &serde_json::Value) -> Option<serde_json::Value> {
+    let res = creative["resources"].as_array()?.first()?;
+    let id = pick_i64_loose(res, &["resourceId"]);
+    if id == 0 {
+        return None;
+    }
+    let ui = &res["uiElement"];
+    Some(serde_json::json!({
+        "id": id,
+        "name": pick_str(&ui["mainTitle"], &["title"]),
+        "cover": canon_pic(pick_str(&ui["image"], &["imageUrl"])),
+        "playCount": pick_i64_loose(&res["resourceExtInfo"], &["playCount"]),
+        "labels": pick_str_array(&ui["labelTexts"]),
+    }))
+}
+
+/// 拍平一个首页区块。
+///
+/// 区块标题在 `uiElement.subTitle.title`（`mainTitle` 实测是空串）。
+/// 内容按 `creativeType` 分两路：
+/// - `SONG_LIST_HOMEPAGE`（曲风推荐）→ `columns`，**一个 creative 是一列**（实测每列 3 首），
+///   客户端要按列排，所以不能拍成一维；
+/// - 其余（推荐歌单 / 雷达歌单）→ `playlists`。
+fn flatten_home_block(block: &serde_json::Value) -> serde_json::Value {
+    let ui = &block["uiElement"];
+    let subtitle = ui["subTitle"]["title"].as_str().unwrap_or("");
+    let title = if subtitle.is_empty() {
+        ui["mainTitle"]["title"].as_str().unwrap_or("")
+    } else {
+        subtitle
+    };
+
+    let mut playlists = Vec::new();
+    let mut columns: Vec<Vec<serde_json::Value>> = Vec::new();
+
+    if let Some(creatives) = block["creatives"].as_array() {
+        for creative in creatives {
+            if creative["creativeType"].as_str() == Some("SONG_LIST_HOMEPAGE") {
+                let songs: Vec<serde_json::Value> = creative["resources"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|r| {
+                                let song = r.get("resourceExtInfo")?.get("songData")?;
+                                song.is_object().then(|| flatten_song(song, None))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if !songs.is_empty() {
+                    columns.push(songs);
+                }
+            } else if let Some(playlist) = flatten_home_playlist(creative) {
+                playlists.push(playlist);
+            }
+        }
+    }
+
+    serde_json::json!({
+        "code": pick_str(block, &["blockCode"]),
+        "title": title,
+        "showType": pick_str(block, &["showType"]),
+        "playlists": playlists,
+        "columns": columns,
+    })
+}
+
 /// 取二维码 unikey。返回 `{"ok":true,"unikey":"..."}`。
 #[no_mangle]
 pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeQrKey<'local>(
@@ -338,27 +510,7 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeSongDetail<'lo
         Ok(r) => {
             let songs: Vec<serde_json::Value> = r.body["songs"]
                 .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .map(|s| {
-                            serde_json::json!({
-                                "id": s["id"].as_i64().unwrap_or(0),
-                                "name": s["name"].as_str().unwrap_or(""),
-                                "artists": s["ar"]
-                                    .as_array()
-                                    .map(|a| a
-                                        .iter()
-                                        .filter_map(|x| x["name"].as_str())
-                                        .collect::<Vec<_>>())
-                                    .unwrap_or_default(),
-                                "album": s["al"]["name"].as_str().unwrap_or(""),
-                                "cover": s["al"]["picUrl"].as_str().unwrap_or(""),
-                                "durationMs": s["dt"].as_i64().unwrap_or(0),
-                                "fee": s["fee"].as_i64().unwrap_or(0),
-                            })
-                        })
-                        .collect()
-                })
+                .map(|arr| arr.iter().map(|s| flatten_song(s, None)).collect())
                 .unwrap_or_default();
             serde_json::json!({ "ok": true, "songs": songs })
         }
@@ -367,4 +519,583 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeSongDetail<'lo
     jni_out(&mut env, value)
 }
 
+/// 把上游的歌曲数组整体拍平。
+fn flatten_song_array(v: &serde_json::Value) -> Vec<serde_json::Value> {
+    v.as_array()
+        .map(|arr| arr.iter().map(|s| flatten_song(s, None)).collect())
+        .unwrap_or_default()
+}
 
+/// 每日推荐歌曲（需登录，约 30 首）。返回 `{"ok":true,"songs":[...]}`。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeRecommendSongs<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+) -> jstring {
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(client.recommend_songs(&Query::new())) {
+        Ok(r) => {
+            let songs = flatten_song_array(&r.body["data"]["dailySongs"]);
+            serde_json::json!({ "ok": true, "songs": songs })
+        }
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+/// 每日推荐歌单（需登录，约 26 条）。
+/// 返回 `{"ok":true,"playlists":[{"id":..,"name":..,"cover":..,"playCount":..,"trackCount":..,"creator":..}]}`。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeRecommendResource<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+) -> jstring {
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(client.recommend_resource(&Query::new())) {
+        Ok(r) => {
+            let playlists: Vec<serde_json::Value> = r.body["recommend"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .map(|p| {
+                            serde_json::json!({
+                                "id": p["id"].as_i64().unwrap_or(0),
+                                "name": p["name"].as_str().unwrap_or(""),
+                                "cover": canon_pic(p["picUrl"].as_str().unwrap_or("")),
+                                "playCount": p["playcount"].as_i64().unwrap_or(0),
+                                "trackCount": p["trackCount"].as_i64().unwrap_or(0),
+                                "creator": p["creator"]["nickname"].as_str().unwrap_or(""),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            serde_json::json!({ "ok": true, "playlists": playlists })
+        }
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+/// 排行榜列表。上游返回 60 多条，`official` 为真的才是官方 4 榜（飙升/新歌/原创/热歌）。
+/// 返回 `{"ok":true,"lists":[{"id":..,"name":..,"cover":..,"updateFrequency":..,"trackCount":..,"official":bool}]}`。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeToplist<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+) -> jstring {
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(client.toplist(&Query::new())) {
+        Ok(r) => {
+            let lists: Vec<serde_json::Value> = r.body["list"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .map(|l| {
+                            serde_json::json!({
+                                "id": l["id"].as_i64().unwrap_or(0),
+                                "name": l["name"].as_str().unwrap_or(""),
+                                "cover": canon_pic(l["coverImgUrl"].as_str().unwrap_or("")),
+                                "updateFrequency": l["updateFrequency"].as_str().unwrap_or(""),
+                                "trackCount": l["trackCount"].as_i64().unwrap_or(0),
+                                // 官方榜才有 ToplistType，其余为空字符串
+                                "official": l["ToplistType"]
+                                    .as_str()
+                                    .map(|s| !s.is_empty())
+                                    .unwrap_or(false),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            serde_json::json!({ "ok": true, "lists": lists })
+        }
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+/// 私人 FM（需登录）。网易云一次只给 3 首，是流式的，切一首要再拉一次。
+/// 返回 `{"ok":true,"songs":[...]}`，形状与每日推荐一致。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativePersonalFm<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+) -> jstring {
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(client.personal_fm(&Query::new())) {
+        Ok(r) => {
+            let songs = flatten_song_array(&r.body["data"]);
+            serde_json::json!({ "ok": true, "songs": songs })
+        }
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+/// 歌单曲目，`limit` / `offset` 分页。
+///
+/// 上游这个是**两步请求**：先 `/api/v6/playlist/detail` 拿 trackIds，再 `/api/v3/song/detail`
+/// 换成歌曲详情，所以比单次接口慢一档。只要首曲封面时 `limit` 传 1——上游仍会拉一遍完整
+/// 的 trackIds（歌单越大越明显），但省掉了换详情的那一次。
+///
+/// 拿回来的是标准 `ar` / `al` / `dt` 形状，直接复用 `flatten_song`。
+/// 返回 `{"ok":true,"songs":[...]}`。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativePlaylistTracks<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    id: JString<'local>,
+    limit: jint,
+    offset: jint,
+) -> jstring {
+    let id = jni_in(&mut env, &id);
+    if id.is_empty() {
+        return jni_out(
+            &mut env,
+            serde_json::json!({ "ok": false, "message": "id 为空" }),
+        );
+    }
+    // limit 为 0 会让上游切出空切片，最少给 1。
+    let limit = limit.max(1);
+    let offset = offset.max(0);
+
+    let query = Query::new()
+        .param("id", &id)
+        .param("limit", &limit.to_string())
+        .param("offset", &offset.to_string());
+
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(client.playlist_track_all(&query)) {
+        Ok(r) => {
+            let songs = flatten_song_array(&r.body["songs"]);
+            serde_json::json!({ "ok": true, "songs": songs })
+        }
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+/// 歌单详情（需登录）。
+///
+/// `/api/v6/playlist/detail` 里要用的字段一次拍平。`subscribed` 是**当前登录用户**是否收藏过；
+/// `updateTime` 是毫秒时间戳（雷达类歌单该字段不一定跟着内容更新，如实透传）。
+/// 返回 `{"ok":true,"id":..,"name":..,"cover":..,"creator":..,"description":..,
+///        "updateTime":..,"trackCount":..,"playCount":..,"subscribed":bool}`。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativePlaylistDetail<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    id: JString<'local>,
+) -> jstring {
+    let id = jni_in(&mut env, &id);
+    if id.is_empty() {
+        return jni_out(
+            &mut env,
+            serde_json::json!({ "ok": false, "message": "id 为空" }),
+        );
+    }
+
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(client.playlist_detail(&Query::new().param("id", &id))) {
+        Ok(r) => {
+            let pl = &r.body["playlist"];
+            serde_json::json!({
+                "ok": true,
+                "id": pick_i64_loose(pl, &["id"]),
+                "name": pl["name"].as_str().unwrap_or(""),
+                "cover": canon_pic(pl["coverImgUrl"].as_str().unwrap_or("")),
+                "creator": pl["creator"]["nickname"].as_str().unwrap_or(""),
+                "description": pl["description"].as_str().unwrap_or(""),
+                "updateTime": pick_i64_loose(pl, &["updateTime"]),
+                "trackCount": pick_i64_loose(pl, &["trackCount"]),
+                "playCount": pick_i64_loose(pl, &["playCount"]),
+                "subscribed": pl["subscribed"].as_bool().unwrap_or(false),
+            })
+        }
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+/// 专辑详情（`/api/v1/album/{id}`）。
+///
+/// 专辑主接口**不带** `subscribed`（歌单有，实测确认过），所以这里多打一次
+/// `/api/album/detail/dynamic` 补 `isSub`；动态那步失败不算整体失败，isSub 按未收藏处理。
+/// 歌曲列表在顶层 `songs`，直接复用 `flatten_song` 拍平。
+/// `updateTime` 实为专辑的 `publishTime`（毫秒）；`trackCount` 实为 `size`。
+/// `company` 是版权/发行公司（老专辑可能空串）；`albumType` 是 `type`（"专辑"/"Single"/"EP"）。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeAlbumDetail<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    id: JString<'local>,
+) -> jstring {
+    let id = jni_in(&mut env, &id);
+    if id.is_empty() {
+        return jni_out(
+            &mut env,
+            serde_json::json!({ "ok": false, "message": "id 为空" }),
+        );
+    }
+
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(async {
+        let album = client.album(&Query::new().param("id", &id)).await;
+        let dynamic = client
+            .album_detail_dynamic(&Query::new().param("id", &id))
+            .await;
+        (album, dynamic)
+    }) {
+        (Ok(r), dynamic) => {
+            let al = &r.body["album"];
+            // 描述主字段是 description，不少专辑只填了 briefDesc
+            let description = {
+                let d = al["description"].as_str().unwrap_or("");
+                if d.is_empty() {
+                    al["briefDesc"].as_str().unwrap_or("")
+                } else {
+                    d
+                }
+            };
+            let artists: Vec<&str> = al["artists"]
+                .as_array()
+                .map(|xs| xs.iter().filter_map(|a| a["name"].as_str()).collect())
+                .unwrap_or_default();
+            serde_json::json!({
+                "ok": true,
+                "id": pick_i64_loose(al, &["id"]),
+                "name": al["name"].as_str().unwrap_or(""),
+                "cover": canon_pic(al["picUrl"].as_str().unwrap_or("")),
+                "artists": artists,
+                "description": description,
+                "updateTime": pick_i64_loose(al, &["publishTime"]),
+                "trackCount": pick_i64_loose(al, &["size"]),
+                // 版权/发行公司；老专辑可能给空串（界面留空兜底）
+                "company": al["company"].as_str().unwrap_or(""),
+                // 专辑类型："专辑" / "Single" / "EP"……
+                "albumType": al["type"].as_str().unwrap_or(""),
+                "subscribed": match &dynamic {
+                    Ok(d) => d.body["isSub"].as_bool().unwrap_or(false),
+                    Err(_) => false,
+                },
+                "songs": flatten_song_array(&r.body["songs"]),
+            })
+        }
+        (Err(e), _) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+/// 收藏 / 取消收藏（统一详情页用）。
+///
+/// `kind` 取 "playlist"（`/api/playlist/subscribe|unsubscribe`）或
+/// "album"（`/api/album/sub|unsub`）；`t` 传 "1" 收藏、"2" 取消，空按 "1"。
+/// 服务端的业务失败（收藏自己的歌单之类）由请求层把非 200 的 body code 翻成 Err，
+/// 这里统一走 `{"ok":false,"message":..}`。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeCollectionSub<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    kind: JString<'local>,
+    id: JString<'local>,
+    t: JString<'local>,
+) -> jstring {
+    let kind = jni_in(&mut env, &kind);
+    let id = jni_in(&mut env, &id);
+    let t = {
+        let t = jni_in(&mut env, &t);
+        if t.is_empty() { "1".to_string() } else { t }
+    };
+    if id.is_empty() {
+        return jni_out(
+            &mut env,
+            serde_json::json!({ "ok": false, "message": "id 为空" }),
+        );
+    }
+
+    let query = Query::new().param("id", &id).param("t", &t);
+    let client = client_snapshot();
+    let result = match kind.as_str() {
+        "album" => RUNTIME.block_on(client.album_sub(&query)),
+        _ => RUNTIME.block_on(client.playlist_subscribe(&query)),
+    };
+    let value = match result {
+        Ok(_) => serde_json::json!({ "ok": true }),
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+/// 首页「最近播放」要几张专辑。
+///
+/// 这是一条横滑带，10 张够翻两屏了；再多只是把首页那次请求的返回撑大。
+const RECENT_ALBUM_LIMIT: usize = 10;
+
+/// 最近播放的**专辑**（首页 section，`/api/play-record/album/list`，需登录）。
+///
+/// 🔴 数据源是**听歌记录**的专辑维度，不是 `/api/pc/recent/listen/list`（那个才叫"最近常听"）。
+/// 后者看着更"官方"，但它把专辑 / 歌单 / 播客混在一条流里，且**不带歌手**——首页那张方封面卡
+/// 下面那行小字就没数据了。走听歌记录这条路，专辑名、歌手、封面一次全给，
+/// 不必再为补个歌手去逐张打专辑详情（10 张 = 10 次请求）。
+///
+/// 服务端**已经按专辑归并、按最后一次播放时间倒序**，所以这里不自己去重、不自己排序。
+/// **单曲照收**：网易云的单曲本身就是一张单曲专辑，跟正式专辑在同一个列表里，
+/// 没有单拎出来区别对待的必要。
+///
+/// 这块**不是首页区块**：客户端已知的 38 个 `HOMEPAGE_BLOCK_*` 里没有它，
+/// 不能指望 `homepage/block/page` 里会冒出来。
+/// 空态是"这段时间没听"，客户端按"这块不显示"处理，不是错误。
+///
+/// 返回 `{"ok":true,"recent":[{"title":..,"cover":..,"artists":[..]}]}`。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeRecentAlbums<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+) -> jstring {
+    let query = Query::new().param("limit", &RECENT_ALBUM_LIMIT.to_string());
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(client.record_recent_album(&query)) {
+        Ok(r) => {
+            let recent: Vec<serde_json::Value> = r.body["data"]["list"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        // 这个列表按专辑收口，理论上只有 ALBUM；不认识的一律不要。
+                        .filter(|x| x["resourceType"].as_str() == Some("ALBUM"))
+                        .take(RECENT_ALBUM_LIMIT)
+                        .filter_map(|x| {
+                            let album = &x["data"];
+                            let title = album["name"].as_str().unwrap_or("");
+                            if title.is_empty() {
+                                return None;
+                            }
+                            // 歌手给**列表**，拼成一行是排版的事（跟 songs 里的 artists 一个约定）
+                            let artists: Vec<&str> = album["artists"]
+                                .as_array()
+                                .map(|xs| xs.iter().filter_map(|a| a["name"].as_str()).collect())
+                                .unwrap_or_default();
+                            Some(serde_json::json!({
+                                "title": title,
+                                "cover": canon_pic(album["picUrl"].as_str().unwrap_or("")),
+                                "artists": artists,
+                            }))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            serde_json::json!({ "ok": true, "recent": recent })
+        }
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+/// 移动端首页（`/api/homepage/block/page`，需登录）。
+///
+/// 这是 App「发现」页真正在用的接口，一次下发三个区块：推荐歌单、按你听过的艺人推的歌曲、
+/// 以及一组雷达歌单（华语/时光/新歌/乐迷/宝藏/欧美）。
+///
+/// 区块**统一拍平**成 `{code, title, showType, playlists, columns}`，客户端按 `code` 挑自己
+/// 认识的那几块，不认识的就忽略——所以服务端加减区块不用改桥接层。
+/// 返回 `{"ok":true,"blocks":[...]}`。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeHomeBlocks<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+) -> jstring {
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(client.homepage_block_page(&Query::new())) {
+        Ok(r) => {
+            let blocks: Vec<serde_json::Value> = r.body["data"]["blocks"]
+                .as_array()
+                .map(|a| a.iter().map(flatten_home_block).collect())
+                .unwrap_or_default();
+            serde_json::json!({ "ok": true, "blocks": blocks })
+        }
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+
+
+/// 听歌打卡（把一次完整播放上报给网易，计入听歌排行/最近播放）。
+///
+/// 入参：`id`（歌曲 id）、`sourceid`（来源歌单 id，可为空串）、`time`（播放秒数）。
+/// 上报失败不影响播放，Kotlin 侧只管尽力而为。
+/// 返回 `{"ok":true,"reported":true}` 或 `{"ok":false,"message":"..."}`。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeScrobble<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    id: JString<'local>,
+    sourceid: JString<'local>,
+    time: JString<'local>,
+) -> jstring {
+    let id = jni_in(&mut env, &id);
+    let sourceid = jni_in(&mut env, &sourceid);
+    let time = jni_in(&mut env, &time);
+    if id.is_empty() {
+        return jni_out(
+            &mut env,
+            serde_json::json!({ "ok": false, "message": "id 为空" }),
+        );
+    }
+
+    let client = client_snapshot();
+    let query = Query::new()
+        .param("id", &id)
+        .param("sourceid", &sourceid)
+        .param("time", &time);
+    let value = match RUNTIME.block_on(client.scrobble(&query)) {
+        Ok(r) => {
+            // 两条日志（startplay/play）各自的 code，都 200 才算上报成功
+            let startplay_ok = r.body.pointer("/details/startplay/code").and_then(|v| v.as_i64())
+                == Some(200);
+            let play_ok = r.body.pointer("/details/play/code").and_then(|v| v.as_i64()) == Some(200);
+            if startplay_ok && play_ok {
+                serde_json::json!({ "ok": true, "reported": true })
+            } else {
+                serde_json::json!({
+                    "ok": true,
+                    "reported": false,
+                    "message": format!("startplay_ok={startplay_ok} play_ok={play_ok}"),
+                })
+            }
+        }
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+/// 开始播放的上报（进「最近播放」）。歌一开始播就调，不等结束。
+///
+/// 入参：`id`（歌曲 id）、`sourceid`（来源歌单 id，可为空串）。
+/// 返回 `{"ok":true,"reported":true}` 或 `{"ok":false,"message":"..."}`。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeScrobbleStart<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    id: JString<'local>,
+    sourceid: JString<'local>,
+) -> jstring {
+    let id = jni_in(&mut env, &id);
+    let sourceid = jni_in(&mut env, &sourceid);
+    if id.is_empty() {
+        return jni_out(
+            &mut env,
+            serde_json::json!({ "ok": false, "message": "id 为空" }),
+        );
+    }
+
+    let client = client_snapshot();
+    let query = Query::new().param("id", &id).param("sourceid", &sourceid);
+    let value = match RUNTIME.block_on(client.scrobble_start(&query)) {
+        Ok(r) => {
+            let code = r.body.pointer("/details/code").and_then(|v| v.as_i64());
+            if code == Some(200) {
+                serde_json::json!({ "ok": true, "reported": true })
+            } else {
+                serde_json::json!({ "ok": true, "reported": false, "message": format!("code={code:?}") })
+            }
+        }
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+/// 最近播放的**单曲**（`/api/play-record/song/list`，需登录）。
+///
+/// 🔴 首页「最近播放」的数据源换到这条：专辑维度（`record_recent_album`）只在**官方客户端
+/// 的专辑页点播放**时才记账——9.6.05 APK 里 `play-record` 家族只有查询/删除端点、没有写入，
+/// 记账靠服务端自己的数据源，Cirro 的播歌永远进不去。单曲维度跟听歌排行同源
+/// （weblog 打卡即可进入，实测有传播延迟）。
+///
+/// 服务端按最后播放时间倒序，同一首歌只出现最近一次；但同一张**专辑**会有多条
+/// （听了几首就有几条），按专辑归并在 Kotlin 侧做（`HomeRepository.recentAlbums`），
+/// 这层只负责拍平：专辑信息取 `data.al`（这个接口是**短键**歌对象，长键 `album` 兜底），
+/// 歌手取 `data.ar`，播放时间 `playTime`（毫秒）在条目上。
+///
+/// 返回 `{"ok":true,"recent":[{"albumId":..,"album":..,"cover":..,"artists":[..],"playTime":..}]}`。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeRecentSongs<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+) -> jstring {
+    let query = Query::new().param("limit", "100");
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(client.record_recent_song(&query)) {
+        Ok(r) => {
+            let recent: Vec<serde_json::Value> = r.body["data"]["list"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| {
+                            let song = &x["data"];
+                            // 这个接口的歌是短键（al/ar）；长键兜底，别的来源混进来也不慌
+                            let album = if song["al"].is_null() { &song["album"] } else { &song["al"] };
+                            let artists_arr = if song["ar"].is_null() {
+                                &song["artists"]
+                            } else {
+                                &song["ar"]
+                            };
+                            let album_name = album["name"].as_str().unwrap_or("");
+                            if album_name.is_empty() {
+                                return None;
+                            }
+                            let artists: Vec<&str> = artists_arr
+                                .as_array()
+                                .map(|xs| xs.iter().filter_map(|a| a["name"].as_str()).collect())
+                                .unwrap_or_default();
+                            Some(serde_json::json!({
+                                "albumId": album["id"].as_i64().unwrap_or(0),
+                                "album": album_name,
+                                "cover": canon_pic(album["picUrl"].as_str().unwrap_or("")),
+                                "artists": artists,
+                                "playTime": x["playTime"].as_i64().unwrap_or(0),
+                            }))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            serde_json::json!({ "ok": true, "recent": recent })
+        }
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+/// 专辑类型（`/api/v1/album/{id}`，公开数据）。
+///
+/// 首页「最近播放」要给单曲专辑的标题补 " - Single"，但最近播放单曲里的 `al`
+/// 对象**不带 type**（实测只有 id/name/pic/picUrl/pic_str/tns），只能逐张查专辑详情。
+/// `type` 是静态元数据（Single / EP / 专辑…），Kotlin 侧永久缓存，一个专辑一辈子查一次。
+///
+/// 返回 `{"ok":true,"type":"Single"}`；查不到或失败时 type 为空串/ok=false，
+/// 调用方按"没有类型"处理（不加后缀）。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeAlbumType<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    id: JString<'local>,
+) -> jstring {
+    let id = jni_in(&mut env, &id);
+    if id.is_empty() {
+        return jni_out(
+            &mut env,
+            serde_json::json!({ "ok": false, "message": "id 为空" }),
+        );
+    }
+
+    let client = client_snapshot();
+    let query = Query::new().param("id", &id);
+    let value = match RUNTIME.block_on(client.album(&query)) {
+        Ok(r) => {
+            let ty = r.body["album"]["type"].as_str().unwrap_or("");
+            serde_json::json!({ "ok": true, "type": ty })
+        }
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
