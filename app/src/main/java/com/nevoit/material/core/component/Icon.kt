@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.paint
@@ -91,12 +92,20 @@ fun Icon(
     contentDescription: String?,
     modifier: Modifier = Modifier,
 ) {
+    // Workaround for an upstream defect in this overload: the layer below only rerecords on
+    // size/density/direction change or when a state read inside the cache block changes, and
+    // `record { drawContent() }` makes the cached pixels depend on the painter — which is not
+    // one of those reads. So a swapped painter goes unnoticed and the old icon stays.
+    // Reading `contentKey` inside the block registers that dependency explicitly.
+    val contentKey = rememberUpdatedState(painter)
+
     Icon(
         painter = painter,
         tint = Color.Unspecified,
         contentDescription = contentDescription,
         modifier =
             modifier.drawWithCache {
+                contentKey.value
                 val layer = obtainGraphicsLayer()
                 layer.apply {
                     record { drawContent() }

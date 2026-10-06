@@ -56,6 +56,7 @@ import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.NavigationBar
 import com.nevoit.material.core.component.NavigationBarItem
 import com.nevoit.material.core.component.VGap
+import com.nevoit.material.core.utility.rememberColorProducer
 import com.nevoit.material.navigation.CrossfadeNavContainer
 import com.nevoit.material.navigation.NavigationHost
 import com.nevoit.material.navigation.NavigationHostHandle
@@ -175,44 +176,47 @@ fun BoxScope.Main() {
     fun barTone(darkTone: Int, lightTone: Int): Color? =
         barSeed?.primaryTone(if (barDark) darkTone else lightTone)?.let(::Color)
 
-    val barContainerColor by animateColorAsState(
+    // 这几个颜色都是动画态（进出详情页 400ms 过渡）。这里刻意不用 by 读出值——一旦在组合期
+    // 读，Main 每帧重组一次，连带 MiniPlayer、底栏和它们底下的整棵树。留着 State，下面用
+    // rememberColorProducer 包成 producer 传下去，读取发生在各自的 draw 阶段。
+    val barContainerColor = animateColorAsState(
         targetValue = barTone(BarToneDark, BarToneLight)
             ?: MaterialTheme.colors.cardBackground,
         animationSpec = tween(durationMillis = 400),
         label = "barContainer",
     )
-    val barIndicatorColor by animateColorAsState(
+    val barIndicatorColor = animateColorAsState(
         targetValue = barTone(BarIndicatorToneDark, BarIndicatorToneLight)
             ?: MaterialTheme.colors.navigationBarIndicator,
         animationSpec = tween(durationMillis = 400),
         label = "barIndicator",
     )
-    val barActiveIconColor by animateColorAsState(
+    val barActiveIconColor = animateColorAsState(
         targetValue = barTone(BarActiveIconToneDark, BarActiveIconToneLight)
             ?: MaterialTheme.colors.onNavigationBarIndicator,
         animationSpec = tween(durationMillis = 400),
         label = "barActiveIcon",
     )
-    val barInactiveIconColor by animateColorAsState(
+    val barInactiveIconColor = animateColorAsState(
         targetValue = barTone(BarInactiveIconToneDark, BarInactiveIconToneLight)
             ?: MaterialTheme.colors.navigationBarInactiveIcon,
         animationSpec = tween(durationMillis = 400),
         label = "barInactiveIcon",
     )
 
-    val miniContentColor by animateColorAsState(
+    val miniContentColor = animateColorAsState(
         targetValue = barTone(MiniContentToneDark, MiniContentToneLight)
             ?: MaterialTheme.colors.content,
         animationSpec = tween(durationMillis = 400),
         label = "miniContent",
     )
-    val miniVariantColor by animateColorAsState(
+    val miniVariantColor = animateColorAsState(
         targetValue = barTone(MiniVariantToneDark, MiniVariantToneLight)
             ?: MaterialTheme.colors.contentVariant,
         animationSpec = tween(durationMillis = 400),
         label = "miniVariant",
     )
-    val miniPrimaryColor by animateColorAsState(
+    val miniPrimaryColor = animateColorAsState(
         targetValue = barTone(MiniPrimaryToneDark, MiniPrimaryToneLight)
             ?: MaterialTheme.colors.primary,
         animationSpec = tween(durationMillis = 400),
@@ -259,10 +263,10 @@ fun BoxScope.Main() {
                 MiniPlayer(
                     state = playback,
                     onTogglePlay = { playbackConnection.togglePlayPause() },
-                    containerColor = barContainerColor,
-                    contentColor = miniContentColor,
-                    contentVariantColor = miniVariantColor,
-                    progressColor = miniPrimaryColor,
+                    containerColor = rememberColorProducer(barContainerColor),
+                    contentColor = rememberColorProducer(miniContentColor),
+                    contentVariantColor = rememberColorProducer(miniVariantColor),
+                    progressColor = rememberColorProducer(miniPrimaryColor),
                     modifier = Modifier
                         .fillMaxWidth(),
                 )
@@ -282,10 +286,10 @@ fun BoxScope.Main() {
                     // 详情页还盖在上面时点标签：切标签的同时把详情页收掉
                     hostHandle?.closeToRoot()
                 },
-                containerColor = barContainerColor,
-                indicatorColor = barIndicatorColor,
-                activeIconColor = barActiveIconColor,
-                inactiveIconColor = barInactiveIconColor,
+                containerColor = rememberColorProducer(barContainerColor),
+                indicatorColor = rememberColorProducer(barIndicatorColor),
+                activeIconColor = rememberColorProducer(barActiveIconColor),
+                inactiveIconColor = rememberColorProducer(barInactiveIconColor),
                 modifier = Modifier.fillMaxWidth()
             )
         }

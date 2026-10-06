@@ -17,10 +17,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -30,33 +31,42 @@ import com.kyant.shapes.RoundedRectangle
 import com.nevoit.cirro.R
 import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
-import com.nevoit.material.core.component.Surface
 import com.nevoit.material.core.component.Text
+import com.nevoit.material.core.modifier.drawBackground
 import com.nevoit.material.core.modifier.marquee
+import com.nevoit.material.core.utility.rememberColorProducer
 import com.nevoit.material.theme.MaterialTheme
 
-/** 吸底的迷你播放条。没有在放的歌时不渲染。容器反色（深色页浅胶囊）时，调用方把文字色一起换掉。 */
+/**
+ * 吸底的迷你播放条。没有在放的歌时不渲染。
+ *
+ * 颜色一律收 producer：详情页进出时这些颜色是动画态（底栏跟着封面走），传值会让调用方
+ * 每帧重组一次；传 producer 就只有 draw 阶段去读，颜色变化只失效绘制。
+ * 容器反色（深色页浅胶囊）时，调用方把文字色一起换掉。
+ */
 @Composable
 fun MiniPlayer(
     state: PlaybackState,
     onTogglePlay: () -> Unit,
     modifier: Modifier = Modifier,
-    containerColor: Color = MaterialTheme.colors.cardBackground,
-    contentColor: Color = MaterialTheme.colors.content,
-    contentVariantColor: Color = MaterialTheme.colors.contentVariant,
-    progressColor: Color = MaterialTheme.colors.primary,
+    containerColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.cardBackground),
+    contentColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.content),
+    contentVariantColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.contentVariant),
+    progressColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.primary),
 ) {
     val song = state.song ?: return
     val boxWidth = LocalWindowInfo.current.containerDpSize.width - 24.dp
     val boxHeight = 56.dp
     val progressBarWidth = boxWidth - boxHeight
 
-    Surface(
+    val error = state.error
+    val errorColor = rememberColorProducer(MaterialTheme.colors.error)
+
+    Box(
         modifier = modifier
             .clip(Capsule())
+            .drawBackground(containerColor)
             .height(boxHeight),
-        color = containerColor,
-        contentColor = contentColor,
     ) {
         Row(
             modifier = Modifier.fillMaxSize(),
@@ -80,38 +90,18 @@ fun MiniPlayer(
             }
             HGap(10.dp)
             Column(modifier = Modifier.weight(1f)) {
-                Text(
+                MiniPlayerText(
                     text = song.title,
                     style = MaterialTheme.type.subHeadline2,
                     fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .marquee(
-                            restartKey = song.id,
-                            initialDelayMillis = 2000,
-                            startFadeOffset = 6.dp
-                        )
+                    color = contentColor,
+                    restartKey = song.id,
                 )
-                val error = state.error
-                Text(
+                MiniPlayerText(
                     text = error ?: song.artist,
                     style = MaterialTheme.type.footnote,
-                    color = if (error != null) {
-                        MaterialTheme.colors.error
-                    } else {
-                        contentVariantColor
-                    },
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .marquee(
-                            restartKey = song.id,
-                            initialDelayMillis = 2000,
-                            startFadeOffset = 6.dp
-                        )
+                    color = if (error != null) errorColor else contentVariantColor,
+                    restartKey = song.id,
                 )
             }
             HGap()
@@ -158,9 +148,36 @@ fun MiniPlayer(
                 .height(2.dp)
         ) {
             drawRect(
-                color = progressColor,
+                color = progressColor(),
                 size = size.copy(width = size.width * state.progress),
             )
         }
     }
+}
+
+// 文字色是组合期输入（要落进 TextStyle），只能在这一层读。颜色动画期间只有这两行文字重组，
+// MiniPlayer 的封面、按钮、进度条都不动。
+@Composable
+private fun MiniPlayerText(
+    text: String,
+    style: TextStyle,
+    color: ColorProducer,
+    restartKey: Any?,
+    fontWeight: FontWeight? = null,
+) {
+    Text(
+        text = text,
+        style = style,
+        color = color(),
+        fontWeight = fontWeight,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .fillMaxWidth()
+            .marquee(
+                restartKey = restartKey,
+                initialDelayMillis = 2000,
+                startFadeOffset = 6.dp
+            )
+    )
 }

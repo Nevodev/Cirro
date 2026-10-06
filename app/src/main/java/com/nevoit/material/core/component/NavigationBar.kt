@@ -4,7 +4,6 @@ import android.os.SystemClock
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -29,7 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.withTransform
@@ -40,7 +39,9 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.kyant.shapes.Capsule
+import com.nevoit.material.core.modifier.drawBackground
 import com.nevoit.material.core.modifier.thenIf
+import com.nevoit.material.core.utility.rememberColorProducer
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.tokens.Springs
 import kotlinx.coroutines.launch
@@ -64,10 +65,10 @@ fun NavigationBar(
     selectedIndex: Int,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
-    containerColor: Color = MaterialTheme.colors.cardBackground,
-    indicatorColor: Color = MaterialTheme.colors.navigationBarIndicator,
-    activeIconColor: Color = MaterialTheme.colors.onNavigationBarIndicator,
-    inactiveIconColor: Color = MaterialTheme.colors.navigationBarInactiveIcon,
+    containerColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.cardBackground),
+    indicatorColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.navigationBarIndicator),
+    activeIconColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.onNavigationBarIndicator),
+    inactiveIconColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.navigationBarInactiveIcon),
     height: Dp = NavigationBarHeight,
     indicatorInset: Dp = NavigationBarIndicatorInset,
 ) {
@@ -115,7 +116,7 @@ fun NavigationBar(
     Box(
         modifier = modifier
             .clip(indicatorShape)
-            .background(containerColor)
+            .drawBackground(containerColor)
             .height(height)
     ) {
         Row(
@@ -225,7 +226,7 @@ private fun Modifier.navigationBarIndicator(
     rightEdge: Animatable<Float, AnimationVector1D>,
     itemCount: Int,
     shape: Shape,
-    color: Color,
+    color: ColorProducer,
     inset: Dp,
 ): Modifier = drawWithContent {
     val insetPx = inset.toPx()
@@ -243,7 +244,7 @@ private fun Modifier.navigationBarIndicator(
     withTransform({
         translate(left = slotLeft + insetPx, top = insetPx)
     }) {
-        drawOutline(outline = outline, color = color)
+        drawOutline(outline = outline, color = color())
     }
     drawContent()
 }
@@ -253,7 +254,7 @@ private fun NavigationBarButton(
     item: NavigationBarItem,
     selected: Boolean,
     onClick: () -> Unit,
-    iconColor: Color,
+    iconColor: ColorProducer,
     modifier: Modifier = Modifier,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -277,12 +278,12 @@ private fun NavigationBarButton(
     ) {
         Icon(
             painter = if (selected) item.selectedIcon else item.icon,
+            tint = iconColor,
             contentDescription = item.label,
             modifier = Modifier.graphicsLayer {
                 scaleX = iconScale.value
                 scaleY = iconScale.value
-            },
-            tint = iconColor
+            }
         )
     }
 }
