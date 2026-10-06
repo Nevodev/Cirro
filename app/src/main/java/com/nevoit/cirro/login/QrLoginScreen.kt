@@ -267,7 +267,7 @@ private fun BoxScope.CloseButton(onClick: () -> Unit) {
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                painter = painterResource(R.drawable.chevron_left),
+                painter = painterResource(R.drawable.chevron_left_nav),
                 tint = MaterialTheme.colors.onSecondaryContainer,
                 contentDescription = "返回",
                 modifier = Modifier.size(22.dp),

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -16,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
@@ -30,27 +32,31 @@ import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.Surface
 import com.nevoit.material.core.component.Text
+import com.nevoit.material.core.modifier.marquee
 import com.nevoit.material.theme.MaterialTheme
 
-/** 吸底的迷你播放条。没有在放的歌时不渲染。 */
+/** 吸底的迷你播放条。没有在放的歌时不渲染。容器反色（深色页浅胶囊）时，调用方把文字色一起换掉。 */
 @Composable
 fun MiniPlayer(
     state: PlaybackState,
     onTogglePlay: () -> Unit,
     modifier: Modifier = Modifier,
+    containerColor: Color = MaterialTheme.colors.cardBackground,
+    contentColor: Color = MaterialTheme.colors.content,
+    contentVariantColor: Color = MaterialTheme.colors.contentVariant,
+    progressColor: Color = MaterialTheme.colors.primary,
 ) {
     val song = state.song ?: return
     val boxWidth = LocalWindowInfo.current.containerDpSize.width - 24.dp
     val boxHeight = 56.dp
     val progressBarWidth = boxWidth - boxHeight
-    val colors = MaterialTheme.colors
 
     Surface(
         modifier = modifier
             .clip(Capsule())
             .height(boxHeight),
-        color = MaterialTheme.colors.cardBackground,
-        contentColor = MaterialTheme.colors.content,
+        color = containerColor,
+        contentColor = contentColor,
     ) {
         Row(
             modifier = Modifier.fillMaxSize(),
@@ -80,6 +86,13 @@ fun MiniPlayer(
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .marquee(
+                            restartKey = song.id,
+                            initialDelayMillis = 2000,
+                            startFadeOffset = 6.dp
+                        )
                 )
                 val error = state.error
                 Text(
@@ -88,10 +101,17 @@ fun MiniPlayer(
                     color = if (error != null) {
                         MaterialTheme.colors.error
                     } else {
-                        MaterialTheme.colors.contentVariant
+                        contentVariantColor
                     },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .marquee(
+                            restartKey = song.id,
+                            initialDelayMillis = 2000,
+                            startFadeOffset = 6.dp
+                        )
                 )
             }
             HGap()
@@ -108,7 +128,7 @@ fun MiniPlayer(
                     ),
                     contentDescription = if (state.isPlaying) "暂停" else "播放",
                     modifier = Modifier.size(28.dp),
-                    tint = MaterialTheme.colors.content,
+                    tint = contentColor,
                 )
             }
             Box(
@@ -124,7 +144,7 @@ fun MiniPlayer(
                     painter = painterResource(R.drawable.forward_end_fill),
                     contentDescription = "下一首",
                     modifier = Modifier.size(28.dp),
-                    tint = MaterialTheme.colors.content,
+                    tint = contentColor,
                 )
             }
             HGap(4.dp)
@@ -138,7 +158,7 @@ fun MiniPlayer(
                 .height(2.dp)
         ) {
             drawRect(
-                color = colors.primary,
+                color = progressColor,
                 size = size.copy(width = size.width * state.progress),
             )
         }

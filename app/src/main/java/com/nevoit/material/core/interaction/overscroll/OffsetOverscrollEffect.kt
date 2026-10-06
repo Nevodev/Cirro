@@ -41,6 +41,7 @@ class RubberBandState {
 class OffsetOverscrollEffect(
     private val rubberBandState: RubberBandState? = null,
     private val onRelease: ((Offset) -> Unit)? = null,
+    private val onUserInput: ((OffsetOverscrollEffect) -> Unit)? = null,
     private val animationScope: CoroutineScope,
     private val animationSpec: AnimationSpec<Float>,
     private val maxFraction: Float,
@@ -53,8 +54,26 @@ class OffsetOverscrollEffect(
         rubberBandState?.offset = value
     }
     private var axis = Axis.None
+    private var maxWidth = 0f
+    private var maxHeight = 0f
     private var springJob: Job? = null
     private var flingToScrollOffset = Offset.Zero
+
+    // Rendered offset after the resistance curve; read from a graphicsLayer/draw block for parallax, stretch, etc.
+    internal val visualOffset: Offset
+        get() {
+            val maxDistance = when (axis) {
+                Axis.Horizontal -> maxWidth
+                Axis.Vertical -> maxHeight
+                Axis.None -> 0f
+            }
+            val overscrollDistance = offset.toFloat()
+            if (maxDistance <= 0f || overscrollDistance == 0f) return Offset.Zero
+            return computeOffset(overscrollDistance, maxDistance)
+                .fastRoundToInt()
+                .toFloat()
+                .toOffset()
+        }
 
     override val isInProgress: Boolean = false
 
@@ -69,6 +88,7 @@ class OffsetOverscrollEffect(
 
         val isUserInput = source == NestedScrollSource.UserInput
         if (isUserInput) {
+            onUserInput?.invoke(this)
             springJob?.cancel()
             springJob = null
         }
@@ -166,8 +186,8 @@ class OffsetOverscrollEffect(
             constraints: Constraints
         ): MeasureResult {
             val placeable = measurable.measure(constraints)
-            val maxWidth = constraints.maxWidth.toFloat()
-            val maxHeight = constraints.maxHeight.toFloat()
+            maxWidth = constraints.maxWidth.toFloat()
+            maxHeight = constraints.maxHeight.toFloat()
 
             return singleRelativeLayoutWithLayer(placeable) {
                 shape = NoOpShape

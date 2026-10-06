@@ -5,6 +5,8 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -25,12 +27,14 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -42,6 +46,8 @@ import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.detail.CollectionRoute
 import com.nevoit.cirro.home.HomeRoute
+import com.nevoit.cirro.palette.CoverPalette
+import com.nevoit.cirro.palette.CoverSeed
 import com.nevoit.cirro.playback.MiniPlayer
 import com.nevoit.cirro.playback.PlaybackConnection
 import com.nevoit.cirro.ui.BottomShade
@@ -77,6 +83,40 @@ enum class MainDestinations {
     Library,
     Search
 }
+
+// ---- 底栏 chrome 的固定 tone 档（封面种子的 primary 色带，HCT 明度 0–100）----
+// 详情页在顶时底栏跟封面走：胶囊底 深色页 T98 / 浅色页 T94；指示器 深色页 T30 / 浅色页 T90。
+// 图标跟自己坐的底拉开：激活图标在指示器上（深色页亮 T90 / 浅色页暗 T20），
+// 未激活图标在胶囊上（深色页暗 T40 / 浅色页暗 T50）。标签页在顶时全跟主题。
+private const val BarToneDark = 12
+
+private const val BarToneLight = 98
+
+private const val BarIndicatorToneDark = 20
+
+private const val BarIndicatorToneLight = 90
+
+private const val BarActiveIconToneDark = 90
+
+private const val BarActiveIconToneLight = 30
+
+private const val BarInactiveIconToneDark = 80
+
+private const val BarInactiveIconToneLight = 40
+
+// MiniPlayer 跟色时胶囊底与导航栏同色（BarTone*），文字/进度自己配档：
+// 主文字 T10/T20、次级文字与进度条 T40/T50（都坐在胶囊上，跟底拉开）。
+private const val MiniContentToneDark = 90
+
+private const val MiniContentToneLight = 10
+
+private const val MiniVariantToneDark = 60
+
+private const val MiniVariantToneLight = 50
+
+private const val MiniPrimaryToneDark = 80
+
+private const val MiniPrimaryToneLight = 40
 
 /**
  * 导航目的地：默认页是底部标签页，往上推统一详情页。
@@ -118,6 +158,67 @@ fun BoxScope.Main() {
     val session by accountRepository.session.collectAsState()
     val playback by playbackConnection.state.collectAsState()
 
+    // 底栏 chrome：详情页（Collection）在导航顶上时跟封面种子走，否则跟主题。
+    // seed 用 produceState 异步取——缓存命中第一帧就有（首页预取过）；没命中则取完自动
+    // 刷新底栏，顺带给详情页暖了取色缓存。navigator.current 是 snapshot state，
+    // 进出详情页这里自动重算。
+    val palette = koinInject<CoverPalette>()
+    val coverHint = (navigator.current.destination as? MainDestination.Collection)?.coverHint
+    val barSeed by produceState<CoverSeed?>(
+        initialValue = coverHint?.let { palette.cached(it) },
+        coverHint
+    ) {
+        value = coverHint?.let { palette.seed(it) }
+    }
+    val barDark = barSeed?.dark == true || MaterialTheme.darkTheme
+
+    fun barTone(darkTone: Int, lightTone: Int): Color? =
+        barSeed?.primaryTone(if (barDark) darkTone else lightTone)?.let(::Color)
+
+    val barContainerColor by animateColorAsState(
+        targetValue = barTone(BarToneDark, BarToneLight)
+            ?: MaterialTheme.colors.cardBackground,
+        animationSpec = tween(durationMillis = 400),
+        label = "barContainer",
+    )
+    val barIndicatorColor by animateColorAsState(
+        targetValue = barTone(BarIndicatorToneDark, BarIndicatorToneLight)
+            ?: MaterialTheme.colors.navigationBarIndicator,
+        animationSpec = tween(durationMillis = 400),
+        label = "barIndicator",
+    )
+    val barActiveIconColor by animateColorAsState(
+        targetValue = barTone(BarActiveIconToneDark, BarActiveIconToneLight)
+            ?: MaterialTheme.colors.onNavigationBarIndicator,
+        animationSpec = tween(durationMillis = 400),
+        label = "barActiveIcon",
+    )
+    val barInactiveIconColor by animateColorAsState(
+        targetValue = barTone(BarInactiveIconToneDark, BarInactiveIconToneLight)
+            ?: MaterialTheme.colors.navigationBarInactiveIcon,
+        animationSpec = tween(durationMillis = 400),
+        label = "barInactiveIcon",
+    )
+
+    val miniContentColor by animateColorAsState(
+        targetValue = barTone(MiniContentToneDark, MiniContentToneLight)
+            ?: MaterialTheme.colors.content,
+        animationSpec = tween(durationMillis = 400),
+        label = "miniContent",
+    )
+    val miniVariantColor by animateColorAsState(
+        targetValue = barTone(MiniVariantToneDark, MiniVariantToneLight)
+            ?: MaterialTheme.colors.contentVariant,
+        animationSpec = tween(durationMillis = 400),
+        label = "miniVariant",
+    )
+    val miniPrimaryColor by animateColorAsState(
+        targetValue = barTone(MiniPrimaryToneDark, MiniPrimaryToneLight)
+            ?: MaterialTheme.colors.primary,
+        animationSpec = tween(durationMillis = 400),
+        label = "miniPrimary",
+    )
+
     RequestNotificationPermissionOnce()
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -158,6 +259,10 @@ fun BoxScope.Main() {
                 MiniPlayer(
                     state = playback,
                     onTogglePlay = { playbackConnection.togglePlayPause() },
+                    containerColor = barContainerColor,
+                    contentColor = miniContentColor,
+                    contentVariantColor = miniVariantColor,
+                    progressColor = miniPrimaryColor,
                     modifier = Modifier
                         .fillMaxWidth(),
                 )
@@ -177,6 +282,10 @@ fun BoxScope.Main() {
                     // 详情页还盖在上面时点标签：切标签的同时把详情页收掉
                     hostHandle?.closeToRoot()
                 },
+                containerColor = barContainerColor,
+                indicatorColor = barIndicatorColor,
+                activeIconColor = barActiveIconColor,
+                inactiveIconColor = barInactiveIconColor,
                 modifier = Modifier.fillMaxWidth()
             )
         }

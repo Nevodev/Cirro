@@ -4,8 +4,11 @@ import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.foundation.OverscrollEffect
 import androidx.compose.foundation.OverscrollFactory
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import kotlinx.coroutines.CoroutineScope
 
@@ -39,10 +42,14 @@ internal data class OffsetOverscrollFactory(
     private val onRelease: ((Offset) -> Unit)? = null,
 ) : OverscrollFactory {
 
+    internal var activeEffect by mutableStateOf<OffsetOverscrollEffect?>(null)
+        private set
+
     override fun createOverscrollEffect(): OverscrollEffect {
         return OffsetOverscrollEffect(
             rubberBandState = rubberBandState,
             onRelease = onRelease,
+            onUserInput = { activeEffect = it },
             animationScope = animationScope,
             animationSpec = animationSpec,
             maxFraction = maxFraction

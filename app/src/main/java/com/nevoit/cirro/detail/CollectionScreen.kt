@@ -6,6 +6,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.EaseInOut
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -23,7 +24,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
@@ -39,8 +39,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -59,7 +59,6 @@ import coil3.request.crossfade
 import coil3.request.transformations
 import com.kyant.shapes.RoundedRectangle
 import com.kyant.shapes.UnevenRoundedRectangle
-import com.materialkolor.hct.Hct
 import com.nevoit.cirro.R
 import com.nevoit.cirro.data.model.CollectionInfo
 import com.nevoit.cirro.data.model.CollectionKind
@@ -75,6 +74,8 @@ import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
+import com.nevoit.material.core.interaction.overscroll.OffsetOverscrollFactory
+import com.nevoit.material.core.layout.VerticalStack
 import com.nevoit.material.core.modifier.smoothGradient
 import com.nevoit.material.core.utility.NavigationBarSpacer
 import com.nevoit.material.theme.MaterialShapes
@@ -121,6 +122,14 @@ private const val ItemBgToneDark = 40.0
 
 private const val ItemBgToneLight = 90.0
 
+private const val CircleToneDark = 30.0
+
+private const val CircleToneLight = 90.0
+
+private const val CircleIconToneDark = 90.0
+
+private const val CircleIconToneLight = 30.0
+
 private enum class ItemPosition {
     Single,
     First,
@@ -160,9 +169,6 @@ fun CollectionRoute(
     val songs = state.songs.dataOrNull.orEmpty()
     val playingId = playback.state.collectAsState().value.song?.id
 
-    // 背景跟着封面走。取色 key 用入口捎来的封面串优先——首页预取的就是它，
-    // 第一帧就能从缓存里命中（缓存按整串 URL 做 key，详情接口给的串可能跟入口的不一样）；
-    // 没有 hint（深链之类）才退回详情接口的封面。
     val palette = koinInject<CoverPalette>()
     val paletteKey = coverHint.ifEmpty { state.info.dataOrNull?.cover.orEmpty() }
     var seed by remember(paletteKey) { mutableStateOf(palette.cached(paletteKey)) }
@@ -225,25 +231,50 @@ private fun CollectionScreen(
 
     val contentColor = if (dark) Color.White else Color.Black
 
-    val hct = Hct.fromInt(backgroundColor.toArgb())
-    val contentVariantColor = remember(backgroundColor, dark) {
-        Color(hct.withTone(if (dark) VariantToneDark else VariantToneLight).toInt())
-    }
+    fun poleTone(darkTone: Double, lightTone: Double): Color? =
+        seed?.primaryTone((if (dark) darkTone else lightTone).toInt())?.let(::Color)
 
-    val buttonColor = remember(backgroundColor, dark) {
-        Color(hct.withTone(if (dark) ButtonToneDark else ButtonToneLight).toInt())
-    }
+    val contentVariantColor by animateColorAsState(
+        targetValue = poleTone(VariantToneDark, VariantToneLight)
+            ?: MaterialTheme.colors.contentVariant,
+        animationSpec = tween(durationMillis = 500),
+        label = "contentVariant",
+    )
 
-    val buttonIconColor = remember(backgroundColor, dark) {
-        Color(hct.withTone(if (dark) ButtonIconToneDark else ButtonIconToneLight).toInt())
-    }
+    val buttonColor by animateColorAsState(
+        targetValue = poleTone(ButtonToneDark, ButtonToneLight)
+            ?: MaterialTheme.colors.cardBackground,
+        animationSpec = tween(durationMillis = 500),
+        label = "buttonColor",
+    )
 
-    val itemBgColor = remember(backgroundColor, dark) {
-        Color(hct.withTone(if (dark) ItemBgToneDark else ItemBgToneLight).toInt())
-    }
+    val buttonIconColor by animateColorAsState(
+        targetValue = poleTone(ButtonIconToneDark, ButtonIconToneLight)
+            ?: MaterialTheme.colors.content,
+        animationSpec = tween(durationMillis = 500),
+        label = "buttonIcon",
+    )
 
-    // 服务端简介常带前后空行（编辑排版残留），两端裁掉、中间排版不动。
-    // trim() 按 isWhitespace 判字符，换行、全角空格都算。
+    val itemBgColor by animateColorAsState(
+        targetValue = poleTone(ItemBgToneDark, ItemBgToneLight)
+            ?: MaterialTheme.colors.cardBackground,
+        animationSpec = tween(durationMillis = 500),
+        label = "itemBg",
+    )
+
+    val circleColor by animateColorAsState(
+        targetValue = poleTone(CircleToneDark, CircleToneLight)
+            ?: Color.Black.copy(alpha = 0.35f),
+        animationSpec = tween(durationMillis = 500),
+        label = "circleColor",
+    )
+
+    val circleIconColor by animateColorAsState(
+        targetValue = poleTone(CircleIconToneDark, CircleIconToneLight) ?: Color.White,
+        animationSpec = tween(durationMillis = 500),
+        label = "circleIcon",
+    )
+
     val description = state.info.dataOrNull?.description.orEmpty().trim()
 
     Box(
@@ -251,7 +282,7 @@ private fun CollectionScreen(
             .fillMaxSize()
             .background(backgroundColor)
     ) {
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
+        VerticalStack(modifier = Modifier.fillMaxSize()) {
             item(key = "header") {
                 val info = state.info.dataOrNull
                 when {
@@ -365,6 +396,8 @@ private fun CollectionScreen(
         FloatingBar(
             onBack = onBack,
             onShare = onShare,
+            background = circleColor,
+            tint = circleIconColor,
             modifier = Modifier.align(Alignment.TopCenter),
         )
     }
@@ -391,7 +424,9 @@ private fun HeaderBlock(
     modifier: Modifier = Modifier,
 ) {
     val screenWidth = LocalWindowInfo.current.containerDpSize.width
-
+    val overscrollFactory = LocalOverscrollFactory.current as? OffsetOverscrollFactory
+    val screenWidthPx = LocalWindowInfo.current.containerSize.width
+    val risePx = with(LocalDensity.current) { HeaderRise.toPx() }
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -403,7 +438,19 @@ private fun HeaderBlock(
                 model = headerCoverModel(coverUrl, screenWidth.value.toInt()),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .graphicsLayer {
+                        val overscrollOffset =
+                            overscrollFactory?.activeEffect?.visualOffset?.y?.coerceAtLeast(0f)
+                                ?: 0f
+                        val scale =
+                            (screenWidthPx + overscrollOffset + risePx) / (screenWidthPx + risePx)
+                        scaleX = scale
+                        scaleY = scale
+                        transformOrigin = TransformOrigin(0.5f, 1f)
+
+                    }
+                    .fillMaxSize(),
             )
         }
 
@@ -441,20 +488,19 @@ private fun HeaderBlock(
             )
 
             val author = info?.author.orEmpty()
-            if (author.isNotEmpty()) {
-                VGap(4.dp)
-                Text(
-                    text = author,
-                    style = MaterialTheme.type.subHeadline,
-                    color = Color.White.copy(alpha = 0.5f),
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.graphicsLayer {
-                        blendMode = BlendMode.Plus
-                    }
-                )
-            }
+            VGap(4.dp)
+            Text(
+                text = author,
+                style = MaterialTheme.type.subHeadline,
+                color = Color.White.copy(alpha = 0.5f),
+                textAlign = TextAlign.Center,
+                minLines = 1,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.graphicsLayer {
+                    blendMode = BlendMode.Plus
+                }
+            )
 
             val meta = metaLine(info)
             if (meta.isNotEmpty()) {
@@ -606,13 +652,15 @@ private fun HeaderActions(
 }
 
 /**
- * 压在封面上的圆钮：半透明深底 + 白图标，明暗封面都压得住。
- * 顶部浮排（返回/分享/更多）和头部按钮排共用这一款。
+ * 压在封面上的圆钮：底色/图标色由调用方给（跟页面深浅走）。
+ * 顶部浮排（返回/分享/更多）用这一款。
  */
 @Composable
 private fun CircleOverlayButton(
     iconRes: Int,
     label: String,
+    background: Color,
+    tint: Color,
     onClick: () -> Unit,
     enabled: Boolean = true,
     modifier: Modifier = Modifier,
@@ -621,15 +669,14 @@ private fun CircleOverlayButton(
         modifier = modifier
             .size(48.dp)
             .clip(CircleShape)
-            .background(Color.Black.copy(alpha = 0.35f))
+            .background(background)
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
             painter = painterResource(iconRes),
             contentDescription = label,
-            modifier = Modifier.size(20.dp),
-            tint = Color.White,
+            tint = tint,
         )
     }
 }
@@ -752,6 +799,8 @@ private fun TrackRow(
 private fun FloatingBar(
     onBack: () -> Unit,
     onShare: () -> Unit,
+    background: Color,
+    tint: Color,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -761,12 +810,30 @@ private fun FloatingBar(
             .fillMaxWidth()
             .height(48.dp),
     ) {
-        CircleOverlayButton(iconRes = R.drawable.chevron_left, label = "返回", onClick = onBack)
+        CircleOverlayButton(
+            iconRes = R.drawable.chevron_left_nav,
+            label = "返回",
+            background = background,
+            tint = tint,
+            onClick = onBack,
+        )
         Spacer(modifier = Modifier.weight(1f))
-        CircleOverlayButton(iconRes = R.drawable.share, label = "分享", onClick = onShare)
+        CircleOverlayButton(
+            iconRes = R.drawable.share,
+            label = "分享",
+            background = background,
+            tint = tint,
+            onClick = onShare,
+        )
         HGap()
         // 更多菜单还没做，先把位置摆出来
-        CircleOverlayButton(iconRes = R.drawable.ellipsis, label = "更多", onClick = {})
+        CircleOverlayButton(
+            iconRes = R.drawable.ellipsis,
+            label = "更多",
+            background = background,
+            tint = tint,
+            onClick = {},
+        )
     }
 }
 
