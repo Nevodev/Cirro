@@ -2,6 +2,7 @@ package com.nevoit.cirro.lyrics.ui.composable.lyrics
 
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -97,6 +98,7 @@ fun KaraokeLyricsView(
     scrollAnimationSpec: AnimationSpec<Float> = Springs.smooth(500),
     autoScrollResumeDelayMillis: Long = 2500,
     scrollChain: LyricsScrollChain? = LyricsScrollChain(),
+    isSeeking: Boolean = false,
 ) {
     val currentProvider by rememberUpdatedState(currentPosition)
     val timeProvider = remember { { currentProvider() } }
@@ -218,12 +220,14 @@ fun KaraokeLyricsView(
                 },
                 playbackPosition = timeProvider,
                 firstWordStartsLater = { timeline.focus.value.firstWordStartsLater },
+                isSeeking = isSeeking,
             )
         // One shared animation, sampled only by graphics layers; no per-frame item recomposition.
+        val cancelFocusBlur = listState.isManualScrolling || isSeeking
         val focusBlurFactor =
             animateFloatAsState(
-                targetValue = if (listState.isManualScrolling) 0f else 1f,
-                animationSpec = tween(if (listState.isManualScrolling) 100 else 300),
+                targetValue = if (cancelFocusBlur) 0f else 1f,
+                animationSpec = if (isSeeking) snap() else tween(if (cancelFocusBlur) 100 else 300),
                 label = "manualScrollFocusBlur",
             )
         LyricsLazyColumn(
@@ -299,7 +303,7 @@ fun KaraokeLyricsView(
                             onLineClicked(line)
                         },
                         onLinePressed = { onLinePressed(line) },
-                        blurRadius = { blur * focusBlurFactor.value },
+                        blurRadius = { if (isSeeking) 0f else blur * focusBlurFactor.value },
                     ) {
                         if (prepared != null)
                             PreparedLineText(

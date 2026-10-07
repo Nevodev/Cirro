@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -74,12 +75,15 @@ private val LyricsScrollSpring = LyricsScrollChain.of(durationMillis = 300f, bou
 fun LyricsPanel(
     songId: Long,
     connection: PlaybackConnection,
+    seekPreviewPosition: State<Long?>,
+    isSeeking: State<Boolean>,
     color: ColorProducer,
     modifier: Modifier = Modifier,
 ) {
     val repository = koinInject<LyricsRepository>()
     val listState = key(songId) { rememberLyricsLazyListState() }
     val position = rememberLyricsPosition(connection)
+    val seeking by isSeeking
     val textColor = rememberSettledLyricsColor(color)
 
     // 缓存命中是同步的（切歌时 PlaybackService 已经预取过），所以绝大多数情况下第一帧就有词。
@@ -101,7 +105,12 @@ fun LyricsPanel(
     }
 
     // 回调必须稳定，否则 `KaraokeLyricsView` 里那些按参数跳过重组的判断全失效。
-    val currentPosition = remember(position) { { position.intValue } }
+    val currentPosition = remember(position, seekPreviewPosition) {
+        {
+            seekPreviewPosition.value?.coerceIn(0L, Int.MAX_VALUE.toLong())?.toInt()
+                ?: position.intValue
+        }
+    }
     val onLineClicked =
         remember(connection) { { line: ISyncedLine -> connection.seekTo(line.start.toLong()) } }
     val onLinePressed = remember { { _: ISyncedLine -> } }
@@ -120,6 +129,7 @@ fun LyricsPanel(
                     listState = listState,
                     lyrics = model,
                     currentPosition = currentPosition,
+                    isSeeking = seeking,
                     onLineClicked = onLineClicked,
                     onLinePressed = onLinePressed,
                     textColor = textColor,

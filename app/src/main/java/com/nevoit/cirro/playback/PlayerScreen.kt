@@ -96,6 +96,7 @@ import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.local.ProvideContentColor
 import com.nevoit.material.theme.tokens.Springs
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -307,6 +308,7 @@ private fun PlayerOverlay(
 
     val song = header.first
     val isPlaying = header.second
+    val seekState = remember(connection, song?.id) { PlayerSeekState() }
 
     // 队列被清空（进程回收后服务重建、歌放完被清掉）时别留一张空壳在这
     LaunchedEffect(song) { if (song == null) controller.close() }
@@ -534,6 +536,8 @@ private fun PlayerOverlay(
                         LyricsPanel(
                             songId = song.id,
                             connection = connection,
+                            seekPreviewPosition = seekState.previewPosition,
+                            isSeeking = seekState.isDragging,
                             color = contentColor,
                             modifier = Modifier
                                 .padding(12.dp)
@@ -606,6 +610,7 @@ private fun PlayerOverlay(
                 PlayerProgress(
                     stateFlow = connection.state,
                     onSeek = onSeek,
+                    seekState = seekState,
                     contentColor = contentColor,
                     contentVariantColor = contentVariantColor,
                     modifier = Modifier.padding(horizontal = ContentPadding),
@@ -891,13 +896,14 @@ private fun PlayerText(
  * 播放状态是自己订的（而不是由调用方把值传下来）：位置每 500ms 变一次，这个订阅把重组
  * 范围锁在进度条和两个时间上，上面那层——封面、标题、控制条——一次都不会被吵醒。
  *
- * 拖拽期间**显示的是手指的位置**，不跟播放器走——播放器的位置 500ms 才汇一次报，
- * 跟着它走的话进度头会在手指底下抽搐。松手才真的 `seekTo`。
+ * 拖拽期间进度条与歌词共用预览位置。松手后提交 seek，等播放器确认再恢复播放时钟，
+ * 避免控制器尚未回报时短暂跳回旧位置。
  */
 @Composable
 private fun PlayerProgress(
     stateFlow: StateFlow<PlaybackState>,
     onSeek: (Long) -> Unit,
+    seekState: PlayerSeekState,
     contentColor: ColorProducer,
     contentVariantColor: ColorProducer,
     modifier: Modifier = Modifier,
@@ -906,15 +912,22 @@ private fun PlayerProgress(
     val positionMs = state.positionMs
     val durationMs = state.durationMs
 
-    var dragging by remember { mutableStateOf(false) }
-    var dragFraction by remember { mutableFloatStateOf(0f) }
+    val dragging by seekState.isDragging
+    val previewPosition by seekState.previewPosition
 
-    val target = if (dragging) {
-        dragFraction
-    } else if (durationMs > 0) {
-        (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
-    } else {
-        0f
+    val target = previewPosition?.takeIf { durationMs > 0L }?.let {
+        (it.toFloat() / durationMs).coerceIn(0f, 1f)
+    } ?: state.progress
+
+    DisposableEffect(seekState) { onDispose { seekState.cancel() } }
+    LaunchedEffect(seekState, state.discontinuity) {
+        seekState.onPlaybackDiscontinuity(stateFlow.value.discontinuity)
+    }
+    LaunchedEffect(seekState, dragging, previewPosition != null) {
+        if (!dragging && seekState.previewPosition.value != null) {
+            delay(1500L)
+            seekState.cancel()
+        }
     }
 
     // 位置心跳 500ms 一拍。用同样时长的线性补间把两拍之间填匀，进度头才是匀速走而不是一顿一顿；
@@ -934,20 +947,18 @@ private fun PlayerProgress(
                 .padding(top = 8.dp)
                 .fillMaxWidth()
                 .height(TrackTouchHeight)
-                .pointerInput(durationMs) {
+                .pointerInput(seekState, durationMs) {
                     detectHorizontalDragGestures(
-                        onDragStart = { offset ->
-                            dragging = true
-                            dragFraction = (offset.x / size.width).coerceIn(0f, 1f)
+                        onDragStart = {
+                            seekState.begin((smooth.value * durationMs).toLong(), durationMs)
                         },
                         onDragEnd = {
-                            dragging = false
-                            onSeek((dragFraction * durationMs).toLong())
+                            seekState.commit(stateFlow.value.discontinuity)?.let(onSeek)
                         },
-                        onDragCancel = { dragging = false },
+                        onDragCancel = seekState::cancel,
                         onHorizontalDrag = { change, delta ->
                             change.consume()
-                            dragFraction = (dragFraction + delta / size.width).coerceIn(0f, 1f)
+                            seekState.dragBy(delta / size.width.coerceAtLeast(1), durationMs)
                         },
                     )
                 },
@@ -963,7 +974,7 @@ private fun PlayerProgress(
         )
         Row(modifier = Modifier.fillMaxWidth()) {
             PlayerText(
-                text = formatTime(if (dragging) (dragFraction * durationMs).toLong() else positionMs),
+                text = formatTime(previewPosition ?: positionMs),
                 style = MaterialTheme.type.footnote,
                 color = contentVariantColor,
             )

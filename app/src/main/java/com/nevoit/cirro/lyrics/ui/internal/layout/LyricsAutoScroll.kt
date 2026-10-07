@@ -23,16 +23,21 @@ internal fun lyricsAutoScroll(
     focusEndIndex: () -> Int = targetIndex,
     playbackPosition: (() -> Int)? = null,
     firstWordStartsLater: () -> Boolean = { false },
+    isSeeking: Boolean = false,
 ): Modifier {
     require(resumeDelayMillis >= 0)
     val target by rememberUpdatedState(targetIndex)
     val focusEnd by rememberUpdatedState(focusEndIndex)
     val playback by rememberUpdatedState(playbackPosition)
     val wordStartsLater by rememberUpdatedState(firstWordStartsLater)
+    val seeking by rememberUpdatedState(isSeeking)
     var seekRevision by remember(state) { mutableIntStateOf(0) }
     DisposableEffect(state) { onDispose { state.isManualScrolling = false } }
     var dragging by remember(state) { mutableStateOf(false) }
     var interaction by remember(state) { mutableIntStateOf(0) }
+    LaunchedEffect(state, isSeeking) {
+        if (isSeeking) state.resumeAutoScroll()
+    }
     val connection =
         remember(state) {
             object : NestedScrollConnection {
@@ -96,16 +101,18 @@ internal fun lyricsAutoScroll(
         var previousIndex = -1
         snapshotFlow {
                 FollowTarget(
-                    if (state.isManualScrolling) -1 else target(),
+                    if (state.isManualScrolling && !seeking) -1 else target(),
                     focusEnd(),
                     seekRevision,
                     state.resumeRequest,
                     wordStartsLater(),
+                    seeking,
                 )
             }
             .collectLatest { request ->
-                val cascade = request.seek == previousSeek || request.resume != previousResume
-                val extraBounce = request.firstWordStartsLater && previousIndex >= 0 &&
+                val cascade = !request.seeking &&
+                    (request.seek == previousSeek || request.resume != previousResume)
+                val extraBounce = !request.seeking && request.firstWordStartsLater && previousIndex >= 0 &&
                     request.index > previousIndex && request.seek == previousSeek &&
                     request.resume == previousResume
                 previousSeek = request.seek
@@ -127,4 +134,5 @@ private data class FollowTarget(
     val seek: Int,
     val resume: Int,
     val firstWordStartsLater: Boolean,
+    val seeking: Boolean,
 )
