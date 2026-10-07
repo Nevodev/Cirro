@@ -1,15 +1,23 @@
 package com.nevoit.cirro.di
 
 import com.nevoit.cirro.data.AccountRepository
+import com.nevoit.cirro.data.AudioQualityStore
 import com.nevoit.cirro.data.CollectionRepository
+import com.nevoit.cirro.data.EncryptedSecretStore
 import com.nevoit.cirro.data.HomeRepository
+import com.nevoit.cirro.data.PlayQueueStore
 import com.nevoit.cirro.data.SessionStore
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.detail.CollectionViewModel
 import com.nevoit.cirro.home.HomeViewModel
 import com.nevoit.cirro.login.QrLoginViewModel
+import com.nevoit.cirro.lyrics.data.AppleMusicAccountRepository
+import com.nevoit.cirro.lyrics.data.AppleMusicTokenStore
+import com.nevoit.cirro.lyrics.data.LyricsRepository
+import com.nevoit.cirro.lyrics.data.LyricsStore
 import com.nevoit.cirro.palette.CoverPalette
 import com.nevoit.cirro.playback.PlaybackConnection
+import com.nevoit.cirro.playback.PlayerUiController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -31,17 +39,40 @@ val appModule = module {
 
     single(ApplicationScope) { CoroutineScope(SupervisorJob() + Dispatchers.Default) }
 
-    single { SessionStore(androidContext()) }
+    single { EncryptedSecretStore(androidContext()) }
+
+    single { SessionStore(get()) }
+
+    single { AudioQualityStore(androidContext()) }
+
+    // 播放队列的真相源：PlaybackConnection 写（它拿着 MediaController），
+    // PlaybackService 读（打卡要 sourceId）。
+    single { PlayQueueStore() }
 
     single { AccountRepository(get(), get(ApplicationScope)) }
 
-    single { PlaybackConnection(androidContext(), get(ApplicationScope)) }
+    single { PlaybackConnection(androidContext(), get(ApplicationScope), get()) }
+
+    // 播放页的展开进度。迷你条和播放页分属两层，要由同一个值驱动，所以由 App 持有。
+    // 它的动画得跑在组合的帧时钟上，由界面侧启动（见 PlayerUiController.animate）
+    single { PlayerUiController() }
 
     single { HomeRepository(androidContext(), get(ApplicationScope), get()) }
 
     single { CollectionRepository(get()) }
 
     single { CoverPalette(androidContext(), get(ApplicationScope)) }
+
+    // 歌词：独立的一个原生库（libcirro_lyrics.so）。快照落盘 + 四级取词链，
+    // 切歌时由 PlaybackService 预取。
+    single { LyricsStore(androidContext()) }
+
+    // Apple Music 登录态（歌词第 1 级的凭据，与网易账号无关）。冷启动由 Application 调 restore()。
+    single { AppleMusicTokenStore(get()) }
+
+    single { AppleMusicAccountRepository(get(), get(ApplicationScope)) }
+
+    single { LyricsRepository(get(), get(ApplicationScope), get()) }
 
     viewModelOf(::QrLoginViewModel)
 

@@ -1,41 +1,43 @@
 package com.nevoit.material.core.modifier
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorProducer
+import com.nevoit.material.core.utility.rememberColorProducer
 
+// Convenience for a colour that is already fixed at composition time. Anything that animates
+// should call the producer overload instead.
 @Composable
 fun Modifier.smoothGradient(
     color: Color,
     start: Float,
     end: Float,
     intensity: Float
-): Modifier = smoothGradientBrushMask(color, start, end, intensity)
+): Modifier = smoothGradient(rememberColorProducer(color), start, end, intensity)
 
-@Composable
-private fun Modifier.smoothGradientBrushMask(
-    color: Color,
+// Vertical mask gradient whose colour is only read while drawing. Hand it a producer
+// (`{ state.value }`) when the colour animates: reading the value during composition builds the
+// whole 33-stop ramp again on every frame of the animation and recomposes the caller with it.
+//
+// The producer is read inside the cache block, which registers the dependency: the ramp is rebuilt
+// when the colour changes and only then, so a settled colour costs one list for the whole session.
+fun Modifier.smoothGradient(
+    color: ColorProducer,
     start: Float,
     end: Float,
     intensity: Float
-): Modifier {
-    val colors = remember(color, start, end, intensity) {
-        smoothStepGradientColors(color, start, end, intensity)
-    }
+): Modifier = drawWithCache {
+    val brush = Brush.verticalGradient(
+        colors = smoothStepGradientColors(color(), start, end, intensity),
+        startY = 0f,
+        endY = size.height
+    )
 
-    return this.drawWithCache {
-        val brush = Brush.verticalGradient(
-            colors = colors,
-            startY = 0f,
-            endY = size.height
-        )
-
-        onDrawBehind {
-            drawRect(brush = brush)
-        }
+    onDrawBehind {
+        drawRect(brush = brush)
     }
 }
 

@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -52,7 +51,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.graphics.shapes.RoundedPolygon
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
@@ -62,6 +60,7 @@ import com.kyant.shapes.UnevenRoundedRectangle
 import com.nevoit.cirro.R
 import com.nevoit.cirro.data.model.CollectionInfo
 import com.nevoit.cirro.data.model.CollectionKind
+import com.nevoit.cirro.data.model.QueueSource
 import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.home.Section
 import com.nevoit.cirro.home.dataOrNull
@@ -70,8 +69,10 @@ import com.nevoit.cirro.palette.CoverSeed
 import com.nevoit.cirro.playback.PlaybackConnection
 import com.nevoit.cirro.ui.BottomShade
 import com.nevoit.cirro.ui.ReflectionTransformation
+import com.nevoit.material.core.component.CircleIconButton
 import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
+import com.nevoit.material.core.component.MaterialShapeButton
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
 import com.nevoit.material.core.interaction.overscroll.OffsetOverscrollFactory
@@ -80,7 +81,6 @@ import com.nevoit.material.core.modifier.smoothGradient
 import com.nevoit.material.core.utility.NavigationBarSpacer
 import com.nevoit.material.theme.MaterialShapes
 import com.nevoit.material.theme.MaterialTheme
-import com.nevoit.material.theme.toShape
 import com.nevoit.material.theme.tokens.Springs
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -168,6 +168,8 @@ fun CollectionRoute(
 
     val songs = state.songs.dataOrNull.orEmpty()
     val playingId = playback.state.collectAsState().value.song?.id
+    // 这一页的出身：随歌一起交给队列，打卡时回传 sourceId（每日推荐没有服务端集合，QueueSource 会留空）
+    val queueSource = QueueSource(kind, id.toString())
 
     val palette = koinInject<CoverPalette>()
     val paletteKey = coverHint.ifEmpty { state.info.dataOrNull?.cover.orEmpty() }
@@ -183,10 +185,12 @@ fun CollectionRoute(
         displayTitle = viewModel.displayTitle,
         playingId = playingId,
         seed = seed,
-        onPlay = { index -> if (songs.isNotEmpty()) playback.playSongs(songs, index) },
+        onPlay = { index -> if (songs.isNotEmpty()) playback.playSongs(songs, index, queueSource) },
         onShuffle = {
             // 随机播放 = 同一份队列，从随机的一个位置起步；顺序仍是接着往下听
-            if (songs.isNotEmpty()) playback.playSongs(songs, Random.nextInt(songs.size))
+            if (songs.isNotEmpty()) {
+                playback.playSongs(songs, Random.nextInt(songs.size), queueSource)
+            }
         },
         onToggleSubscribed = viewModel::toggleSubscribed,
         onRetry = viewModel::load,
@@ -652,64 +656,6 @@ private fun HeaderActions(
     }
 }
 
-/**
- * 压在封面上的圆钮：底色/图标色由调用方给（跟页面深浅走）。
- * 顶部浮排（返回/分享/更多）用这一款。
- */
-@Composable
-private fun CircleOverlayButton(
-    iconRes: Int,
-    label: String,
-    background: Color,
-    tint: Color,
-    onClick: () -> Unit,
-    enabled: Boolean = true,
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier = modifier
-            .size(48.dp)
-            .clip(CircleShape)
-            .background(background)
-            .clickable(enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            painter = painterResource(iconRes),
-            contentDescription = label,
-            tint = tint,
-        )
-    }
-}
-
-@Composable
-private fun MaterialShapeButton(
-    iconRes: Int,
-    label: String,
-    background: Color,
-    tint: Color,
-    onClick: () -> Unit,
-    enabled: Boolean = true,
-    shape: RoundedPolygon = MaterialShapes.Circle,
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier = modifier
-            .size(56.dp)
-            .clip(shape.toShape())
-            .background(background)
-            .clickable(enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            painter = painterResource(iconRes),
-            contentDescription = label,
-            modifier = Modifier.size(24.dp),
-            tint = tint,
-        )
-    }
-}
-
 /** 曲目一行：序号或封面 + 歌名/歌手 + 时长。整行就是播放入口。 */
 @Composable
 private fun TrackRow(
@@ -811,7 +757,7 @@ private fun FloatingBar(
             .fillMaxWidth()
             .height(48.dp),
     ) {
-        CircleOverlayButton(
+        CircleIconButton(
             iconRes = R.drawable.chevron_left_nav,
             label = "返回",
             background = background,
@@ -819,7 +765,7 @@ private fun FloatingBar(
             onClick = onBack,
         )
         Spacer(modifier = Modifier.weight(1f))
-        CircleOverlayButton(
+        CircleIconButton(
             iconRes = R.drawable.share,
             label = "分享",
             background = background,
@@ -828,7 +774,7 @@ private fun FloatingBar(
         )
         HGap()
         // 更多菜单还没做，先把位置摆出来
-        CircleOverlayButton(
+        CircleIconButton(
             iconRes = R.drawable.ellipsis,
             label = "更多",
             background = background,

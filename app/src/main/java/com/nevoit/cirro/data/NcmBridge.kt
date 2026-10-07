@@ -1,5 +1,6 @@
 package com.nevoit.cirro.data
 
+import com.nevoit.cirro.data.model.AudioQuality
 import com.nevoit.cirro.data.model.CollectionDetail
 import com.nevoit.cirro.data.model.CollectionInfo
 import com.nevoit.cirro.data.model.CollectionKind
@@ -9,6 +10,7 @@ import com.nevoit.cirro.data.model.Ranking
 import com.nevoit.cirro.data.model.RecentSong
 import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.data.model.SongAudio
+import com.nevoit.cirro.data.model.SongQualityInfo
 import com.nevoit.cirro.data.model.UserProfile
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -87,12 +89,16 @@ object NcmBridge {
      * - [SongUnavailableException]：无版权 / 下架 / VIP 未开通，重试没有意义
      * - 其它失败：请求本身没成功（网络、超时），值得重试
      *
+     * [level] 拿不到目标档时会由服务端自己降级（实测请求 `hires` 回 `lossless`），但**降不下去
+     * 时**可能直接回 `code=-110` + 空 url —— 那说明这一档这首歌给不了，跟"整首不能播"不同，
+     * 提示语会区分开。
+     *
      * 返回的直链有效期很短（[SongAudio.expiresInSeconds]，实测 1200 秒），别囤。
      */
     fun songUrl(id: Long, level: String = "standard"): Result<SongAudio> = runCatching {
         val body = decode(nativeSongUrl(id.toString(), level)).getOrThrow()
         if (body.url.isEmpty()) {
-            throw SongUnavailableException(body.message.ifEmpty { "该歌曲暂无可播放的音频" })
+            throw SongUnavailableException(unavailableMessage(body.code, level, body.message))
         }
         SongAudio(
             url = body.url,
@@ -102,6 +108,26 @@ object NcmBridge {
             expiresInSeconds = body.expi,
             gainDb = body.gain,
             peak = body.peak,
+        )
+    }
+
+    /**
+     * 这首歌**有哪几档音质**（需登录）。
+     *
+     * 原生层的响应是一组固定键、`null` 表示没这一档，这里已经拍平成一档一条。
+     *
+     * ⚠️ **有这一档 ≠ 能播这一档**：实测 `vivid` 恒有字段，但请求直链仍回 `code=-110`
+     * （没权益）。所以这份数据只用来**灰化界面 / 显示体积**，最终能不能播看 [songUrl] 的响应。
+     *
+     * 只在打开音质面板时按需查，**不在播放路径上**调用 —— 播放时少一次请求。
+     */
+    fun songQuality(id: Long): Result<SongQualityInfo> = runCatching {
+        val body = decode(nativeSongMusicDetail(id.toString())).getOrThrow()
+        SongQualityInfo(
+            songId = id,
+            sizes = body.levels.mapNotNull { item ->
+                AudioQuality.fromWire(item.level)?.let { it to item.size }
+            }.toMap(),
         )
     }
 
@@ -273,6 +299,19 @@ object NcmBridge {
             ).getOrThrow()
         }
 
+    /**
+     * 直链空时给界面的一句话。
+     *
+     * `-110` 是"**这一档**拿不到"（实测请求 `vivid` 就是它），跟"这首歌整首不能播"是两回事 ——
+     * 用户在音质面板里挑了够不着的档时，这句话要让他知道换个档就行，别以为歌废了。
+     */
+    private fun unavailableMessage(code: Int, level: String, serverMessage: String): String =
+        if (code == -110) {
+            "这首歌不支持「${AudioQuality.fromWire(level)?.displayName ?: level}」，换一档试试"
+        } else {
+            serverMessage.ifEmpty { "该歌曲暂无可播放的音频" }
+        }
+
     private fun decode(raw: String?): Result<BridgeResponse> = runCatching {
         val body = json.decodeFromString<BridgeResponse>(
             raw ?: throw IllegalStateException("原生层返回空")
@@ -294,6 +333,8 @@ object NcmBridge {
     private external fun nativeLoginStatus(): String
 
     private external fun nativeSongUrl(id: String, level: String): String
+
+    private external fun nativeSongMusicDetail(id: String): String
 
     private external fun nativeSongDetail(ids: String): String
 
@@ -341,6 +382,8 @@ private data class BridgeResponse(
     val expi: Long = 0,
     val gain: Double? = null,
     val peak: Double? = null,
+    /** `songQuality` 用：这首歌实际存在的档位（高→低），缺哪档就没有哪条。 */
+    val levels: List<QualityLevel> = emptyList(),
     val songs: List<Song> = emptyList(),
     val playlists: List<Playlist> = emptyList(),
     val lists: List<Ranking> = emptyList(),
@@ -360,4 +403,12 @@ private data class BridgeResponse(
     val artists: List<String> = emptyList(),
     val company: String = "",
     val albumType: String = "",
+)
+
+/** [NcmBridge.songQuality] 原生层返回的一档：`level` 是 wire 名，`size` 是这一档的体积（字节）。 */
+@Serializable
+private data class QualityLevel(
+    val level: String = "",
+    val br: Int = 0,
+    val size: Long = 0,
 )

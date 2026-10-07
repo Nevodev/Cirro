@@ -1099,3 +1099,73 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeAlbumType<'loc
     };
     jni_out(&mut env, value)
 }
+
+/// 这首歌**有哪几档音质**（`/api/song/music/detail/get`）。
+///
+/// 返回体是一组**固定键**，值为 `{br,fid,size,sr,vd}`；**`null` = 这首歌没有这一档**：
+/// `l`=standard / `m`=higher / `h`=exhigh / `sq`=lossless / `hr`=hires /
+/// `je`=jyeffect / `jm`=jymaster / `sk`=sky（`sks` 是它的另一个编码变体，任一有值即算有）/
+/// `vi`=vivid / `db`=dolby。
+///
+/// ⚠️ **字段在 ≠ 有权益**：实测 `vi` 恒有值，但请求 `vivid` 仍回 `code=-110`。这份清单只够
+/// 用来**灰化界面 / 显示体积**，最终能不能播一律以直链响应为准（见 `nativeSongUrl`）。
+///
+/// 返回 `{"ok":true,"levels":[{"level":"standard","size":..,"br":..}]}`，按**高→低**给。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeSongMusicDetail<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    id: JString<'local>,
+) -> jstring {
+    let id = jni_in(&mut env, &id);
+    if id.is_empty() {
+        return jni_out(
+            &mut env,
+            serde_json::json!({ "ok": false, "message": "id 为空" }),
+        );
+    }
+
+    // (detail 键, wire level)。顺序就是档位从高到低，界面直接用。
+    const KEYS: &[(&str, &str)] = &[
+        ("db", "dolby"),
+        ("vi", "vivid"),
+        ("sk", "sky"),
+        ("jm", "jymaster"),
+        ("je", "jyeffect"),
+        ("hr", "hires"),
+        ("sq", "lossless"),
+        ("h", "exhigh"),
+        ("m", "higher"),
+        ("l", "standard"),
+    ];
+
+    let client = client_snapshot();
+    let query = Query::new().param("id", &id);
+    let value = match RUNTIME.block_on(client.song_music_detail(&query)) {
+        Ok(r) => {
+            let d = &r.body["data"];
+            let levels: Vec<serde_json::Value> = KEYS
+                .iter()
+                .filter_map(|(key, level)| {
+                    // sky 有两个键，任一有值即算有；其余档只看自己那一个键
+                    let mut candidates = vec![*key];
+                    if *key == "sk" {
+                        candidates.push("sks");
+                    }
+                    let node = candidates
+                        .iter()
+                        .map(|k| &d[*k])
+                        .find(|v| !v.is_null())?;
+                    Some(serde_json::json!({
+                        "level": level,
+                        "br": node["br"].as_i64().unwrap_or(0),
+                        "size": node["size"].as_i64().unwrap_or(0),
+                    }))
+                })
+                .collect();
+            serde_json::json!({ "ok": true, "levels": levels })
+        }
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}

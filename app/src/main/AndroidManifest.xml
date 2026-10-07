@@ -31,6 +31,11 @@
             android:name=".login.LoginActivity"
             android:exported="false"
             android:theme="@style/Theme.Cirro" />
+        <activity
+            android:name=".login.AppleMusicLoginActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Cirro"
+            android:windowSoftInputMode="adjustResize" />
         <!-- exported 走 media3 官方写法：系统媒体控制、Android Auto、语音助手都要能连上它 -->
         <service
             android:name=".playback.PlaybackService"

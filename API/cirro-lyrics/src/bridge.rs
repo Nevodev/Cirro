@@ -1,0 +1,146 @@
+//! JNI 导出。
+//!
+//! 类名对应 Kotlin 侧的 `com.nevoit.cirro.lyrics.data.LyricsBridge`（Kotlin `object`，
+//! 所以第二个参数是实例而不是 `jclass`）。
+//!
+//! 一律返回 JSON 字符串，失败也走正常返回：
+//!   `{"ok":true, ...}` / `{"ok":false,"message":"..."}`。
+//!
+//! ⚠️ 歌词引擎是**独立于 `ncm-android` 的第二个 .so**（`libcirro_lyrics.so`），
+//! 因此这里也自带一份网易 cookie —— Kotlin 侧必须在同一时机把 cookie 推给两个桥。
+
+use jni::objects::{JObject, JString};
+use jni::sys::{jint, jstring};
+use jni::JNIEnv;
+
+use crate::{api, engine};
+
+fn jni_out(env: &mut JNIEnv, value: serde_json::Value) -> jstring {
+    match env.new_string(value.to_string()) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+fn jni_in(env: &mut JNIEnv, value: &JString) -> String {
+    if value.is_null() {
+        return String::new();
+    }
+    match env.get_string(value) {
+        Ok(s) => s.into(),
+        Err(_) => String::new(),
+    }
+}
+
+/// 库版本号。Kotlin 侧自检用。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeVersion<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+) -> jstring {
+    jni_out(
+        &mut env,
+        serde_json::json!({ "ok": true, "version": crate::version() }),
+    )
+}
+
+/// 设置网易 cookie。空串判失败（0 成功 / -1 参数无效）。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeSetCookie<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    cookie: JString<'local>,
+) -> jint {
+    let cookie = jni_in(&mut env, &cookie);
+    api::set_cookie(cookie)
+}
+
+/// 清空网易登录态。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeClearCookie<'local>(
+    _env: JNIEnv<'local>,
+    _this: JObject<'local>,
+) {
+    api::clear_cookie();
+}
+
+/// 配置 Apple Music 凭据。`mediaUserToken` 传空串等于关闭这一级。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeSetAppleToken<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    media_user_token: JString<'local>,
+    storefront: JString<'local>,
+    language: JString<'local>,
+) -> jint {
+    let token = jni_in(&mut env, &media_user_token);
+    let storefront = jni_in(&mut env, &storefront);
+    let language = jni_in(&mut env, &language);
+    api::set_apple_token(token, storefront, language)
+}
+
+/// 是否已配置 Apple 凭据。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeAppleConfigured<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+) -> jstring {
+    jni_out(
+        &mut env,
+        serde_json::json!({ "ok": true, "configured": api::apple_configured() }),
+    )
+}
+
+/// 网易 LRC。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeNetease<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    id: JString<'local>,
+) -> jstring {
+    let id = jni_in(&mut env, &id);
+    let value = engine::RUNTIME.block_on(api::netease_lyric(id));
+    jni_out(&mut env, value)
+}
+
+/// AMLL TTML DB。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeAmll<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    ncm_id: JString<'local>,
+) -> jstring {
+    let ncm_id = jni_in(&mut env, &ncm_id);
+    let value = engine::RUNTIME.block_on(api::amll_ttml(ncm_id));
+    jni_out(&mut env, value)
+}
+
+/// Apple Music 官方 TTML。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeApple<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    am_id: JString<'local>,
+) -> jstring {
+    let am_id = jni_in(&mut env, &am_id);
+    let value = engine::RUNTIME.block_on(api::apple_ttml(am_id));
+    jni_out(&mut env, value)
+}
+
+/// lrclib。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeLrclib<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    track_name: JString<'local>,
+    artist_name: JString<'local>,
+    album_name: JString<'local>,
+    duration_sec: JString<'local>,
+) -> jstring {
+    let track = jni_in(&mut env, &track_name);
+    let artist = jni_in(&mut env, &artist_name);
+    let album = jni_in(&mut env, &album_name);
+    let duration = jni_in(&mut env, &duration_sec);
+    let value = engine::RUNTIME.block_on(api::lrclib_lyric(track, artist, album, duration));
+    jni_out(&mut env, value)
+}

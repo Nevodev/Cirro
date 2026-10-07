@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,6 +38,7 @@ import com.nevoit.material.core.modifier.drawBackground
 import com.nevoit.material.core.modifier.marquee
 import com.nevoit.material.core.utility.rememberColorProducer
 import com.nevoit.material.theme.MaterialTheme
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * 吸底的迷你播放条。没有在放的歌时不渲染。
@@ -43,17 +46,23 @@ import com.nevoit.material.theme.MaterialTheme
  * 颜色一律收 producer：详情页进出时这些颜色是动画态（底栏跟着封面走），传值会让调用方
  * 每帧重组一次；传 producer 就只有 draw 阶段去读，颜色变化只失效绘制。
  * 容器反色（深色页浅胶囊）时，调用方把文字色一起换掉。
+ *
+ * 状态收的是 [StateFlow] 而不是值：进度条每 500ms 要重画一次，读的位置留在这一层，
+ * 重组范围就只有这条胶囊本身——传值的话每次心跳都会顺着参数把调用方连带重组一遍。
  */
 @Composable
 fun MiniPlayer(
-    state: PlaybackState,
+    stateFlow: StateFlow<PlaybackState>,
+    onClick: () -> Unit,
     onTogglePlay: () -> Unit,
+    onSkipNext: () -> Unit,
     modifier: Modifier = Modifier,
     containerColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.cardBackground),
     contentColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.content),
     contentVariantColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.contentVariant),
     progressColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.primary),
 ) {
+    val state by stateFlow.collectAsState()
     val song = state.song ?: return
     val boxWidth = LocalWindowInfo.current.containerDpSize.width - 24.dp
     val boxHeight = 56.dp
@@ -66,7 +75,9 @@ fun MiniPlayer(
         modifier = modifier
             .clip(Capsule())
             .drawBackground(containerColor)
-            .height(boxHeight),
+            .height(boxHeight)
+            // 整条可点：开播放页。里面的两个按钮自己消费事件，不会连带触发
+            .clickable(onClick = onClick),
     ) {
         Row(
             modifier = Modifier.fillMaxSize(),
@@ -125,9 +136,7 @@ fun MiniPlayer(
                 modifier = Modifier
                     .size(48.dp)
                     .clip(CircleShape)
-                    .clickable {
-
-                    },
+                    .clickable(onClick = onSkipNext),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -177,7 +186,9 @@ private fun MiniPlayerText(
             .marquee(
                 restartKey = restartKey,
                 initialDelayMillis = 2000,
-                startFadeOffset = 6.dp
+                startFadeOffset = 6.dp,
+                endFadeOffset = 12.dp,
+                spacing = 24.dp
             )
     )
 }

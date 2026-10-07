@@ -3,6 +3,7 @@ package com.nevoit.cirro.data
 import android.util.Log
 import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.data.model.UserProfile
+import com.nevoit.cirro.lyrics.data.LyricsBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,6 +39,8 @@ class AccountRepository(
             }
 
             NcmBridge.setCookie(cookie)
+            // 歌词引擎是另一个 .so，cookie 各持一份，必须一起推（否则歌词会按未登录取）
+            LyricsBridge.setCookie(cookie)
 
             val status = NcmBridge.loginStatus()
             val profile = status.getOrNull()
@@ -81,6 +84,8 @@ class AccountRepository(
 
     private suspend fun persistCookie(cookie: String?) {
         if (cookie.isNullOrEmpty()) return
+        // 扫码确认时 NcmBridge 那份已经写进去了，这里补歌词引擎那份
+        LyricsBridge.setCookie(cookie)
         // 落盘失败不该连着登录态一起丢：本次会话照样是登录的，只是下次冷启动要重扫
         val saved = withContext(Dispatchers.IO) {
             runCatching { store.writeCookie(cookie) }.getOrDefault(false)
@@ -93,6 +98,7 @@ class AccountRepository(
     private suspend fun forgetCookie() {
         withContext(Dispatchers.IO) { runCatching { store.clear() } }
         NcmBridge.clearCookie()
+        LyricsBridge.clearCookie()
     }
 
     private companion object {

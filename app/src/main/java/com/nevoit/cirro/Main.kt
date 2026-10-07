@@ -1,6 +1,7 @@
 package com.nevoit.cirro
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -35,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -46,10 +48,13 @@ import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.detail.CollectionRoute
 import com.nevoit.cirro.home.HomeRoute
+import com.nevoit.cirro.login.AppleMusicLoginActivity
 import com.nevoit.cirro.palette.CoverPalette
 import com.nevoit.cirro.palette.CoverSeed
 import com.nevoit.cirro.playback.MiniPlayer
 import com.nevoit.cirro.playback.PlaybackConnection
+import com.nevoit.cirro.playback.PlayerLayer
+import com.nevoit.cirro.playback.PlayerUiController
 import com.nevoit.cirro.ui.BottomShade
 import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
@@ -63,6 +68,8 @@ import com.nevoit.material.navigation.NavigationHostHandle
 import com.nevoit.material.navigation.rememberNavigator
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.local.ProvideContentColor
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 import org.koin.compose.koinInject
 
@@ -156,8 +163,14 @@ fun BoxScope.Main() {
     var selectedIndex by rememberSaveable { mutableIntStateOf(0) }
     val accountRepository = koinInject<AccountRepository>()
     val playbackConnection = koinInject<PlaybackConnection>()
+    val playerUi = koinInject<PlayerUiController>()
     val session by accountRepository.session.collectAsState()
-    val playback by playbackConnection.state.collectAsState()
+    // 只订阅"到底有没有歌在放"这一位。订阅整个 state 会让 Main 跟着 500ms 的位置心跳重组，
+    // 连带 NavigationHost、MiniPlayer 和它们底下的整棵树一起——播放位置该由真正需要它的
+    // 那一小块自己去读（MiniPlayer / 播放页）。
+    val hasSong by remember(playbackConnection) {
+        playbackConnection.state.map { it.song != null }.distinctUntilChanged()
+    }.collectAsState(initial = playbackConnection.state.value.song != null)
 
     // 底栏 chrome：详情页（Collection）在导航顶上时跟封面种子走，否则跟主题。
     // seed 用 produceState 异步取——缓存命中第一帧就有（首页预取过）；没命中则取完自动
@@ -257,12 +270,16 @@ fun BoxScope.Main() {
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
                 .padding(12.dp)
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                // 播放页铺开时整块 chrome 往下沉并淡出。位移在 layer 阶段算，Main 不参与
+                .chromeExit { playerUi.progress },
         ) {
-            if (playback.song != null) {
+            if (hasSong) {
                 MiniPlayer(
-                    state = playback,
+                    stateFlow = playbackConnection.state,
+                    onClick = { playerUi.open() },
                     onTogglePlay = { playbackConnection.togglePlayPause() },
+                    onSkipNext = { playbackConnection.skipToNext() },
                     containerColor = rememberColorProducer(barContainerColor),
                     contentColor = rememberColorProducer(miniContentColor),
                     contentVariantColor = rememberColorProducer(miniVariantColor),
@@ -293,7 +310,26 @@ fun BoxScope.Main() {
                 modifier = Modifier.fillMaxWidth()
             )
         }
+
+        // 播放页盖在最上层：导航、迷你条、底栏全在它下面。它整套位置自己算，
+        // 和上面 chrome 的退场共用一个进度值，所以两边永远同步。
+        PlayerLayer(
+            controller = playerUi,
+            connection = playbackConnection,
+        )
     }
+}
+
+/**
+ * 常驻 chrome 在播放页展开时的退场：整块往下沉，同时淡出。
+ *
+ * 进度是每帧都在变的动画态，所以位移和透明**只在 graphicsLayer 的 block 里读**。
+ * 放进组合期读的话，Main 会跟着手指（和弹簧）每帧重组一次，连带它底下所有页面。
+ */
+private fun Modifier.chromeExit(progress: () -> Float): Modifier = graphicsLayer {
+    val value = progress()
+    translationY = value * size.height
+    alpha = 1f - value
 }
 
 /** 导航根页：底部标签页 + 顶栏。MiniPlayer 和底栏不在这儿——它们常驻在导航之外。 */
@@ -304,6 +340,8 @@ private fun BoxScope.MainTabs(
     onSelect: (Int) -> Unit,
     onOpenCollection: (CollectionKind, Long, String, String) -> Unit,
 ) {
+    val context = LocalContext.current
+
     CrossfadeNavContainer(
         destination = MainDestinations.entries[selectedIndex],
         destinations = MainDestinations.entries
@@ -366,7 +404,11 @@ private fun BoxScope.MainTabs(
                         .clip(CircleShape)
                         .size(48.dp)
                         .background(MaterialTheme.colors.secondaryContainer)
-                        .clickable {},
+                        .clickable {
+                            context.startActivity(
+                                Intent(context, AppleMusicLoginActivity::class.java)
+                            )
+                        },
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(

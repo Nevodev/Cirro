@@ -63,7 +63,7 @@ android {
                 signingConfig = signingConfigs.getByName("nev")
             }
             optimization {
-                enable = false
+                enable = true
             }
         }
     }
@@ -90,6 +90,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.graphics.shapes)
     implementation(libs.kyant.shapes)
     implementation(libs.kyant.backdrop)

@@ -36,11 +36,11 @@ private const val BaseGain = 1f
 @UnstableApi
 class LoudnessAudioProcessor : BaseAudioProcessor() {
 
-    /** id → 线性增益。写入在加载线程，读在音频线程。 */
-    private val tracks = ConcurrentHashMap<Long, Float>()
+    /** `"<id>@<level>"` → 线性增益。写入在加载线程，读在音频线程。 */
+    private val tracks = ConcurrentHashMap<String, Float>()
 
     @Volatile
-    private var currentId: Long? = null
+    private var currentKey: String? = null
 
     @Volatile
     private var gain = BaseGain
@@ -48,19 +48,27 @@ class LoudnessAudioProcessor : BaseAudioProcessor() {
     /**
      * 换直链时顺手记下这首歌的响度，**不代表它正在播放**（可能是预读的下一首）。
      *
+     * 🔴 [level] 必须带上：`gain` 是**跟着档位变的**（实测 lossless 比 standard 低约
+     * 0.4 dB），只按 id 记会让切档后响度对不上。
+     *
      * [gainDb] / [peak] 可能为 null，表示网易云没给这首歌算过，那就只乘基线。
      */
-    fun rememberTrack(id: Long, gainDb: Double?, peak: Double?) {
+    fun rememberTrack(id: Long, level: String, gainDb: Double?, peak: Double?) {
+        val key = trackKey(id, level)
         val value = linearGain(gainDb, peak)
-        tracks[id] = value
+        tracks[key] = value
         // 预读那首正好就是当前这首（首次播放、重试、跳播都会这样）时，记下就该立刻生效。
-        if (currentId == id) gain = value
+        if (currentKey == key) gain = value
     }
 
-    /** 切换曲目。拿不到这首先前记下的数据就先按基线走，等 [rememberTrack] 补上。 */
-    fun selectTrack(id: Long?) {
-        currentId = id
-        gain = id?.let { tracks[it] } ?: BaseGain
+    /**
+     * 切换曲目。[level] 传**当前档位**：切档后同一首歌的增益和已记账的那份对不上，
+     * 查不到就先按基线走，等它下次换直链时 [rememberTrack] 补上。
+     */
+    fun selectTrack(id: Long?, level: String) {
+        val key = id?.let { trackKey(it, level) }
+        currentKey = key
+        gain = key?.let { tracks[it] } ?: BaseGain
     }
 
     // 父类的实现是"configure 是否已经配出输出格式"，不是空壳，所以必须转给它——
@@ -102,6 +110,9 @@ class LoudnessAudioProcessor : BaseAudioProcessor() {
     }
 
     private companion object {
+        // 档位也要进 key：同一首歌在不同档位下 gain 不同（见 rememberTrack 注释）。
+        fun trackKey(id: Long, level: String): String = "$id@$level"
+
         fun linearGain(gainDb: Double?, peak: Double?): Float {
             var value = BaseGain * if (gainDb == null) 1.0 else 10.0.pow(gainDb / 20.0)
             if (peak != null && peak > 0.0) {
