@@ -23,6 +23,7 @@ import androidx.media3.exoplayer.audio.DefaultAudioSink
 class AudioRenderersFactory(
     context: Context,
     private val loudness: LoudnessAudioProcessor,
+    private val beatAnalyzer: PcmBeatAudioProcessor,
 ) : DefaultRenderersFactory(context) {
 
     protected override fun buildAudioSink(
@@ -30,7 +31,7 @@ class AudioRenderersFactory(
         enableFloatOutput: Boolean,
         enableAudioTrackPlaybackParams: Boolean,
     ): AudioSink = DefaultAudioSink.Builder(context)
-        .setAudioProcessors(arrayOf(loudness))
+        .setAudioProcessors(arrayOf(loudness, beatAnalyzer))
         .setEnableFloatOutput(enableFloatOutput)
         .setEnableAudioOutputPlaybackParameters(enableAudioTrackPlaybackParams)
         .build()

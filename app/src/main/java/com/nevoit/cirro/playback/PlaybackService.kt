@@ -72,10 +72,12 @@ class PlaybackService : MediaSessionService(), KoinComponent {
 
     /** 响度归一挂在音频输出链上，换歌时由数据源那层喂 gain（见 [mediaSourceFactory]）。 */
     private val loudness = LoudnessAudioProcessor()
+    private val audioAnalysis: AudioAnalysisStore by inject()
+    private val beatAnalyzer by lazy { PcmBeatAudioProcessor(audioAnalysis) }
 
     override fun onCreate() {
         super.onCreate()
-        val player = ExoPlayer.Builder(this, AudioRenderersFactory(this, loudness))
+        val player = ExoPlayer.Builder(this, AudioRenderersFactory(this, loudness, beatAnalyzer))
             .setMediaSourceFactory(mediaSourceFactory())
             .setAudioAttributes(
                 AudioAttributes.Builder()

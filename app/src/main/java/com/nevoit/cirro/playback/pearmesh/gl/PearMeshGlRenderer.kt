@@ -6,6 +6,8 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.opengl.GLES30
 import android.opengl.GLUtils
+import android.os.SystemClock
+import android.util.Log
 import androidx.core.graphics.createBitmap
 import com.nevoit.cirro.playback.pearmesh.AudioPowerFrame
 import com.nevoit.cirro.playback.pearmesh.MoruStyle
@@ -108,6 +110,7 @@ internal class PearMeshGlRenderer(
     private var resumeImageScales = lastImageScales.copyOf()
     private var resumeVisualStartNanos = 0L
     private var wasPlaybackPlaying = true
+    private var lastAudioRenderLogMs = 0L
 
 
     init {
@@ -118,9 +121,11 @@ internal class PearMeshGlRenderer(
     }
 
     private var currentScrimAlpha = PearMeshState.DefaultScrimAlpha
+    private var currentBackdropWashColor = floatArrayOf(0f, 0f, 0f)
 
     fun render(width: Int, height: Int, state: RendererState, time: Double) {
         currentScrimAlpha = state.scrimAlpha
+        currentBackdropWashColor = state.backdropWashColor
         ensureSize(width, height, state)
         // Artwork transitions must finish even when playback flow is intentionally frozen.
         val artworkTime = System.nanoTime() / 1_000_000_000.0
@@ -376,6 +381,8 @@ internal class PearMeshGlRenderer(
             currentScrimAlpha * 0.5f
         }
         program.float("uBlackScrimAlpha", scrimAlpha)
+        val wash = currentBackdropWashColor
+        program.vec3("uBackdropWashColor", wash[0], wash[1], wash[2])
         program.float("uLyricsModeMix", modeMix)
         program.float("uDitherStrength", 1f)
         program.int("uMaterialMode", mode)
@@ -582,6 +589,16 @@ internal class PearMeshGlRenderer(
             interpolatedAudioPower(audioFrame, nowNanos)
         } else {
             FloatArray(3)
+        }
+        val logNow = SystemClock.uptimeMillis()
+        if (logNow - lastAudioRenderLogMs >= 1000L) {
+            lastAudioRenderLogMs = logNow
+            Log.d(
+                "PearMeshAudio",
+                "renderer audioEnabled=${state.audioVisualizationEnabled} audioCurrent=$audioCurrent " +
+                    "updatedAt=${audioFrame.currentUpdatedAtNanos} lane=${lanePower.joinToString { "%.3f".format(it) }} " +
+                    "wash=${currentBackdropWashColor.joinToString { "%.3f".format(it) }}",
+            )
         }
         return FloatArray(3) { index ->
             1f + IMAGE_PULSE_INTENSITY * lanePower[index] * lanePower[index]

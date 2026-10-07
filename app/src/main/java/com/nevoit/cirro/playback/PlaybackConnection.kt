@@ -2,6 +2,8 @@ package com.nevoit.cirro.playback
 
 import android.content.ComponentName
 import android.content.Context
+import android.os.SystemClock
+import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -50,6 +52,7 @@ data class PlaybackState(
     val song: NowPlaying? = null,
     val isPlaying: Boolean = false,
     val isBuffering: Boolean = false,
+    val audioSessionId: Int = C.AUDIO_SESSION_ID_UNSET,
     val positionMs: Long = 0,
     val durationMs: Long = 0,
     val error: String? = null,
@@ -86,6 +89,7 @@ class PlaybackConnection(
     val queue: StateFlow<PlaybackQueue> get() = queueStore.queue
 
     private var controller: MediaController? = null
+    private var lastSessionLogMs = 0L
 
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
@@ -326,10 +330,16 @@ class PlaybackConnection(
         // 播放器自己报的时长 READY 前是 TIME_UNSET，兜底读元数据里那份（来自 song_detail）
         val duration = player.duration.takeIf { it != C.TIME_UNSET }
             ?: player.currentMediaItem?.mediaMetadata?.durationMs?.takeIf { it != C.TIME_UNSET }
+        val now = SystemClock.uptimeMillis()
+        if (now - lastSessionLogMs >= 1000L) {
+            lastSessionLogMs = now
+            Log.d("CirroPlayback", "publish playing=${player.isPlaying} playbackState=${player.playbackState} audioSessionId=${player.audioSessionId} mediaId=${player.currentMediaItem?.mediaId}")
+        }
         _state.value = PlaybackState(
             song = player.currentMediaItem?.toNowPlaying(),
             isPlaying = player.isPlaying,
             isBuffering = player.playbackState == Player.STATE_BUFFERING,
+            audioSessionId = player.audioSessionId,
             positionMs = player.currentPosition.coerceAtLeast(0),
             durationMs = (duration ?: 0L).coerceAtLeast(0),
             // 播起来了就把上一次的错误清掉，否则它会一直挂在界面上

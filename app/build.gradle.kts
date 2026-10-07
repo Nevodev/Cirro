@@ -1,3 +1,6 @@
+import java.util.Properties
+import org.gradle.api.tasks.Exec
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -26,8 +29,11 @@ check(!hasSigningProperties || isSigningConfigured) {
     "Cirro signing requires all MOMENTO_SIGNING_* properties to be configured"
 }
 
+val classicNdkVersion = "28.2.13676358"
+
 android {
     namespace = "com.nevoit.cirro"
+    ndkVersion = classicNdkVersion
     compileSdk {
         version = release(37)
     }
@@ -116,3 +122,34 @@ dependencies {
 configurations.configureEach {
     exclude(group = "androidx.compose.material3")
 }
+
+val localSdkDirectory = rootProject.file("local.properties")
+    .takeIf { it.exists() }
+    ?.let { propertiesFile ->
+        Properties().apply { propertiesFile.inputStream().use(::load) }
+            .getProperty("sdk.dir")
+    }
+val sdkDirectory = file(
+    (localSdkDirectory
+        ?: System.getenv("ANDROID_HOME")
+        ?: System.getenv("ANDROID_SDK_ROOT")
+        ?: error("Android SDK not found: set sdk.dir in local.properties or ANDROID_HOME"))
+        .replace("\\:", ":")
+)
+val nativeOutputDirectory = layout.buildDirectory.dir("generated/rust-jniLibs")
+val buildClassicNative = tasks.register<Exec>("buildClassicNative") {
+    val ndkDirectory = sdkDirectory.resolve("ndk/$classicNdkVersion")
+    workingDir(rootProject.file("classic"))
+    inputs.file(rootProject.file("classic/Cargo.toml"))
+    inputs.file(rootProject.file("classic/Cargo.lock"))
+    inputs.dir(rootProject.file("classic/src"))
+    outputs.dir(nativeOutputDirectory)
+    environment("ANDROID_NDK_HOME", ndkDirectory.absolutePath)
+    commandLine(
+        "cargo", "ndk", "-t", "arm64-v8a", "-o",
+        nativeOutputDirectory.get().asFile.absolutePath,
+        "build", "--release",
+    )
+}
+android.sourceSets["main"].jniLibs.directories.add(nativeOutputDirectory.get().asFile.absolutePath)
+tasks.named("preBuild").configure { dependsOn(buildClassicNative) }

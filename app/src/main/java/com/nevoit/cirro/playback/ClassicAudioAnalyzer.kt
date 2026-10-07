@@ -1,0 +1,38 @@
+package com.nevoit.cirro.playback
+
+/** JNI wrapper for PearWall's classic analyzer, fed by the player PCM processor. */
+internal class ClassicAudioAnalyzer : AutoCloseable {
+    private var handle = nativeCreate()
+
+    @Synchronized
+    fun processWaveform(waveform: ByteArray, sampleRateHz: Float, timestampNanos: Long) {
+        if (handle != 0L) nativeProcessWaveform(handle, waveform, sampleRateHz, timestampNanos)
+    }
+
+    @Synchronized
+    fun processFft(fft: ByteArray, sampleRateHz: Float, timestampNanos: Long): Float =
+        if (handle == 0L) 0f else nativeProcessFft(handle, fft, sampleRateHz, timestampNanos)
+
+    @Synchronized
+    fun reset() {
+        if (handle != 0L) nativeReset(handle)
+    }
+
+    @Synchronized
+    override fun close() {
+        if (handle != 0L) {
+            nativeDestroy(handle)
+            handle = 0L
+        }
+    }
+
+    private external fun nativeCreate(): Long
+    private external fun nativeProcessWaveform(handle: Long, waveform: ByteArray, sampleRateHz: Float, timestampNanos: Long)
+    private external fun nativeProcessFft(handle: Long, fft: ByteArray, sampleRateHz: Float, timestampNanos: Long): Float
+    private external fun nativeReset(handle: Long)
+    private external fun nativeDestroy(handle: Long)
+
+    private companion object {
+        init { System.loadLibrary("classic") }
+    }
+}

@@ -1,6 +1,8 @@
 package com.nevoit.cirro.playback.pearmesh
 
 import android.graphics.Bitmap
+import android.os.SystemClock
+import android.util.Log
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -41,6 +43,9 @@ class PearMeshState(
     )
     private val demoPulse = AtomicReference(false)
     private val audioFrame = AtomicReference(AudioPowerFrame())
+    private val lastAudioLogMs = AtomicLong(0L)
+    private val audioUpdateCount = AtomicLong(0L)
+    private val lastAudioUpdateNanos = AtomicLong(0L)
     private val debugInfo = AtomicReference(RenderDebugInfo())
     private val portraitPreset = AtomicInteger(
         portraitPresetIndex.coerceIn(0, PortraitPresetCount - 1),
@@ -55,6 +60,7 @@ class PearMeshState(
         targetFrameRate.coerceIn(MinTargetFrameRate, MaxTargetFrameRate),
     )
     private val scrimAlphaTarget = AtomicReference(scrimAlpha.coerceIn(0f, 1f))
+    private val backdropWashColor = AtomicReference(floatArrayOf(0f, 0f, 0f))
     private val blurMultiplierTarget = AtomicReference(blurMultiplier.coerceAtLeast(0f))
     private val blurEnabledTarget = AtomicReference(blurEnabled)
     private val flowSpeedTarget = AtomicInteger(flowSpeed.coerceIn(StandardFlowSpeed, FastFlowSpeed))
@@ -127,6 +133,10 @@ class PearMeshState(
         scrimAlphaTarget.set(alpha.coerceIn(0f, 1f))
     }
 
+    fun setBackdropWashColor(red: Float, green: Float, blue: Float) {
+        backdropWashColor.set(floatArrayOf(red.coerceIn(0f, 1f), green.coerceIn(0f, 1f), blue.coerceIn(0f, 1f)))
+    }
+
     fun setBlurMultiplier(multiplier: Float) {
         blurMultiplierTarget.set(multiplier.coerceAtLeast(0f))
     }
@@ -192,14 +202,26 @@ class PearMeshState(
     fun setAudioPower(power: FloatArray) {
         require(power.size >= 4) { "Four audio power values are required" }
         val previous = audioFrame.get()
+        val current = FloatArray(4) { power[it].coerceIn(0f, 1f) }
+        val updatedAt = System.nanoTime()
         audioFrame.set(
             AudioPowerFrame(
                 previousPower = previous.currentPower,
-                currentPower = FloatArray(4) { power[it].coerceIn(0f, 1f) },
+                currentPower = current,
                 previousUpdatedAtNanos = previous.currentUpdatedAtNanos,
-                currentUpdatedAtNanos = System.nanoTime(),
+                currentUpdatedAtNanos = updatedAt,
             ),
         )
+        val updateCount = audioUpdateCount.incrementAndGet()
+        val previousUpdateNanos = lastAudioUpdateNanos.getAndSet(updatedAt)
+        val updateGapMs = if (previousUpdateNanos == 0L) 0L else
+            (updatedAt - previousUpdateNanos) / 1_000_000L
+        val now = SystemClock.uptimeMillis()
+        val last = lastAudioLogMs.get()
+        if (now - last >= 1000L && lastAudioLogMs.compareAndSet(last, now)) {
+            Log.d("PearMeshAudio", "state updates=$updateCount gapMs=$updateGapMs power=${current.joinToString(prefix = "[", postfix = "]") { "%.3f".format(it) }} visualization=${audioVisualization.get()}")
+            audioUpdateCount.set(0L)
+        }
     }
 
     fun snapshot(): RendererState = RendererState(
@@ -212,6 +234,7 @@ class PearMeshState(
         renderScale = renderScaleTarget.get(),
         targetFrameRate = targetFrameRateTarget.get(),
         scrimAlpha = scrimAlphaTarget.get(),
+        backdropWashColor = backdropWashColor.get(),
         blurMultiplier = blurMultiplierTarget.get(),
         blurEnabled = blurEnabledTarget.get(),
         flowSpeed = flowSpeedTarget.get(),
@@ -258,6 +281,7 @@ data class RendererState(
     val renderScale: Float,
     val targetFrameRate: Int,
     val scrimAlpha: Float,
+    val backdropWashColor: FloatArray,
     val blurMultiplier: Float,
     val blurEnabled: Boolean,
     val flowSpeed: Int,

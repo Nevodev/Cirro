@@ -8,6 +8,7 @@ uniform float uBlackScrimAlpha;
 uniform float uLyricsModeMix;
 uniform float uDitherStrength;
 uniform int uMaterialMode;
+uniform vec3 uBackdropWashColor;
 in vec2 vTexCoord;
 in vec2 vOrdinaryTexCoord;
 layout(location = 0) out vec4 outColor;
@@ -110,5 +111,8 @@ void main() {
         ditherStrength *= 1.0 - uLyricsModeMix;
     }
     color += dither * (ditherStrength / 255.0);
+    // OpenGL texture Y is opposite to Compose's top-to-bottom gradient direction.
+    float wash = smoothstep(0.2, 0.8, 1.0 - vTexCoord.y) * 0.8;
+    color = mix(color, uBackdropWashColor, wash);
     outColor = vec4(clamp(color, 0.07, 0.97), 1.0);
 }

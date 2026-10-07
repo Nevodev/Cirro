@@ -16,6 +16,7 @@ import com.nevoit.cirro.lyrics.data.AppleMusicTokenStore
 import com.nevoit.cirro.lyrics.data.LyricsRepository
 import com.nevoit.cirro.lyrics.data.LyricsStore
 import com.nevoit.cirro.palette.CoverPalette
+import com.nevoit.cirro.playback.AudioAnalysisStore
 import com.nevoit.cirro.playback.PlaybackConnection
 import com.nevoit.cirro.playback.PlayerUiController
 import kotlinx.coroutines.CoroutineScope
@@ -52,6 +53,7 @@ val appModule = module {
     single { AccountRepository(get(), get(ApplicationScope)) }
 
     single { PlaybackConnection(androidContext(), get(ApplicationScope), get()) }
+    single { AudioAnalysisStore() }
 
     // 播放页的展开进度。迷你条和播放页分属两层，要由同一个值驱动，所以由 App 持有。
     // 它的动画得跑在组合的帧时钟上，由界面侧启动（见 PlayerUiController.animate）

@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -84,7 +85,6 @@ import com.nevoit.material.core.component.VGap
 import com.nevoit.material.core.component.WavyLinearProgress
 import com.nevoit.material.core.modifier.drawBackground
 import com.nevoit.material.core.modifier.marquee
-import com.nevoit.material.core.modifier.smoothGradient
 import com.nevoit.material.core.utility.rememberColorProducer
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.local.ProvideContentColor
@@ -350,6 +350,7 @@ private fun PlayerOverlay(
     // 摘掉这一层），所以"再展开一次"必定是一次全新的组合、也就是一次新的抽取。
     // ⚠️ 别把随机挂到 `cover` 上：那是换歌，换歌时网格是跟着同一片背景连续地流的；换预设反而是
     // 硬切——渲染器换预设直接重建 mesh，没有过渡（见 PearMeshGlRenderer.ensureSize）。
+    val initialBackdropWash = tone(BgToneDark, BgToneLight) ?: MaterialTheme.colors.pageBackground
     val meshBackdrop = remember {
         val portrait = pickMeshPreset(PearMeshState.PortraitPresetCount, LastMeshPreset.portrait)
             .also { LastMeshPreset.portrait = it }
@@ -360,6 +361,11 @@ private fun PlayerOverlay(
             landscapePresetIndex = landscape,
         ).apply {
             setScrimAlpha(BackdropScrim)
+            setBackdropWashColor(
+                initialBackdropWash.red,
+                initialBackdropWash.green,
+                initialBackdropWash.blue
+            )
         }
     }
 
@@ -384,6 +390,29 @@ private fun PlayerOverlay(
 
     // 暂停时网格也停住——跟波浪落定是同一条规矩：动的东西只属于"正在播放"。
     LaunchedEffect(isPlaying) { meshBackdrop.setPlaybackPlaying(isPlaying) }
+
+    LaunchedEffect(backgroundColor, meshBackdrop) {
+        snapshotFlow { backgroundColor() }.collectLatest { color ->
+            meshBackdrop.setBackdropWashColor(color.red, color.green, color.blue)
+        }
+    }
+
+    val audioAnalysis = koinInject<AudioAnalysisStore>()
+    DisposableEffect(audioAnalysis, isPlaying) {
+        if (!isPlaying) {
+            audioAnalysis.setListener(null)
+            meshBackdrop.setAudioVisualizationEnabled(false)
+        } else {
+            audioAnalysis.setListener { power ->
+                meshBackdrop.setAudioVisualizationEnabled(true)
+                meshBackdrop.setAudioPower(floatArrayOf(power, power, power, power))
+            }
+        }
+        onDispose {
+            audioAnalysis.setListener(null)
+            meshBackdrop.setAudioVisualizationEnabled(false)
+        }
+    }
 
     val heightPx = LocalWindowInfo.current.containerSize.height.toFloat().coerceAtLeast(1f)
     val dragState = rememberDraggableState { delta ->
@@ -414,18 +443,6 @@ private fun PlayerOverlay(
             state = meshBackdrop,
             modifier = Modifier.fillMaxSize(),
         )
-        // 主题色压层：把封面派生的网格压回这个种子该有的色调。顶部半强度（返回键那一带还看得见
-        // 网格，但已经压得住），底部满强度——标题、进度、控制条全落在纯色上，对比度才稳。
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .smoothGradient(
-                    color = backgroundColor,
-                    start = BackdropWashStart,
-                    end = 1f,
-                    intensity = 1f,
-                )
-        )
         val onTogglePlay = remember(connection) { { connection.togglePlayPause() } }
         val onPrevious = remember(connection) { { connection.skipToPrevious() } }
         val onNext = remember(connection) { { connection.skipToNext() } }
@@ -449,7 +466,10 @@ private fun PlayerOverlay(
                     .navigationBarsPadding(),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                PlayerStage(modifier = Modifier.padding(24.dp), cover = cover)
+                PlayerStage(
+                    modifier = Modifier
+                        .padding(24.dp), cover = cover
+                )
 
                 Row(
                     modifier = Modifier
