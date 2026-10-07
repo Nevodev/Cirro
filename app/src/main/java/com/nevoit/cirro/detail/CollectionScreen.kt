@@ -3,14 +3,10 @@ package com.nevoit.cirro.detail
 import android.content.Intent
 import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.EaseInOut
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -69,6 +65,7 @@ import com.nevoit.cirro.palette.CoverSeed
 import com.nevoit.cirro.playback.PlaybackConnection
 import com.nevoit.cirro.ui.BottomShade
 import com.nevoit.cirro.ui.ReflectionTransformation
+import com.nevoit.material.core.animation.rememberPressAnimatable
 import com.nevoit.material.core.component.CircleIconButton
 import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
@@ -82,8 +79,6 @@ import com.nevoit.material.core.utility.NavigationBarSpacer
 import com.nevoit.material.theme.MaterialShapes
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.tokens.Springs
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import org.koin.core.parameter.parametersOf
@@ -555,54 +550,15 @@ private fun HeaderActions(
     onToggleSubscribed: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val playInteractionSource = remember { MutableInteractionSource() }
     val hapticController = LocalHapticFeedback.current
 
-    val cornerRadius = remember { Animatable(28f) }
-
-    LaunchedEffect(playInteractionSource) {
-        var pressAnimationJob: Job? = null
-        var releaseAnimationJob: Job? = null
-
-        playInteractionSource.interactions.collect { interaction ->
-            when (interaction) {
-                is PressInteraction.Press -> {
-                    releaseAnimationJob?.cancel()
-                    pressAnimationJob?.cancel()
-                    pressAnimationJob = this@LaunchedEffect.launch {
-                        cornerRadius.animateTo(
-                            targetValue = 12f,
-                            animationSpec = tween(100, 0, EaseInOut)
-                        )
-                    }
-                }
-
-                is PressInteraction.Release -> {
-                    val pendingPressAnimation = pressAnimationJob
-                    releaseAnimationJob?.cancel()
-                    releaseAnimationJob = this@LaunchedEffect.launch {
-                        pendingPressAnimation?.join()
-                        hapticController.performHapticFeedback(HapticFeedbackType.ContextClick)
-                        cornerRadius.animateTo(
-                            targetValue = 28f,
-                            animationSpec = Springs.smooth(200)
-                        )
-                    }
-                }
-
-                is PressInteraction.Cancel -> {
-                    releaseAnimationJob?.cancel()
-                    pressAnimationJob?.cancel()
-                    releaseAnimationJob = this@LaunchedEffect.launch {
-                        cornerRadius.animateTo(
-                            targetValue = 28f,
-                            animationSpec = Springs.smooth(200)
-                        )
-                    }
-                }
-            }
-        }
-    }
+    val press = rememberPressAnimatable(
+        atRest = 28f,
+        whenPressed = 12f,
+        onPressSpec = Springs.smooth(150),
+        onReleaseSpec = Springs.smooth(200, 0.3),
+        onReleased = { hapticController.performHapticFeedback(HapticFeedbackType.ContextClick) },
+    )
 
     Row(
         modifier = modifier,
@@ -621,12 +577,12 @@ private fun HeaderActions(
         Box(
             modifier = Modifier
                 .height(56.dp)
-                .width(128.dp + (28.dp - cornerRadius.value.dp) / 2)
-                .clip(RoundedRectangle(cornerRadius.value.dp))
+                .width(128.dp + (28.dp - press.progress.value.dp) / 2)
+                .clip(RoundedRectangle(press.progress.value.dp))
                 .background(Color.White)
                 .clickable(
                     onClick = onPlay,
-                    interactionSource = playInteractionSource
+                    interactionSource = press.interactionSource
                 ),
             contentAlignment = Alignment.Center,
         ) {

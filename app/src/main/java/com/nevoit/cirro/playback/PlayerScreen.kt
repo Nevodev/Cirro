@@ -4,7 +4,6 @@ import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
@@ -16,8 +15,6 @@ import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -30,9 +27,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.runtime.Composable
@@ -41,7 +40,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -77,6 +75,7 @@ import com.nevoit.cirro.data.model.PlayMode
 import com.nevoit.cirro.palette.CoverPalette
 import com.nevoit.cirro.playback.pearmesh.PearMeshState
 import com.nevoit.cirro.playback.pearmesh.PearMeshSurface
+import com.nevoit.material.core.animation.rememberPressAnimatable
 import com.nevoit.material.core.component.CircleIconButton
 import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
@@ -90,12 +89,10 @@ import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.local.ProvideContentColor
 import com.nevoit.material.theme.tokens.Springs
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.compose.koinInject
 import java.util.Locale
@@ -118,6 +115,22 @@ private val ContentPadding = 24.dp
 
 /** 名字右边那两颗圆钮（收藏/更多）的尺寸。比顶排的浮钮小一号，跟文字排同高。 */
 private val MetaButtonSize = 40.dp
+
+/**
+ * 底部功能栏那三颗图标（视觉 28dp）的**点击**边长。
+ *
+ * ⚠️ 不能用"最小触摸目标"那套（`ViewConfiguration.minimumTouchTargetSize` / 老的
+ * `ProvideMinimumTouchTargetSize`）：那个机制只产出一个**附近命中**（命中点在节点外、但在最小目标内），
+ * 而 Compose 的命中测试在同一个父节点下有兄弟拿到**正命中**时，会把已有的附近命中**删掉**
+ * （`HitTestResult.hitInMinimumTouchTarget` 里的 `removeNodesInRange`）。播放页是盖在首页之上的，
+ * 图标正下方就是首页那个铺满全屏的 LazyColumn —— 它永远拿得到正命中。于是附近命中被清掉，
+ * 可点范围退回图标本身的 28dp。**这就是抬 minimumTouchTargetSize 看不出任何变化的原因。**
+ *
+ * 所以这里给点击节点一个**真实的** [PanelTouchTargetSize] 框（见 [PlayerPanelIcon]）：真框算正命中，
+ * 才活得过上面那条删除。框是居中溢出摆放的，整排的布局尺寸仍是 28dp —— 行高、间距、封面都不动。
+ * 三个槽位各占 1/3 屏宽、彼此隔着一百多 dp，这个框再大也压不到隔壁那颗。
+ */
+private val PanelTouchTargetSize = 56.dp
 
 /** 网格之上的黑蒙层。封面放大后是亮色块，网格得先压暗一层，主题色再压上去才收得住。 */
 private const val BackdropScrim = 0.5f
@@ -420,7 +433,10 @@ private fun PlayerOverlay(
         controller.onDrag(-delta / heightPx)
     }
 
-    var selectedFunction by remember { mutableIntStateOf(0) }
+    // 底部功能栏的选中态，三态：选中歌词 / 选中待播列表 / 都不选。
+    // `null` 就是"都不选"，它是一个正常状态（两块面板都收起），不是"还没初始化"——
+    // 所以不能拿一个"总有一边选中"的枚举初值来起头。
+    var panel by remember { mutableStateOf<PlayerPanel?>(null) }
 
     Box(
         modifier = modifier
@@ -448,12 +464,20 @@ private fun PlayerOverlay(
         val onNext = remember(connection) { { connection.skipToNext() } }
         val onSeek = remember(connection) { { ms: Long -> connection.seekTo(ms) } }
         val onCycleMode = remember(connection, mode) { { connection.setPlayMode(mode.next()) } }
-        // 顶排的歌词/投屏、以及名字右边那两颗（收藏、更多）都还没接线——更多是队列入口的占位。
-        // 用 remember 固定空回调：按下有正常的反馈，但先什么都不做；接线时只换这几个 lambda。
+        // 底部那排（歌词/待播列表）、名字右边那两颗（收藏、更多）都还没接线——待播列表是队列
+        // 面板的入口、投屏还没做。用 remember 固定空回调：按下有正常的反馈，但先什么都不做；
+        // 接线时只换这几个 lambda。
         val onLyrics = remember { {} }
+        val onQueue = remember { {} }
         val onAirplay = remember { {} }
         val onCollect = remember { {} }
         val onMore = remember { {} }
+
+        // 面板切换的规则只有一条：**选中的再点一次就取消选中**（回到"都不选"），没选中的点了就
+        // 选中它（另一个自然让位，因为状态只有一个）。写成一份，别在两个 onClick 里各抄一遍。
+        val togglePanel = remember {
+            { target: PlayerPanel -> panel = if (panel == target) null else target }
+        }
 
         // 这里是**目标值**（不带动画）而不是补齐后的颜色：LocalContentColor 只有按下时的
         // 蒙层在用（DimIndication 在绘制段读它），蒙层是 12% 的瞬态，不需要跟着 500ms 过渡。
@@ -531,30 +555,15 @@ private fun PlayerOverlay(
                         .selectableGroup(),
                     horizontalArrangement = Arrangement.SpaceAround
                 ) {
-                    Icon(
-                        painter = painterResource(R.drawable.lyrics),
-                        contentDescription = "歌词",
+                    PlayerPanelIcon(
+                        iconRes = R.drawable.lyrics,
+                        label = "歌词",
+                        selected = panel == PlayerPanel.LYRICS,
                         tint = contentVariantColor,
-                        modifier = Modifier
-                            .drawBehind {
-                                if (selectedFunction == 0) {
-                                    drawCircle(
-                                        color = Color.White.copy(0.1f),
-                                        radius = 20.dp.toPx(),
-                                        blendMode = BlendMode.Plus
-                                    )
-                                }
-                            }
-                            .size(28.dp)
-                            .selectable(
-                                selected = selectedFunction == 0,
-                                onClick = {
-                                    selectedFunction = 0
-                                    onLyrics()
-                                },
-                                interactionSource = null,
-                                indication = null
-                            )
+                        onClick = {
+                            togglePanel(PlayerPanel.LYRICS)
+                            onLyrics()
+                        },
                     )
                     Icon(
                         painter = painterResource(R.drawable.airplay),
@@ -562,35 +571,81 @@ private fun PlayerOverlay(
                         tint = contentVariantColor,
                         modifier = Modifier.size(28.dp)
                     )
-                    Icon(
-                        painter = painterResource(R.drawable.list_play),
-                        contentDescription = "待播列表",
+                    PlayerPanelIcon(
+                        iconRes = R.drawable.list_play,
+                        label = "待播列表",
+                        selected = panel == PlayerPanel.QUEUE,
                         tint = contentVariantColor,
-                        modifier = Modifier
-                            .drawBehind {
-                                if (selectedFunction == 1) {
-                                    drawCircle(
-                                        color = Color.White.copy(0.1f),
-                                        radius = 20.dp.toPx(),
-                                        blendMode = BlendMode.Plus
-                                    )
-                                }
-                            }
-                            .size(28.dp)
-                            .selectable(
-                                selected = selectedFunction == 1,
-                                onClick = {
-                                    selectedFunction = 1
-                                    onLyrics()
-                                },
-                                interactionSource = null,
-                                indication = null
-                            )
+                        onClick = {
+                            togglePanel(PlayerPanel.QUEUE)
+                            onQueue()
+                        },
                     )
                 }
                 VGap(24.dp)
             }
         }
+    }
+}
+
+/**
+ * 播放页底部功能栏里**可以选中**的那两块面板：歌词、待播列表。
+ *
+ * 三态由调用方持有：选中 [LYRICS]、选中 [QUEUE]、或 `null`（都不选）。
+ */
+private enum class PlayerPanel { LYRICS, QUEUE }
+
+/**
+ * 底部功能栏里的一颗可选中图标。
+ *
+ * 选中态是在图标底下垫一圈白，`BlendMode.Plus` 只把那一块**提亮一档**、不盖住底下的网格背景，
+ * 所以深色页/浅色页能共用同一个值（跟原来的写法一致，这里只是把两份重复的绘制收成一处）。
+ *
+ * 结构分两层，各管一件事：外层 [Box] 只管**命中**（28dp 的布局框里塞一个 56dp 的真框，
+ * 为什么必须是真的 56dp 见 [PanelTouchTargetSize]），里层 `Icon` 只管**视觉**（28dp + 那圈高亮）。
+ * 两层中心重合，所以看上去跟以前一个像素都不差。
+ *
+ * 圈凭 `drawBehind` 排在 `.size` 之前画出来：绘制块量到的是排完尺寸之后的 28dp 方框，
+ * 圆心落在方框中心、半径 20dp，正好探出去一圈。`selected` 是组合期传进来的普通布尔
+ * （不是动画值），所以在绘制段读它没有任何问题。
+ */
+@Composable
+private fun PlayerPanelIcon(
+    iconRes: Int,
+    label: String,
+    selected: Boolean,
+    tint: ColorProducer,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size(28.dp)
+            .wrapContentSize(Alignment.Center, unbounded = true)
+            .requiredSize(PanelTouchTargetSize)
+            .selectable(
+                selected = selected,
+                onClick = onClick,
+                interactionSource = null,
+                indication = null
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            painter = painterResource(iconRes),
+            contentDescription = label,
+            tint = tint,
+            modifier = Modifier
+                .drawBehind {
+                    if (selected) {
+                        drawCircle(
+                            color = Color.White.copy(0.1f),
+                            radius = 20.dp.toPx(),
+                            blendMode = BlendMode.Plus
+                        )
+                    }
+                }
+                .size(28.dp),
+        )
     }
 }
 
@@ -813,6 +868,9 @@ private fun PlayerProgress(
  *
  * 四种颜色都收 producer：条子是换歌时跟着主题色一起过渡的，收值的话这 500ms 里整条控制条
  * 每帧重组，还会顺着参数把上面那层也带上。
+ *
+ * 播放键按压时会横向撑开 16dp（[rememberPressAnimatable]），左右两颗跟着外移——**这一处的宽度
+ * 就让它读在组合期**：撑开本来就要重新测量，延迟读只省下重组那一份，为一次 150ms 的按压不值当。
  */
 @Composable
 private fun PlayerControls(
@@ -828,52 +886,13 @@ private fun PlayerControls(
     playButtonIconColor: ColorProducer,
     modifier: Modifier = Modifier,
 ) {
-    val playInteractionSource = remember { MutableInteractionSource() }
+    val press = rememberPressAnimatable(
+        atRest = 0f,
+        whenPressed = 1f,
+        onPressSpec = Springs.smooth(150),
+        onReleaseSpec = Springs.smooth(200, 0.3),
+    )
 
-    val pressProgress = remember { Animatable(0f) }
-
-    LaunchedEffect(playInteractionSource) {
-        var pressAnimationJob: Job? = null
-        var releaseAnimationJob: Job? = null
-
-        playInteractionSource.interactions.collect { interaction ->
-            when (interaction) {
-                is PressInteraction.Press -> {
-                    releaseAnimationJob?.cancel()
-                    pressAnimationJob?.cancel()
-                    pressAnimationJob = this@LaunchedEffect.launch {
-                        pressProgress.animateTo(
-                            targetValue = 1f,
-                            animationSpec = Springs.smooth(150)
-                        )
-                    }
-                }
-
-                is PressInteraction.Release -> {
-                    val pendingPressAnimation = pressAnimationJob
-                    releaseAnimationJob?.cancel()
-                    releaseAnimationJob = this@LaunchedEffect.launch {
-                        pendingPressAnimation?.join()
-                        pressProgress.animateTo(
-                            targetValue = 0f,
-                            animationSpec = Springs.smooth(200, 0.3)
-                        )
-                    }
-                }
-
-                is PressInteraction.Cancel -> {
-                    releaseAnimationJob?.cancel()
-                    pressAnimationJob?.cancel()
-                    releaseAnimationJob = this@LaunchedEffect.launch {
-                        pressProgress.animateTo(
-                            targetValue = 0f,
-                            animationSpec = Springs.smooth(200, 0.3)
-                        )
-                    }
-                }
-            }
-        }
-    }
     Row(
         modifier = modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -898,11 +917,11 @@ private fun PlayerControls(
         HGap(8.dp)
         Box(
             modifier = Modifier
-                .width(128.dp + 16.dp * pressProgress.value)
+                .width(128.dp + 16.dp * press.progress.value)
                 .height(80.dp)
                 .clip(RoundedRectangle(20.dp))
                 .drawBackground(playButtonColor)
-                .clickable(onClick = onTogglePlay, interactionSource = playInteractionSource),
+                .clickable(onClick = onTogglePlay, interactionSource = press.interactionSource),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
