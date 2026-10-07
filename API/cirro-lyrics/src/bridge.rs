@@ -70,13 +70,9 @@ pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeSetA
     mut env: JNIEnv<'local>,
     _this: JObject<'local>,
     media_user_token: JString<'local>,
-    storefront: JString<'local>,
-    language: JString<'local>,
 ) -> jint {
     let token = jni_in(&mut env, &media_user_token);
-    let storefront = jni_in(&mut env, &storefront);
-    let language = jni_in(&mut env, &language);
-    api::set_apple_token(token, storefront, language)
+    api::set_apple_token(token)
 }
 
 /// 是否已配置 Apple 凭据。
@@ -124,6 +120,20 @@ pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeAppl
 ) -> jstring {
     let am_id = jni_in(&mut env, &am_id);
     let value = engine::RUNTIME.block_on(api::apple_ttml(am_id));
+    jni_out(&mut env, value)
+}
+
+/// Apple Music 搜索（不依赖 AMLL 的 Apple id 入口）。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeAppleSearch<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    term: JString<'local>,
+    limit: JString<'local>,
+) -> jstring {
+    let term = jni_in(&mut env, &term);
+    let limit = jni_in(&mut env, &limit);
+    let value = engine::RUNTIME.block_on(api::apple_search(term, limit));
     jni_out(&mut env, value)
 }
 

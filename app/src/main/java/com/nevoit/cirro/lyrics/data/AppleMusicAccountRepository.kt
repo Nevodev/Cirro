@@ -46,6 +46,8 @@ class AppleMusicAccountRepository(
     fun restore() {
         scope.launch {
             val token = withContext(Dispatchers.IO) { store.readToken() }
+            // 这条链断了界面完全看不出来（取词会安静地回落到 AMLL），只有日志能证明。
+            Log.d(Tag, "冷启动恢复 Apple 凭据：${if (token == null) "磁盘上没有 / 解不开" else "${token.length} 字符"}")
             pushToken(token)
             _session.value = if (token == null) AppleMusicSession.SignedOut else AppleMusicSession.SignedIn
         }
@@ -79,12 +81,15 @@ class AppleMusicAccountRepository(
     /**
      * 把令牌下发给原生层。`null`/空串等于**关闭 Apple 这一级**（原生层会把 token 置空）。
      *
-     * storefront / language 一律留空交给原生层自动探测：`/v1/me/storefront` 能拿到账号区域，
-     * 而 `l=` 语种有自己的默认值（见 `apple.rs` 的 `DEFAULT_LYRIC_LANGUAGE`）。
+     * 就这一个参数 —— storefront / language 由原生层问 `/v1/me/storefront` 自己拿。
+     *
+     * 🔴 一定要留日志：`.so` 与 Kotlin 侧签名对不上时这里会抛 `UnsatisfiedLinkError`，
+     * 而它的后果只是「取词回落到 AMLL」，看起来一切都正常。
      */
     private fun pushToken(token: String?) {
-        runCatching { LyricsBridge.setAppleToken(token.orEmpty(), "", "") }
-            .onFailure { Log.w(Tag, "Apple 凭据下发失败：${it.message}") }
+        runCatching { LyricsBridge.setAppleToken(token.orEmpty()) }
+            .onSuccess { Log.d(Tag, "Apple 凭据已下发（${token?.length ?: 0} 字符，原生层接受=$it）") }
+            .onFailure { Log.w(Tag, "Apple 凭据下发失败：${it.javaClass.simpleName}: ${it.message}") }
     }
 
     private companion object {

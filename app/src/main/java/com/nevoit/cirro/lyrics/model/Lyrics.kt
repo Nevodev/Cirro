@@ -95,6 +95,10 @@ data class LyricBackground(
  *
  * [text] 是权威的显示文本：无逐字时就是原文，有逐字时应等于 [syllables] 拼接的结果
  * （解析器保证一致，这里不做校验）。
+ *
+ * 🔴 [text] **两端不含空白**，由解析器负责裁掉 —— 渲染层按自然宽摆放（左贴 / 右贴），
+ * 首尾留一个空格就是一行凭空缩进一格的观感差别。顺带 [LyricTranslatedText] 与
+ * [LyricBackground] 也遵守这条。
  */
 @Serializable
 data class LyricLine(

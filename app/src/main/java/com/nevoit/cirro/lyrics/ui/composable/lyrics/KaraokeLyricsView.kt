@@ -1,0 +1,323 @@
+package com.nevoit.cirro.lyrics.ui.composable.lyrics
+
+import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextMotion
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.nevoit.cirro.lyrics.core.model.ISyncedLine
+import com.nevoit.cirro.lyrics.core.model.SyncedLyrics
+import com.nevoit.cirro.lyrics.core.model.karaoke.KaraokeAlignment
+import com.nevoit.cirro.lyrics.core.model.karaoke.KaraokeLine
+import com.nevoit.cirro.lyrics.core.model.synced.SyncedLine
+import com.nevoit.cirro.lyrics.ui.composable.list.LyricsLazyListState
+import com.nevoit.cirro.lyrics.ui.composable.list.LyricsListItem
+import com.nevoit.cirro.lyrics.ui.composable.list.LyricsScrollChain
+import com.nevoit.cirro.lyrics.ui.internal.effects.lyricsEdgeFade
+import com.nevoit.cirro.lyrics.ui.internal.layout.LineVerticalPaddingDp
+import com.nevoit.cirro.lyrics.ui.internal.layout.LyricsLazyColumn
+import com.nevoit.cirro.lyrics.ui.internal.layout.lyricsAutoScroll
+import com.nevoit.cirro.lyrics.ui.internal.layout.settledHeight
+import com.nevoit.cirro.lyrics.ui.internal.rendering.LyricsTexturePrefetch
+import com.nevoit.cirro.lyrics.ui.internal.rendering.PreparedLineText
+import com.nevoit.cirro.lyrics.ui.internal.scene.LyricsLayoutRequest
+import com.nevoit.cirro.lyrics.ui.internal.scene.rememberLyricsScene
+import com.nevoit.cirro.lyrics.ui.internal.text.isRtl
+import com.nevoit.cirro.lyrics.ui.profile.DefaultLyricsProfiles
+import com.nevoit.cirro.lyrics.ui.profile.LyricsProfile
+import com.nevoit.material.theme.local.LocalTextStyle
+import com.nevoit.material.theme.tokens.Springs
+
+@Composable
+fun KaraokeLyricsView(
+    listState: LyricsLazyListState,
+    lyrics: SyncedLyrics,
+    currentPosition: () -> Int,
+    onLineClicked: (ISyncedLine) -> Unit,
+    onLinePressed: (ISyncedLine) -> Unit,
+    modifier: Modifier = Modifier,
+    normalLineTextStyle: TextStyle =
+        LocalTextStyle.current.copy(
+            fontSize = 28.sp,
+            lineHeight = 38.sp,
+            fontWeight = FontWeight.W800,
+            textMotion = TextMotion.Animated,
+        ),
+    accompanimentLineTextStyle: TextStyle =
+        LocalTextStyle.current.copy(
+            fontSize = 18.sp,
+            lineHeight = TextUnit.Unspecified,
+            fontWeight = FontWeight.W800,
+            textMotion = TextMotion.Animated,
+        ),
+    textColor: Color = Color.White,
+    breathingDotsDefaults: KaraokeBreathingDotsDefaults = KaraokeBreathingDotsDefaults(),
+    phoneticTextStyle: TextStyle =
+        normalLineTextStyle.copy(
+            fontSize = 15.sp,
+            lineHeight = TextUnit.Unspecified,
+            fontWeight = FontWeight.Normal,
+        ),
+    blendMode: BlendMode = BlendMode.Plus,
+    useBlurEffect: Boolean = true,
+    showTranslation: Boolean = true,
+    showPhonetic: Boolean = true,
+    anchor: LyricsAnchor = LyricsAnchor.Fixed(40.dp),
+    topFade: LyricsFade = LyricsFade.ToAnchor(16.dp),
+    bottomFade: LyricsFade = LyricsFade.Fraction(0.5f),
+    keepAliveZone: Dp = 100.dp,
+    blurDelta: Float = 3f,
+    showDebugRectangles: Boolean = false,
+    renderProfiles: List<LyricsProfile> = DefaultLyricsProfiles,
+    itemSpacing: Dp = 0.dp,
+    scrollAnimationSpec: AnimationSpec<Float> = Springs.smooth(500),
+    autoScrollResumeDelayMillis: Long = 2500,
+    scrollChain: LyricsScrollChain? = LyricsScrollChain(),
+) {
+    val currentProvider by rememberUpdatedState(currentPosition)
+    val timeProvider = remember { { currentProvider() } }
+    val measurer = rememberTextMeasurer(cacheSize = 0)
+    val density = LocalDensity.current
+    val direction = LocalLayoutDirection.current
+    val profiles =
+        remember(renderProfiles) {
+            renderProfiles + DefaultLyricsProfiles.filter { it !in renderProfiles }
+        }
+    BoxWithConstraints(modifier.clipToBounds()) {
+        val anchorOffset = when (anchor) {
+            is LyricsAnchor.Fixed -> anchor.offset.coerceAtMost(maxHeight)
+            is LyricsAnchor.Fraction -> maxHeight * anchor.fraction
+        }
+        val width = with(density) { (maxWidth - 32.dp).toPx() }.coerceAtLeast(1f)
+        val scene = rememberLyricsScene(
+            LyricsLayoutRequest(
+                lyrics, profiles, measurer, normalLineTextStyle, accompanimentLineTextStyle,
+                phoneticTextStyle, width, density, direction,
+            ),
+            textColor,
+            timeProvider
+        ) ?: return@BoxWithConstraints
+        val timeline = scene.timeline
+        // A single main-vocal row, excluding phonetics, translation and nested vocals.
+        // Reuse prepared metrics so font size, line height and font scale stay consistent.
+        val breathingLineHeight = remember(scene.lyrics, density) {
+            val height = scene.lyrics.lines.asSequence()
+                .filterNotNull()
+                .filter { it.source is KaraokeLine.MainKaraokeLine }
+                .flatMap { it.rows.asSequence() }
+                .map { it.height - it.phoneticHeight }
+                .maxOrNull()
+            if (height == null) 40.dp else with(density) { height.toDp() }
+        }
+        val previousCaptions =
+            remember(timeline, listState) { booleanArrayOf(showTranslation, showPhonetic) }
+        SideEffect {
+            if (previousCaptions[0] != showTranslation || previousCaptions[1] != showPhonetic) {
+                listState.preserveFollowAnchorForContentChange()
+                previousCaptions[0] = showTranslation
+                previousCaptions[1] = showPhonetic
+            }
+        }
+        val focus by timeline.focus
+        val mapping = scene.items
+        val sourceIndices = mapping.sourceIndices
+        val translationShown = rememberUpdatedState(showTranslation)
+        LyricsTexturePrefetch(
+            mapping.lines,
+            scene.resources,
+            listState,
+        ) {
+            mapping.itemIndex(timeline.focus.value.firstIndex)
+        }
+        val phoneticShown = rememberUpdatedState(showPhonetic)
+        SideEffect {
+            listState.setInterludeItem(
+                focus.activeInterludeIndex?.let(mapping::itemIndex) ?: -1
+            )
+        }
+        val listItems =
+            remember(scene.lyrics, timeline, mapping) {
+                sourceIndices.map { index ->
+                    val line = scene.lyrics.lines[index]
+                    LyricsListItem(
+                        key = "${lyrics.lines[index].start}-${lyrics.lines[index].end}-$index",
+                        preserveAnchorOnHeightChange = false,
+                        focusHeightPx = line?.let { prepared ->
+                            {
+                                (prepared.settledHeight(
+                                    true, true, density.density,
+                                    index in timeline.focus.value.allIndices,
+                                ) - prepared.settledHeight(
+                                    true, true, density.density, false,
+                                )).toInt()
+                            }
+                        },
+                        settledHeightPx =
+                            line?.let { prepared ->
+                                {
+                                    prepared
+                                        .settledHeight(
+                                            translationShown.value,
+                                            phoneticShown.value,
+                                            density.density,
+                                            index in timeline.focus.value.allIndices,
+                                        )
+                                        .toInt()
+                                }
+                            },
+                        // Start with the same focus occupancy as the geometry model.
+                        estimatedHeightPx =
+                            line
+                                ?.settledHeight(
+                                    true,
+                                    true,
+                                    density.density,
+                                    index in timeline.focus.value.allIndices,
+                                )
+                                ?.toInt() ?: 0,
+                    )
+                }
+            }
+        val followModifier =
+            lyricsAutoScroll(
+                listState,
+                targetIndex = {
+                    mapping.itemIndex(timeline.focus.value.firstIndex)
+                },
+                animationSpec = scrollAnimationSpec,
+                resumeDelayMillis = autoScrollResumeDelayMillis,
+                focusEndIndex = {
+                    mapping.itemIndex(
+                        timeline.focus.value.allIndices.lastOrNull()
+                            ?: timeline.focus.value.firstIndex
+                    )
+                },
+                playbackPosition = timeProvider,
+                firstWordStartsLater = { timeline.focus.value.firstWordStartsLater },
+            )
+        // One shared animation, sampled only by graphics layers; no per-frame item recomposition.
+        val focusBlurFactor =
+            animateFloatAsState(
+                targetValue = if (listState.isManualScrolling) 0f else 1f,
+                animationSpec = tween(if (listState.isManualScrolling) 100 else 300),
+                label = "manualScrollFocusBlur",
+            )
+        LyricsLazyColumn(
+            items = listItems,
+            state = listState,
+            itemSpacing = itemSpacing,
+            scrollChain = scrollChain,
+            beyondBounds = keepAliveZone,
+            contentPadding = PaddingValues(top = anchorOffset, bottom = maxHeight + keepAliveZone),
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .then(followModifier)
+                    .graphicsLayer {
+                        compositingStrategy = CompositingStrategy.Offscreen
+                        this.blendMode = blendMode
+                    }
+                    .lyricsEdgeFade(topFade, bottomFade, anchorOffset),
+        ) { itemIndex ->
+            val index = sourceIndices[itemIndex]
+            val line = lyrics.lines[index]
+            val prepared = scene.lyrics.lines[index]
+            val focused = index in focus.allIndices
+            val distance =
+                maxOf(
+                    0,
+                    (focus.allIndices.firstOrNull() ?: focus.firstIndex) - index,
+                    index - (focus.allIndices.lastOrNull() ?: focus.firstIndex),
+                )
+            val blur by
+            animateFloatAsState(if (useBlurEffect) distance * blurDelta else 0f, tween(300))
+            Column {
+                if (index == 0 && focus.activeIntro)
+                    KaraokeBreathingDots(
+                        alignment =
+                            if (prepared?.rightAligned == true)
+                                KaraokeAlignment
+                                    .End
+                            else
+                                KaraokeAlignment
+                                    .Start,
+                        startTimeMs = 0,
+                        endTimeMs = timeline.introEnd,
+                        currentTimeProvider = timeProvider,
+                        defaults = breathingDotsDefaults,
+                        trailingSpacing = itemSpacing,
+                        lineHeight = breathingLineHeight,
+                    )
+                if (focus.activeInterludeIndex == index && index > 0)
+                    KaraokeBreathingDots(
+                        alignment =
+                            if (prepared?.rightAligned == true)
+                                KaraokeAlignment
+                                    .End
+                            else
+                                KaraokeAlignment
+                                    .Start,
+                        startTimeMs = timeline.interludeStarts[index],
+                        endTimeMs = timeline.interludeEnds[index],
+                        currentTimeProvider = timeProvider,
+                        defaults = breathingDotsDefaults,
+                        trailingSpacing = itemSpacing,
+                        lineHeight = breathingLineHeight,
+                    )
+                if (prepared !in scene.lyrics.embeddedLines)
+                    LyricsLineItem(
+                        isFocused = focused,
+                        isRightAligned =
+                            prepared?.rightAligned
+                                ?: ((line as? SyncedLine)?.content?.isRtl() == true),
+                        onLineClicked = {
+                            listState.resumeAutoScroll(line.start)
+                            onLineClicked(line)
+                        },
+                        onLinePressed = { onLinePressed(line) },
+                        blurRadius = { blur * focusBlurFactor.value },
+                    ) {
+                        if (prepared != null)
+                            PreparedLineText(
+                                prepared,
+                                timeline.state,
+                                scene.resources,
+                                ownerFocused = { index in timeline.focus.value.allIndices },
+                                verticalPadding = LineVerticalPaddingDp.dp,
+                                modifier =
+                                    if (line is KaraokeLine.AccompanimentKaraokeLine)
+                                        Modifier.padding(horizontal = 12.dp)
+                                    else Modifier,
+                                showTranslation = showTranslation,
+                                showPhonetic = showPhonetic,
+                                showDebugRectangles = showDebugRectangles,
+                            )
+                    }
+            }
+        }
+    }
+}

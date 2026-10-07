@@ -19,9 +19,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -37,6 +37,7 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -48,6 +49,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorProducer
@@ -55,12 +57,16 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.util.lerp
+import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImagePainter
 import coil3.compose.rememberAsyncImagePainter
 import coil3.imageLoader
@@ -72,6 +78,7 @@ import com.kyant.shapes.Capsule
 import com.kyant.shapes.RoundedRectangle
 import com.nevoit.cirro.R
 import com.nevoit.cirro.data.model.PlayMode
+import com.nevoit.cirro.lyrics.ui.LyricsPanel
 import com.nevoit.cirro.palette.CoverPalette
 import com.nevoit.cirro.playback.pearmesh.PearMeshState
 import com.nevoit.cirro.playback.pearmesh.PearMeshSurface
@@ -115,6 +122,12 @@ private val ContentPadding = 24.dp
 
 /** 名字右边那两颗圆钮（收藏/更多）的尺寸。比顶排的浮钮小一号，跟文字排同高。 */
 private val MetaButtonSize = 40.dp
+
+/** 收起（点歌词/待播列表）时封面缩到的小方块边长：落到标题行左侧让出的那一格。 */
+private val CollapsedCoverSize = 48.dp
+
+/** 收起时小封面与标题之间的间隔。 */
+private val CollapsedCoverGap = 12.dp
 
 /**
  * 底部功能栏那三颗图标（视觉 28dp）的**点击**边长。
@@ -169,12 +182,6 @@ private const val PlayIconToneLight = 90
 
 /** 换歌时的主题色过渡时长，跟详情页一致。 */
 private const val ThemeColorMs = 500
-
-/**
- * 主题色压层的起点。smoothstep 的两个 edge 一起往左推，「顶」这一端就落在曲线中段而不是零点：
- * 顶部已经压着半层色（返回键那一带还有网格透气，但对比度已经够），底部满强度。
- */
-private const val BackdropWashStart = 0.2f
 
 /** 进度补间时长。要跟 PlaybackConnection 的位置心跳（500ms）对齐：短了进度头会走走停停，长了会滞后。 */
 private const val ProgressTweenMs = 500
@@ -438,6 +445,32 @@ private fun PlayerOverlay(
     // 所以不能拿一个"总有一边选中"的枚举初值来起头。
     var panel by remember { mutableStateOf<PlayerPanel?>(null) }
 
+    // 收起进度：0 = 展开（大封面居中 + 信息整行），1 = 收起（封面缩成小方块、落到标题左侧）。
+    // 只建 State，值一律留到 graphicsLayer 的 block 里读——它每帧都在变，组合期读一次就等于
+    // 整棵子树每帧重组，跟主题色那条规矩一模一样。
+    val collapsed = panel != null
+    val collapseCover = animateFloatAsState(
+        targetValue = if (collapsed) 1f else 0f,
+        animationSpec = if (collapsed) Springs.smooth(
+            durationMillis = 400,
+            visibilityThreshold = 0.0001f,
+            extraBounce = 0.15
+        ) else Springs.smooth(
+            durationMillis = 400,
+            visibilityThreshold = 0.0001f
+        ),
+        label = "PlayerCollapse",
+    )
+
+    val collapseMeta = animateFloatAsState(
+        targetValue = if (collapsed) 1f else 0f,
+        animationSpec = Springs.smooth(durationMillis = 400, visibilityThreshold = 0.0001f),
+        label = "PlayerCollapse",
+    )
+
+    // 标题行的竖直中心（窗口坐标）。小封面要对齐到这一行，只有量出来才知道它落在哪。
+    var metaCenterY by remember { mutableFloatStateOf(0f) }
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -466,7 +499,7 @@ private fun PlayerOverlay(
         val onCycleMode = remember(connection, mode) { { connection.setPlayMode(mode.next()) } }
         // 底部那排（歌词/待播列表）、名字右边那两颗（收藏、更多）都还没接线——待播列表是队列
         // 面板的入口、投屏还没做。用 remember 固定空回调：按下有正常的反馈，但先什么都不做；
-        // 接线时只换这几个 lambda。
+        // 接线时只换这几个 lambda。歌词那块已经有面板了，这两个回调留着做埋点/自动滚动之类的钩子。
         val onLyrics = remember { {} }
         val onQueue = remember { {} }
         val onAirplay = remember { {} }
@@ -490,22 +523,65 @@ private fun PlayerOverlay(
                     .navigationBarsPadding(),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                PlayerStage(
+                // 舞台区：面板（歌词）铺满，封面浮在上面——收起时它会缩成小方块飞向标题行，
+                // 所以两块必须同父，`zIndex` 才管得住谁压谁。Box 默认不裁剪，封面飞出去也不会被切。
+                Box(
                     modifier = Modifier
-                        .padding(24.dp), cover = cover
-                )
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) {
+                    if (panel == PlayerPanel.LYRICS) {
+                        LyricsPanel(
+                            songId = song.id,
+                            connection = connection,
+                            color = contentColor,
+                            modifier = Modifier
+                                .padding(12.dp)
+                                .fillMaxSize(),
+                        )
+                    }
+                    PlayerStage(
+                        modifier = Modifier
+                            .zIndex(999f)
+                            .padding(24.dp),
+                        cover = cover,
+                        collapse = collapseCover,
+                        metaCenterY = metaCenterY,
+                    )
+                }
 
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = ContentPadding),
+                        .padding(horizontal = ContentPadding)
+                        .onGloballyPositioned { coords ->
+                            val position = coords.positionInWindow()
+                            metaCenterY = position.y + coords.size.height / 2f
+                        },
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // 收起时在标题左边占出一格给封面：直接把这个 Row 的剩余宽度减掉
+                    // 「封面边长 + 间距」。宽度是布局一步到位的（meta「直接变成目标大小」），
+                    // 位移动画由 meta 自己的 graphicsLayer 补出来，这里只负责把格子占住。
+                    Spacer(
+                        Modifier.width(
+                            if (collapsed) CollapsedCoverSize + CollapsedCoverGap else 0.dp
+                        )
+                    )
                     PlayerMeta(
                         title = song.title,
                         artist = song.artist,
                         titleColor = contentColor,
                         artistColor = contentVariantColor,
+                        modifier = Modifier.graphicsLayer {
+                            // 收起：布局已经被上面那格推到右边，先把 meta 拉回原位再滑过去；
+                            // 展开：布局已经回到左边，从收起位滑回来。方向跟当前布局是
+                            // 「有格子」还是「没格子」绑着，两个方向都得对得上，不能只写一边。
+                            val shift = (CollapsedCoverSize + CollapsedCoverGap).toPx()
+                            val progress = collapseMeta.value.coerceIn(0f, 1f)
+                            translationX =
+                                if (collapsed) -shift * (1f - progress) else shift * progress
+                        },
                     )
                     HGap()
                     CircleIconButton(
@@ -655,21 +731,32 @@ private fun PlayerPanelIcon(
  * 单独成块是为了让它在主题色过渡（换歌时每帧重组 500ms）期间被整块跳过：
  * `BoxWithConstraints` 是 SubcomposeLayout，重新 subcompose 是这一页最贵的一步，而它的输入
  * （封面串）跟颜色无关。所以这里只收封面串，颜色一律不进这一层。
+ *
+ * 尺寸由父级（舞台 Box）给：面板打开时它是叠在面板上的那一层，自己不再占布局。
  */
 @Composable
-private fun ColumnScope.PlayerStage(modifier: Modifier = Modifier, cover: String) {
+private fun PlayerStage(
+    modifier: Modifier = Modifier,
+    cover: String,
+    collapse: State<Float>,
+    metaCenterY: Float,
+) {
     // 修饰符固定住，否则每次都是新实例，跳过就失效了
     val stageModifier = remember {
         modifier
-            .weight(1f)
-            .fillMaxWidth()
+            .fillMaxSize()
     }
     BoxWithConstraints(
         modifier = stageModifier,
         contentAlignment = Alignment.Center,
     ) {
         val side = minOf(maxWidth, maxHeight).coerceAtMost(CoverSideCap)
-        PlayerCover(cover = cover, side = side)
+        PlayerCover(
+            cover = cover,
+            side = side,
+            collapse = collapse,
+            metaCenterY = metaCenterY,
+        )
     }
 }
 
@@ -684,7 +771,12 @@ private fun ColumnScope.PlayerStage(modifier: Modifier = Modifier, cover: String
  * 否则交叉淡入的是一块空占位。
  */
 @Composable
-private fun PlayerCover(cover: String, side: Dp) {
+private fun PlayerCover(
+    cover: String,
+    side: Dp,
+    collapse: State<Float>,
+    metaCenterY: Float,
+) {
     val target = cover.takeIf { it.isNotEmpty() }
     val painter = rememberAsyncImagePainter(model = target, contentScale = ContentScale.Crop)
     val state by painter.state.collectAsState()
@@ -697,9 +789,34 @@ private fun PlayerCover(cover: String, side: Dp) {
         if (target == null) front = null else if (loaded != null) front = loaded.painter
     }
 
+    // 封面自己这一块的中心在窗口里的位置。收起时就是拿它跟目标中心相减，得到 graphicsLayer
+    // 要走的位移。位置是**量**出来的——封面不参与任何布局搬家，整段收起只有这一层在重画。
+    var center by remember { mutableStateOf(Offset.Zero) }
+
     Box(
         modifier = Modifier
+            .onGloballyPositioned { coords ->
+                val position = coords.positionInWindow()
+                center = Offset(
+                    position.x + coords.size.width / 2f,
+                    position.y + coords.size.height / 2f,
+                )
+            }
             .size(side)
+            .graphicsLayer {
+                // 收起：绕自身中心缩到 [CollapsedCoverSize]，再把中心从「舞台正中」平移到
+                // 「标题行左侧那一格」。跟参考实现的封面一样，`scale` 和 `translation` 都按
+                // 同一个进度插值，所以整段是匀速滑过去而不是先缩后移。
+                val progress = collapse.value
+                if (progress > 0f && center != Offset.Zero) {
+                    val targetSidePx = CollapsedCoverSize.toPx()
+                    scaleX = lerp(1f, targetSidePx / size.width, progress)
+                    scaleY = scaleX
+                    translationX =
+                        (ContentPadding.toPx() + targetSidePx / 2f - center.x) * progress
+                    translationY = (metaCenterY - center.y) * progress
+                }
+            }
             .clip(RoundedRectangle(16.dp))
             .background(MaterialTheme.colors.scrimMedium),
     ) {
@@ -726,8 +843,9 @@ private fun RowScope.PlayerMeta(
     artist: String,
     titleColor: ColorProducer,
     artistColor: ColorProducer,
+    modifier: Modifier = Modifier,
 ) {
-    Column(modifier = Modifier.weight(1f)) {
+    Column(modifier = modifier.weight(1f)) {
         PlayerText(
             text = title,
             style = MaterialTheme.type.title4,

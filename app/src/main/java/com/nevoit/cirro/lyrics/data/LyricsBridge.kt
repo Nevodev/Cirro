@@ -25,10 +25,50 @@ data class AmllTtml(
     val appleMusicIds: List<String>,
 )
 
-/** Apple 官方 TTML。[ttml] 为空说明没拿到，[reason] 说明为什么（`no_media_user_token` 等）。 */
+/**
+ * Apple 官方 TTML。[ttml] 为空说明没拿到，[reason] 说明为什么（`no_media_user_token` 等）。
+ *
+ * [storefront] 是这次实际用的商店区域、[storefrontProbed] 说明它是探测出来的还是回落值。
+ * 这两个字段是排障用的：catalog **按区域分区**（同一首中文歌在 `cn` 区有逐字词、在 `us` 区
+ * 是零歌词），而 `reason` 只会写 `no_lyrics` —— 没有它们就分不清"这首歌没有官方词"和
+ * "区域取错了"。
+ */
 data class AppleTtml(
     val ttml: String,
     val reason: String,
+    val storefront: String,
+    val storefrontProbed: Boolean,
+)
+
+/**
+ * Apple 搜索结果里的一个候选曲目。
+ *
+ * [durationMs] 是匹配的主要依据（同一首歌的不同版本靠时长分得开）；
+ * [hasLyrics] 是 Apple 标称的「有歌词」，⚠️ **不保证有逐字**（`syllable-lyrics`）——
+ * 那要真取一次才知道，所以它只能当加权项，不能当「有词」的判据。
+ *
+ * 所有字段都有默认值：原生层对某些区域会省字段，缺了不该让整条链解码失败。
+ */
+@Serializable
+data class AppleSongCandidate(
+    val id: String = "",
+    val name: String = "",
+    val artist: String = "",
+    val album: String = "",
+    val durationMs: Long = 0,
+    val hasLyrics: Boolean = false,
+)
+
+/**
+ * 一次 Apple 搜索的结果。
+ *
+ * [storefront] / [storefrontProbed] 与 [AppleTtml] 那两个同义（排障用）：区域取错时
+ * 搜索结果照样有，但拿它去取词是空手 —— 分开记才能看出是"搜错了"还是"取不到"。
+ */
+data class AppleSearchResult(
+    val songs: List<AppleSongCandidate>,
+    val storefront: String,
+    val storefrontProbed: Boolean,
 )
 
 /** lrclib 的一首。[synced] 可能为空（只有纯文本）。 */
@@ -78,14 +118,13 @@ object LyricsBridge {
      * 配置 Apple Music 凭据。
      *
      * [mediaUserToken] 是 Apple Music **订阅账号**的 `media-user-token`，与网易 cookie 无关；
-     * 传空串等于关闭 Apple 这一级（AMLL TTML DB 顶替）。开发者 access token 由原生层
-     * 自己从 Apple 网页抓，不用给。
+     * 传空串等于关闭 Apple 这一级（AMLL TTML DB 顶替）。
+     *
+     * 开发者 access token、storefront、language 全由原生层自己弄（抓 Apple 网页 /
+     * 问 `/v1/me/storefront`），上层不用也不该管 —— 与原项目一致。
      */
-    fun setAppleToken(
-        mediaUserToken: String,
-        storefront: String = "",
-        language: String = "",
-    ): Boolean = nativeSetAppleToken(mediaUserToken, storefront, language) == 0
+    fun setAppleToken(mediaUserToken: String): Boolean =
+        nativeSetAppleToken(mediaUserToken) == 0
 
     /** 是否已配置 Apple 凭据。 */
     fun appleConfigured(): Boolean =
@@ -119,8 +158,32 @@ object LyricsBridge {
 
     /** Apple 官方 TTML。[AppleTtml.ttml] 为空表示没拿到（无凭据 / 这首歌没有官方词）。 */
     fun apple(amId: String): Result<AppleTtml> = decode(nativeApple(amId)).map { body ->
-        AppleTtml(ttml = body.ttml, reason = body.reason)
+        AppleTtml(
+            ttml = body.ttml,
+            reason = body.reason,
+            storefront = body.storefront,
+            storefrontProbed = body.storefrontProbed,
+        )
     }
+
+    /**
+     * 搜 Apple Music，拿候选曲目。
+     *
+     * 这是**不依赖 AMLL 的 Apple id 入口**。在此之前 Apple 官方取词只能靠 AMLL 的
+     * `amll:meta` 给 id，而 AMLL 索引只覆盖网易曲库的一小部分 —— 没命中的歌永远
+     * 「跳过(无 appleId)」，够不到官方逐字词。自己搜之后，入口覆盖率交给 Apple 曲库本身。
+     *
+     * [term] 一般是「歌名 歌手」。**不在这里挑歌**：返回全部候选，由 [AppleSongMatcher]
+     * 打分 —— 匹配是纯计算，放 Kotlin 侧改一次不用重编 `.so`。
+     */
+    fun appleSearch(term: String, limit: Int = 12): Result<AppleSearchResult> =
+        decode(nativeAppleSearch(term, limit.toString())).map { body ->
+            AppleSearchResult(
+                songs = body.songs,
+                storefront = body.storefront,
+                storefrontProbed = body.storefrontProbed,
+            )
+        }
 
     /** lrclib。返回 null 表示查不到。 */
     fun lrclib(
@@ -167,11 +230,7 @@ object LyricsBridge {
 
     private external fun nativeClearCookie()
 
-    private external fun nativeSetAppleToken(
-        mediaUserToken: String,
-        storefront: String,
-        language: String,
-    ): Int
+    private external fun nativeSetAppleToken(mediaUserToken: String): Int
 
     private external fun nativeAppleConfigured(): String
 
@@ -180,6 +239,8 @@ object LyricsBridge {
     private external fun nativeAmll(ncmId: String): String
 
     private external fun nativeApple(amId: String): String
+
+    private external fun nativeAppleSearch(term: String, limit: String): String
 
     private external fun nativeLrclib(
         trackName: String,
@@ -212,6 +273,10 @@ private data class BridgeResponse(
     val appleMusicIds: List<String> = emptyList(),
     // Apple
     val reason: String = "",
+    val storefront: String = "",
+    val storefrontProbed: Boolean = false,
+    // Apple 搜索
+    val songs: List<AppleSongCandidate> = emptyList(),
     // lrclib
     val id: Long = 0,
     val trackName: String = "",

@@ -423,7 +423,9 @@ object TtmlLyricsParser {
             words[last].text = words[last].text.replace(Regex("[)）]+$"), "").trimEnd()
         }
         return parsed.copy(
-            text = parsed.text.replace(Regex("^[(（]+"), "").replace(Regex("[)）]+$"), ""),
+            // ⚠️ 括号是**在 trim 之后**才剥的，剥完会重新露出空白（`( 哦 )` → ` 哦 `），
+            // 所以这里得再 trim 一次。音节的边界上面已经处理过了。
+            text = parsed.text.replace(Regex("^[(（]+"), "").replace(Regex("[)）]+$"), "").trim(),
             words = words,
             background = null,
         )

@@ -35,12 +35,11 @@ pub fn clear_cookie() {
 }
 
 /// 配置 Apple Music 凭据。`media_user_token` 传空串等于关闭 Apple 这一级。
-pub fn set_apple_token(media_user_token: String, storefront: String, language: String) -> i32 {
-    apple::set_config(
-        media_user_token,
-        Some(storefront).filter(|s| !s.trim().is_empty()),
-        Some(language).filter(|s| !s.trim().is_empty()),
-    );
+///
+/// 只有 token —— storefront / language 由原生层问 `/v1/me/storefront` 自己拿，
+/// 不开放给上层（对齐原项目：那边对外也只有 `SetMediaUserToken`）。
+pub fn set_apple_token(media_user_token: String) -> i32 {
+    apple::set_config(media_user_token);
     0
 }
 
@@ -83,12 +82,63 @@ pub async fn amll_ttml(ncm_id: String) -> Value {
 }
 
 /// Apple Music 官方 TTML（需 media-user-token）。
+///
+/// 一并带上 `storefront` / `storefrontProbed`：区域取错会让这一级**每一首都空手**，
+/// 而 `reason` 只会写 `no_lyrics` —— 没有这两个字段就分不清"这首歌没有官方词"
+/// 和"区域取错了"。
 pub async fn apple_ttml(am_id: String) -> Value {
     match apple::fetch(&am_id).await {
-        Ok(f) => json!({ "ok": true, "ttml": f.ttml, "reason": f.reason }),
+        Ok(f) => json!({
+            "ok": true,
+            "ttml": f.ttml,
+            "reason": f.reason,
+            "storefront": f.storefront,
+            "storefrontProbed": f.storefront_probed,
+        }),
         Err(e) => fail(e),
     }
 }
+
+/// Apple Music 搜索：用「歌名 歌手」换候选曲目，**不依赖 AMLL**。
+///
+/// 存在的理由：Apple 官方取词需要一个 Apple 歌曲 id，而之前这个 id 只能从 AMLL 的
+/// `amll:meta` 里拿 —— AMLL 索引只有网易曲库的一小部分，没命中的歌就永远够不到官方词。
+///
+/// `limit` 是字符串（JNI 侧一律传字符串），空/非法走默认值。
+pub async fn apple_search(term: String, limit: String) -> Value {
+    let limit = limit
+        .trim()
+        .parse::<usize>()
+        .unwrap_or(SEARCH_LIMIT_DEFAULT)
+        .clamp(1, SEARCH_LIMIT_MAX);
+
+    match apple::search(&term, limit).await {
+        Ok(hit) => json!({
+            "ok": true,
+            "storefront": hit.storefront,
+            "storefrontProbed": hit.storefront_probed,
+            "songs": hit
+                .candidates
+                .iter()
+                .map(|c| {
+                    json!({
+                        "id": c.id,
+                        "name": c.name,
+                        "artist": c.artist,
+                        "album": c.album,
+                        "durationMs": c.duration_ms,
+                        "hasLyrics": c.has_lyrics,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        }),
+        Err(e) => fail(e),
+    }
+}
+
+/// 搜索默认取几个候选。匹配是本地打分，多给几个不影响耗时，但少了容易漏。
+const SEARCH_LIMIT_DEFAULT: usize = 12;
+const SEARCH_LIMIT_MAX: usize = 25;
 
 /// lrclib 兜底。`duration_sec` 是秒的字符串，空串 / 非法值按「不带时长查」处理。
 pub async fn lrclib_lyric(

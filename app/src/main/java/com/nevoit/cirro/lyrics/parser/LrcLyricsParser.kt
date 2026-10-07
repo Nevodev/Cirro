@@ -133,7 +133,10 @@ object LrcLyricsParser {
             }
             if (times.isEmpty()) continue
 
-            val content = line.substring(cursor)
+            // 时间戳后面的正文两端去空白。🔴 必须**在拆音节之前**去掉：行内逐字那条路的
+            // `plain` 与 `syllables` 都是从这串文本派生的，在这儿裁，两者长度才永远对得上
+            // （`buildSweeps` 靠这个长度相等来决定这一行能不能逐字擦除）。
+            val content = line.substring(cursor).trim()
             times.forEach { entries += Entry(it + offsetMs, content) }
         }
 

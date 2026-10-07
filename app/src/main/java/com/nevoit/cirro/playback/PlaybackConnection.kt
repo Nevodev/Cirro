@@ -56,6 +56,18 @@ data class PlaybackState(
     val positionMs: Long = 0,
     val durationMs: Long = 0,
     val error: String? = null,
+    /** [positionMs] 是**什么时候**采的（`SystemClock.uptimeMillis()`）。逐帧消费位置的界面靠它外推。 */
+    val sampledAtMillis: Long = 0,
+    /**
+     * 位置**不连续**的累计次数，只增不减。
+     *
+     * 只有真 seek / 循环 / 换曲才 +1，**普通的位置采样绝不**。
+     *
+     * 逐帧消费位置的界面（歌词）用它来区分两件事：「播放器报的位置往回退了一点」
+     * （缓冲、时序错位 —— 要丢掉）和「用户真的往回跳了」（拖进度条、单曲循环、切歌 —— 要跟上）。
+     * 少了这个标记就只能二选一：要么画面跟着采样抖动往回跳，要么跳转之后歌词永远卡在原地。
+     */
+    val discontinuity: Long = 0,
 ) {
     val progress: Float
         get() = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
@@ -91,10 +103,24 @@ class PlaybackConnection(
     private var controller: MediaController? = null
     private var lastSessionLogMs = 0L
 
+    /** 见 [PlaybackState.discontinuity]。只在这个 listener 里加。 */
+    private var positionDiscontinuity = 0L
+
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
+            // 换曲也是一次位置不连续——整个时间轴换了一条，位置从新曲的 0 开始。
+            if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) positionDiscontinuity++
             publish(player)
             syncCurrentIndex(player)
+        }
+
+        override fun onPositionDiscontinuity(
+            oldPosition: Player.PositionInfo,
+            newPosition: Player.PositionInfo,
+            reason: Int,
+        ) {
+            // INTERNAL 是播放器自己的微调（比如把目标夹到可 seek 区间），不是用户跳转，不该放行。
+            if (reason != Player.DISCONTINUITY_REASON_INTERNAL) positionDiscontinuity++
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -344,6 +370,8 @@ class PlaybackConnection(
             durationMs = (duration ?: 0L).coerceAtLeast(0),
             // 播起来了就把上一次的错误清掉，否则它会一直挂在界面上
             error = if (player.playbackState == Player.STATE_READY) null else _state.value.error,
+            sampledAtMillis = now,
+            discontinuity = positionDiscontinuity,
         )
     }
 }
