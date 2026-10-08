@@ -36,7 +36,16 @@ import kotlinx.coroutines.flow.collectLatest
  */
 @Composable
 internal fun rememberLyricsPosition(connection: PlaybackConnection): IntState {
-    val position = remember(connection) { mutableIntStateOf(0) }
+    // 初值直接取播放器的当前位置，**别从 0 起**。从 0 起的话时间轴会先按 0 建立，
+    // 等第一个采样到了才跳到真值——那期间 scene 就绪、列表按「第一行」算出落点，
+    // 于是画面停在顶部再滚一下。`state` 是 StateFlow，组合期读 `.value` 是同步快照；
+    // 光标（`LyricsPositionCursor`）首次采样本就直接采纳，所以这里的种子不会跟它打架。
+    val position =
+        remember(connection) {
+            mutableIntStateOf(
+                connection.state.value.positionMs.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
+            )
+        }
     LaunchedEffect(connection) {
         val cursor = LyricsPositionCursor()
         // 每收到一个采样就重启一个帧循环：循环体捕获的是**这一份**采样，

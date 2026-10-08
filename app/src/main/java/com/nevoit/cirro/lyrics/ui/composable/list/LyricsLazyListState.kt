@@ -147,6 +147,9 @@ class LyricsLazyListState(
     private var keys: Map<Any, Int> = emptyMap()
     private var pendingIndex: Int? = initialFirstVisibleItemIndex
     private var pendingOffset = initialFirstVisibleItemScrollOffset
+
+    /** [snapToItemOnNextLayout] 只用一次——落位过后不再干预列表位置。 */
+    private var initialSnapConsumed = false
     val interactionSource = MutableInteractionSource()
     /** True throughout dragging, flinging and the delay before automatic following resumes. */
     var isManualScrolling by mutableStateOf(false)
@@ -272,6 +275,23 @@ class LyricsLazyListState(
             chain.applyLeadingContentShift(index, (leading - focusLeadingHeights[index]).toDouble())
             focusLeadingHeights[index] = leading
         }
+    }
+
+    /**
+     * 首帧落位：让下一次 [configure] 直接把列表摆到 [index]，**不播滚动动画**。
+     *
+     * 列表建在 0，若只等自动跟随去滚，观感就是「先现出第一行、再滚到当前行」。调用方在
+     * scene 就绪那一帧、布局之前（`KaraokeLyricsView` 的 `SideEffect`）调用它，于是第一帧
+     * 就已经在正确位置；随后自动跟随算出的目标与当前位置相同，弹簧自然成为空操作。
+     *
+     * 一次性：标记在**调用时**就消费掉，与 `configure` 何时跑无关——否则「歌词晚到 + 状态被
+     * saveable 还原」那条路上，默认的 `pendingIndex` 会先把标志烧掉，落位就赶不上了。
+     */
+    internal fun snapToItemOnNextLayout(index: Int) {
+        if (initialSnapConsumed || index < 0) return
+        initialSnapConsumed = true
+        pendingIndex = index
+        pendingOffset = 0
     }
 
     suspend fun scrollToItem(index: Int, scrollOffset: Int = 0) {

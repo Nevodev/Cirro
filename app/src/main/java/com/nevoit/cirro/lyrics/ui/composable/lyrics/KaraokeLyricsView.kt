@@ -148,6 +148,13 @@ fun KaraokeLyricsView(
         val focus by timeline.focus
         val mapping = scene.items
         val sourceIndices = mapping.sourceIndices
+        // 首帧落位：列表 state 建在 0，只靠自动跟随去滚就是「先出现、再滚一下」。这里在布局
+        // 之前（SideEffect 早于本帧测量）把列表一次性摆到当前行，无动画；随后的首次跟随目标
+        // 与当前位置相同，弹簧成为空操作。scene 就绪那一帧 `timeline.focus` 已被真位置刷过，
+        // 所以这一句算出的就是当前行而不是第一行。
+        SideEffect {
+            listState.snapToItemOnNextLayout(mapping.itemIndex(timeline.focus.value.firstIndex))
+        }
         val translationShown = rememberUpdatedState(showTranslation)
         LyricsTexturePrefetch(
             mapping.lines,
