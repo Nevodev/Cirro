@@ -538,7 +538,6 @@ private fun PlayerOverlay(
                             connection = connection,
                             seekPreviewPosition = seekState.previewPosition,
                             isSeeking = seekState.isDragging,
-                            color = contentColor,
                             modifier = Modifier
                                 .padding(12.dp)
                                 .fillMaxSize(),

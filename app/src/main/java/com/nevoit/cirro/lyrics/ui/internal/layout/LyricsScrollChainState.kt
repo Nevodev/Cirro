@@ -20,8 +20,11 @@ internal class LyricsScrollChainState {
     private var velocities = FloatArray(0)
     private var contentOffsets = FloatArray(0)
     private var contentVelocities = FloatArray(0)
+    private var leadingContentOffsets = FloatArray(0)
+    private var leadingContentVelocities = FloatArray(0)
     private val contentSpring = LyricsScrollChain.of(durationMillis = 600f, bounce = 0.1f)
     private var offsets by mutableStateOf(emptyArray<MutableFloatState>())
+    private var leadingOffsets by mutableStateOf(emptyArray<MutableFloatState>())
     private var stiffness = FloatArray(0)
     private var damping = FloatArray(0)
     private var first = 0
@@ -47,7 +50,10 @@ internal class LyricsScrollChainState {
         velocities = FloatArray(count)
         contentOffsets = FloatArray(count)
         contentVelocities = FloatArray(count)
+        leadingContentOffsets = FloatArray(count)
+        leadingContentVelocities = FloatArray(count)
         offsets = Array(count) { mutableFloatStateOf(0f) }
+        leadingOffsets = Array(count) { mutableFloatStateOf(0f) }
         stiffness = FloatArray(count + 1)
         damping = FloatArray(count + 1)
         delayedFirstWordStiffness = FloatArray(count + 1)
@@ -84,7 +90,10 @@ internal class LyricsScrollChainState {
             velocities[i] = 0f
             contentOffsets[i] = 0f
             contentVelocities[i] = 0f
+            leadingContentOffsets[i] = 0f
+            leadingContentVelocities[i] = 0f
             offsets[i].floatValue = 0f
+            leadingOffsets[i].floatValue = 0f
         }
         first = from
         end = until
@@ -125,6 +134,14 @@ internal class LyricsScrollChainState {
         }
     }
 
+    /** Leading vocals shift content inside their owner, independently of the item's list top. */
+    fun applyLeadingContentShift(index: Int, delta: Double) {
+        if (delta == 0.0 || settings == null || index !in first until end) return
+        leadingContentOffsets[index] -= delta.toFloat()
+        leadingOffsets[index].floatValue = leadingContentOffsets[index]
+        active = true
+    }
+
     fun rebase(position: Double) {
         val delta = position - base
         if (delta == 0.0) return
@@ -145,6 +162,8 @@ internal class LyricsScrollChainState {
 
     fun offset(index: Int): Float = offsets.getOrNull(index)?.floatValue ?: 0f
 
+    fun leadingOffset(index: Int): Float = leadingOffsets.getOrNull(index)?.floatValue ?: 0f
+
     val retainedCount
         get() = end - first
 
@@ -155,7 +174,10 @@ internal class LyricsScrollChainState {
             velocities[i] = 0f
             contentOffsets[i] = 0f
             contentVelocities[i] = 0f
+            leadingContentOffsets[i] = 0f
+            leadingContentVelocities[i] = 0f
             offsets[i].floatValue = 0f
+            leadingOffsets[i].floatValue = 0f
         }
         active = false
     }
@@ -180,7 +202,8 @@ internal class LyricsScrollChainState {
             positions[i] = base - offset
             offsets[i].floatValue = offset + contentOffsets[i]
             if (abs(offset) > 0.08f || abs(velocities[i]) > 0.08f ||
-                abs(contentOffsets[i]) > 0.08f || abs(contentVelocities[i]) > 0.08f
+                abs(contentOffsets[i]) > 0.08f || abs(contentVelocities[i]) > 0.08f ||
+                abs(leadingContentOffsets[i]) > 0.08f || abs(leadingContentVelocities[i]) > 0.08f
             ) moving = true
         }
         active = moving
@@ -216,6 +239,11 @@ internal class LyricsScrollChainState {
                                 contentSpring.damping * contentVelocities[i]
                         ) * step
                 contentOffsets[i] += contentVelocities[i] * step
+                leadingContentVelocities[i] += (
+                        -contentSpring.stiffness * leadingContentOffsets[i] -
+                                contentSpring.damping * leadingContentVelocities[i]
+                        ) * step
+                leadingContentOffsets[i] += leadingContentVelocities[i] * step
                 if (abs(positions[i] - base) > limit) {
                     positions[i] =
                         base + (positions[i] - base).coerceIn(-limit.toDouble(), limit.toDouble())
@@ -226,9 +254,11 @@ internal class LyricsScrollChainState {
         var moving = false
         for (i in first until end) {
             if (abs(positions[i] - base) > 0.08 || abs(velocities[i]) > 0.08f ||
-                abs(contentOffsets[i]) > 0.08f || abs(contentVelocities[i]) > 0.08f
+                abs(contentOffsets[i]) > 0.08f || abs(contentVelocities[i]) > 0.08f ||
+                abs(leadingContentOffsets[i]) > 0.08f || abs(leadingContentVelocities[i]) > 0.08f
             ) moving = true
             offsets[i].floatValue = (base - positions[i]).toFloat() + contentOffsets[i]
+            leadingOffsets[i].floatValue = leadingContentOffsets[i]
         }
         if (!moving) reset(base)
     }

@@ -1,6 +1,7 @@
 package com.nevoit.cirro.lyrics.ui.internal.layout
 
 import com.nevoit.cirro.lyrics.ui.composable.list.LyricsScrollChain
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -91,6 +92,59 @@ class LyricsScrollChainStateTest {
             delayed.advance(0.005f)
             for (index in 0..3) assertEquals(ordinary.offset(index), delayed.offset(index), 0f)
         }
+    }
+
+    @Test
+    fun leadingBgvAndFollowingItemsUseTheSameOccupancySpring() {
+        val state = chain()
+        state.applyLeadingContentShift(2, 60.0)
+        state.applyContentShift(2, 60.0)
+        assertEquals(-60f, state.leadingOffset(2), 0f)
+        assertEquals(0f, state.offset(2), 0f)
+        assertEquals(0f, state.leadingOffset(3), 0f)
+        repeat(400) {
+            assertEquals(state.offset(3), state.leadingOffset(2), 0.001f)
+            state.advance(0.005f)
+        }
+        assertEquals(0f, state.leadingOffset(2), 0.1f)
+        assertFalse(state.active)
+    }
+
+    @Test
+    fun collapsingLeadingBgvKeepsTheOwnersContentAtItsDrawnPosition() {
+        val state = chain()
+        state.applyLeadingContentShift(2, 60.0)
+        repeat(20) { state.advance(0.005f) }
+        val drawnContentTop = 60f + state.leadingOffset(2)
+        state.applyLeadingContentShift(2, -60.0)
+        assertEquals(drawnContentTop, state.leadingOffset(2), 0.001f)
+        repeat(400) { state.advance(0.005f) }
+        assertEquals(0f, state.leadingOffset(2), 0.1f)
+        assertFalse(state.active)
+    }
+
+    @Test
+    fun leadingOccupancyContinuesWhileTheListFollowsPlayback() {
+        val state = chain()
+        state.applyLeadingContentShift(2, 60.0)
+        state.moveTo(100.0, cascade = true)
+        assertTrue(state.active)
+        assertEquals(-60f, state.leadingOffset(2), 0f)
+        repeat(20) { state.advance(0.005f) }
+        assertTrue(state.leadingOffset(2) > -60f)
+        assertTrue(state.leadingOffset(2) < 0f)
+    }
+
+    @Test
+    fun resetAndRecycledItemsDiscardLeadingOffsets() {
+        val state = chain()
+        state.applyLeadingContentShift(2, 60.0)
+        state.reset(0.0)
+        assertEquals(0f, state.leadingOffset(2), 0f)
+        state.applyLeadingContentShift(2, 60.0)
+        state.retain(0, 2)
+        state.retain(0, 4)
+        assertEquals(0f, state.leadingOffset(2), 0f)
     }
 
     private fun chain(config: LyricsScrollChain = LyricsScrollChain.of(300f, 0.3f)) =

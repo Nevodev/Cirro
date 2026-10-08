@@ -32,6 +32,8 @@ fun LyricsLineItem(
     inactiveAlpha: Float = 0.4f,
     blendMode: BlendMode = BlendMode.SrcOver,
     isInteractive: Boolean = true,
+    visualHeight: Float = 0f,
+    verticalOverflow: Float = 0f,
     content: @Composable () -> Unit,
 ) {
     val scaleState by
@@ -65,7 +67,7 @@ fun LyricsLineItem(
         modifier =
             modifier
                 .fillMaxWidth()
-                .lyricsVisualLayer {
+                .lyricsVisualLayer(visualHeight, verticalOverflow) {
                     scaleX = scaleState
                     scaleY = scaleState
                     alpha = alphaState

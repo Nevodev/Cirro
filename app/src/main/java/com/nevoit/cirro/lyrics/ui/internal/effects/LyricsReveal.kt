@@ -9,7 +9,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.layout.AlignmentLine
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.constrainHeight
 import kotlin.math.roundToInt
@@ -22,6 +21,8 @@ internal fun LyricsReveal(
     origin: TransformOrigin = TransformOrigin.Center,
     occupied: (() -> Boolean)? = null,
     exitAnimationSpec: FiniteAnimationSpec<Float> = LyricsRevealSpring,
+    visualHeight: Float = 0f,
+    verticalOverflow: Float = 0f,
     content: @Composable () -> Unit,
 ) {
     val visibility = remember { MutableTransitionState(if (animateInitial) false else visible) }
@@ -52,27 +53,14 @@ internal fun LyricsReveal(
                     // original drawing position instead of jumping when that extent becomes zero.
                     val offset = if (occupied != null) 0 else
                         ((height - placeable.height) * origin.pivotFractionY).roundToInt()
-                    val top =
-                        placeable[LyricsVisualTop].let {
-                            if (it == AlignmentLine.Unspecified) 0 else minOf(0, it)
-                        }
-                    val bottom =
-                        placeable[LyricsVisualBottom].let {
-                            if (it == AlignmentLine.Unspecified) placeable.height
-                            else maxOf(placeable.height, it)
-                        }
                     layout(
                         placeable.width,
                         height,
-                        mapOf(
-                            LyricsVisualTop to top + offset,
-                            LyricsVisualBottom to bottom + offset,
-                        ),
                     ) {
                         placeable.place(0, offset)
                     }
                 }
-                .lyricsVisualLayer {
+                .lyricsVisualLayer(visualHeight, verticalOverflow) {
                     val value = progress.value
                     transformOrigin = origin
                     scaleX = revealScale(value)

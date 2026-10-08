@@ -43,6 +43,7 @@ import com.nevoit.cirro.lyrics.ui.internal.layout.LineVerticalPaddingDp
 import com.nevoit.cirro.lyrics.ui.internal.layout.LyricsLazyColumn
 import com.nevoit.cirro.lyrics.ui.internal.layout.lyricsAutoScroll
 import com.nevoit.cirro.lyrics.ui.internal.layout.settledHeight
+import com.nevoit.cirro.lyrics.ui.internal.layout.settledLeadingHeight
 import com.nevoit.cirro.lyrics.ui.internal.rendering.LyricsTexturePrefetch
 import com.nevoit.cirro.lyrics.ui.internal.rendering.PreparedLineText
 import com.nevoit.cirro.lyrics.ui.internal.scene.LyricsLayoutRequest
@@ -178,6 +179,14 @@ fun KaraokeLyricsView(
                                 )).toInt()
                             }
                         },
+                        focusLeadingHeightPx = line?.let { prepared ->
+                            {
+                                prepared.settledLeadingHeight(
+                                    true, true, density.density,
+                                    index in timeline.focus.value.allIndices,
+                                ).toInt()
+                            }
+                        },
                         settledHeightPx =
                             line?.let { prepared ->
                                 {
@@ -304,6 +313,12 @@ fun KaraokeLyricsView(
                         },
                         onLinePressed = { onLinePressed(line) },
                         blurRadius = { if (isSeeking) 0f else blur * focusBlurFactor.value },
+                        visualHeight = prepared?.settledHeight(
+                            true, true, density.density, true,
+                        ) ?: 0f,
+                        verticalOverflow = prepared?.settledLeadingHeight(
+                            true, true, density.density, true,
+                        ) ?: 0f,
                     ) {
                         if (prepared != null)
                             PreparedLineText(
@@ -311,6 +326,7 @@ fun KaraokeLyricsView(
                                 timeline.state,
                                 scene.resources,
                                 ownerFocused = { index in timeline.focus.value.allIndices },
+                                leadingContentOffset = { listState.chain.leadingOffset(itemIndex) },
                                 verticalPadding = LineVerticalPaddingDp.dp,
                                 modifier =
                                     if (line is KaraokeLine.AccompanimentKaraokeLine)

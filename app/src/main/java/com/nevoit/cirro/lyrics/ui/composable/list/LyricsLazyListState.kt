@@ -27,6 +27,7 @@ data class LyricsListItem(
     val focusOffsetPx: (() -> Int)? = null,
     val preserveAnchorOnHeightChange: Boolean = true,
     val focusHeightPx: (() -> Int)? = null,
+    val focusLeadingHeightPx: (() -> Int)? = null,
 ) {
     init {
         require(estimatedHeightPx >= 0)
@@ -142,6 +143,7 @@ class LyricsLazyListState(
     private var configuredWidth = -1
     private var configuredSpacing = -1
     private var focusHeights = intArrayOf()
+    private var focusLeadingHeights = intArrayOf()
     private var keys: Map<Any, Int> = emptyMap()
     private var pendingIndex: Int? = initialFirstVisibleItemIndex
     private var pendingOffset = initialFirstVisibleItemScrollOffset
@@ -217,6 +219,7 @@ class LyricsLazyListState(
             heights =
                 LyricsHeightIndex(IntArray(items.size) { items[it].estimatedHeightPx }, spacing)
             focusHeights = IntArray(items.size) { items[it].focusHeightPx?.invoke() ?: 0 }
+            focusLeadingHeights = IntArray(items.size) { items[it].focusLeadingHeightPx?.invoke() ?: 0 }
             configuredWidth = width
             configuredSpacing = spacing
             chain.reset(position)
@@ -265,6 +268,9 @@ class LyricsLazyListState(
                 chain.applyContentShift(index, delta.toDouble())
                 focusHeights[index] = expected
             }
+            val leading = items[index].focusLeadingHeightPx?.invoke() ?: 0
+            chain.applyLeadingContentShift(index, (leading - focusLeadingHeights[index]).toDouble())
+            focusLeadingHeights[index] = leading
         }
     }
 

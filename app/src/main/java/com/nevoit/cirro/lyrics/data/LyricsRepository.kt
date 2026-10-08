@@ -6,12 +6,15 @@ import com.nevoit.cirro.lyrics.model.Lyrics
 import com.nevoit.cirro.lyrics.model.LyricsSource
 import com.nevoit.cirro.lyrics.parser.LrcLyricsParser
 import com.nevoit.cirro.lyrics.parser.TtmlLyricsParser
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -19,17 +22,13 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * ## 取词链
  * 1. **Apple Music 官方 TTML**（需 `media-user-token`）—— 拿 Apple id 有两条路：
- *    ①a AMLL 的 `amll:meta`（免费），①b **自己搜** Apple；
+ *    ①a **自己搜** Apple，①b AMLL 的 `amll:meta`（免费）；
  * 2. **AMLL TTML DB** —— 用网易歌曲 id 直取，**一次请求同时拿到 TTML 和 `appleMusicId`**；
  * 3. **网易 LRC**（只逐行）；
  * 4. **lrclib**。
  *
- * ⚠️ 执行上 AMLL 打头：它既是「第 2 优先源」，又是「第 1 优先源的索引」—— `amll:meta`
- * 里带着 `appleMusicId`，一次请求两用。**但 AMLL 索引只覆盖网易曲库的一小部分**
- * （实测 3586 条），给不出 id 才是常态，所以 Apple 那条路主要靠自己搜
- * （[LyricsBridge.appleSearch] + [AppleSongMatcher]），不再吊死在 AMLL 上。
- *
- * 拿到 id 之后走 Apple 官方；官方没词就用手里的 AMLL TTML；都没有再落网易 / lrclib。
+ * Apple 搜索、AMLL 和网易同时开始。官方命中立即返回；官方未命中时再采用 AMLL、
+ * 已在请求中的网易歌词，最后查询 lrclib。AMLL 提供的 Apple id 仍可补充搜索未命中的结果。
  *
  * ## 缓存
  * 进程内 + 磁盘快照（[LyricsStore]）。同一首歌重复播放零请求；
@@ -46,8 +45,7 @@ class LyricsRepository(
     /** 进程内缓存。键是歌曲 id —— 歌词只跟歌曲有关，与播放列表上下文无关。 */
     private val cache = ConcurrentHashMap<Long, Lyrics>()
 
-    /** 正在取的歌曲 id，避免快速切歌时同一首重复发请求。 */
-    private val inFlight = ConcurrentHashMap.newKeySet<Long>()
+    private val inFlight = ConcurrentHashMap<Long, Deferred<Result<Lyrics>>>()
 
     init {
         // Apple 凭据由 AppleMusicAccountRepository 在 App 启动时下发给原生层，这里不掺和。
@@ -75,27 +73,35 @@ class LyricsRepository(
      * 这类 `Error`（比如 .so 没打进包），那种情况必须变成 `Result.failure` ——
      * 否则它会从 [prefetch] 的 `launch` 里冒出去成为未捕获异常，直接带走进程。
      */
-    suspend fun lyrics(song: Song): Result<Lyrics> = withContext(Dispatchers.IO) {
-        cached(song.id)?.let { return@withContext Result.success(it) }
-        store.read(song.id)?.let { snapshot ->
-            cache[song.id] = snapshot
-            return@withContext Result.success(snapshot)
+    suspend fun lyrics(song: Song): Result<Lyrics> {
+        cached(song.id)?.let { return Result.success(it) }
+        val request = scope.async(Dispatchers.IO, start = CoroutineStart.LAZY) {
+            cached(song.id)?.let { return@async Result.success(it) }
+            store.read(song.id)?.let { snapshot ->
+                cache[song.id] = snapshot
+                return@async Result.success(snapshot)
+            }
+            runCatching { resolve(song) }.getOrElse {
+                if (it is CancellationException) throw it
+                Result.failure(it)
+            }
         }
-        runCatching { resolve(song) }
-            .getOrElse { Result.failure(it) }
+        val existing = inFlight.putIfAbsent(song.id, request)
+        if (existing != null) {
+            request.cancel()
+            return existing.await()
+        }
+        request.invokeOnCompletion { inFlight.remove(song.id, request) }
+        return request.await()
     }
 
     /**
      * 后台预取（切歌时调）。同一首歌已有请求在跑就直接跳过。
      */
     fun prefetch(song: Song) {
-        if (cache.containsKey(song.id) || !inFlight.add(song.id)) return
+        if (cache.containsKey(song.id) || inFlight.containsKey(song.id)) return
         scope.launch {
-            try {
-                lyrics(song).onFailure { Log.d(Tag, "预取 ${song.id} 未取到：${it.message}") }
-            } finally {
-                inFlight.remove(song.id)
-            }
+            lyrics(song).onFailure { Log.d(Tag, "预取 ${song.id} 未取到：${it.message}") }
         }
     }
 
@@ -103,7 +109,31 @@ class LyricsRepository(
     // 取词链本体
     // -----------------------------------------------------------------------
 
-    private fun resolve(song: Song): Result<Lyrics> {
+    private suspend fun resolve(song: Song): Result<Lyrics> {
+        val amll = fetchAsync { LyricsBridge.amll(song.id) }
+        val netease = fetchAsync { LyricsBridge.netease(song.id) }
+        try {
+            return resolve(song, amll, netease)
+        } finally {
+            amll.cancel()
+            netease.cancel()
+        }
+    }
+
+    // JNI 调用无法被协程取消。使用应用作用域，避免官方词已到手还要等其他阻塞调用退出。
+    private fun <T> fetchAsync(block: () -> Result<T>): Deferred<Result<T>> =
+        scope.async(Dispatchers.IO) {
+            runCatching { block() }.getOrElse {
+                if (it is CancellationException) throw it
+                Result.failure(it)
+            }
+        }
+
+    private suspend fun resolve(
+        song: Song,
+        amllRequest: Deferred<Result<AmllTtml?>>,
+        neteaseRequest: Deferred<Result<NeteaseLyric?>>,
+    ): Result<Lyrics> {
         val failures = mutableListOf<String>()
 
         // 取词链的轨迹。这条链跨了 JNI 与四个远程源，而调用方只拿到一个 `Result`；
@@ -125,53 +155,29 @@ class LyricsRepository(
         val configured = runCatching { LyricsBridge.appleConfigured() }.getOrNull()
         trail += "engine=${runCatching { LyricsBridge.version() }.getOrNull() ?: "-"}/apple=$configured"
 
-        // ① 先问 AMLL：它同时给出 TTML 和 Apple id（见类注释）
-        val amll = attempt("AMLL", failures) { LyricsBridge.amll(song.id) }
-        trail += if (amll == null) {
-            "AMLL=未命中"
-        } else {
-            "AMLL=命中(${amll.ttml.length}B, appleIds=${amll.appleMusicIds})"
+        val tried = LinkedHashSet<String>()
+
+        suspend fun takeApple(id: String, via: String): Lyrics? {
+            if (id.isEmpty() || !tried.add(id)) return null
+            val hit = attempt("Apple($id)", failures) { LyricsBridge.apple(id) }
+            if (hit == null) {
+                trail += "Apple($id)=请求失败"
+                return null
+            }
+            val where = "sf=${hit.storefront.ifEmpty { "-" }}" +
+                if (hit.storefrontProbed) "" else "!"
+            trail += "Apple($id)=" + if (hit.ttml.isBlank()) {
+                "无词(reason=${hit.reason.ifEmpty { "-" }}, $where, $via)"
+            } else {
+                "命中(${hit.ttml.length}B, $where, $via)"
+            }
+            if (hit.ttml.isBlank()) return null
+            return parseTtml(hit.ttml, LyricsSource.APPLE_MUSIC, failures)
         }
 
-        // ② Apple 官方。拿 Apple id 有**两条路**：
-        //    a. AMLL 的 `amll:meta`（免费 —— 上一次请求的响应里已经带着了）；
-        //    b. **自己搜**（AMLL 索引只覆盖网易曲库一小部分，没命中的歌以前就卡在
-        //       「跳过(无 appleId)」，永远够不到官方逐字词 —— 真机日志实测）。
         if (configured != true) {
             trail += "Apple=跳过(凭据未就绪)"
         } else {
-            val tried = LinkedHashSet<String>()
-
-            /** 取一次 Apple 官方词。同一个 id 只试一次（搜出来的可能跟 AMLL 给的是同一个）。 */
-            fun takeApple(id: String, via: String): Lyrics? {
-                if (id.isEmpty() || !tried.add(id)) return null
-                val hit = attempt("Apple($id)", failures) { LyricsBridge.apple(id) }
-                if (hit == null) {
-                    trail += "Apple($id)=请求失败"
-                    return null
-                }
-                // storefront 必须带出来：区域取错时这一级**每一首都空手**，而 `reason`
-                // 只会写 `no_lyrics`，光看它分不清「没词」和「区域不对」。末尾的 `!`
-                // 表示这个区域是**回落值**（`/v1/me/storefront` 没探测到），基本等于没戏。
-                val where = "sf=${hit.storefront.ifEmpty { "-" }}" +
-                    if (hit.storefrontProbed) "" else "!"
-                trail += "Apple($id)=" + if (hit.ttml.isBlank()) {
-                    "无词(reason=${hit.reason.ifEmpty { "-" }}, $where, $via)"
-                } else {
-                    "命中(${hit.ttml.length}B, $where, $via)"
-                }
-                if (hit.ttml.isBlank()) return null
-                return parseTtml(hit.ttml, LyricsSource.APPLE_MUSIC, failures)
-            }
-
-            // a. AMLL 给的 id —— 响应里已经带着，零额外请求，先用
-            for (appleId in amll?.appleMusicIds.orEmpty()) {
-                takeApple(appleId, via = "via=amll")?.let { return deliver(it) }
-            }
-
-            // b. 自己搜。AMLL 没命中 / 没给 id / 给的都取不到时，这是唯一的官方入口。
-            //    搜索结果由 AppleSongMatcher 打分挑一条 —— 宁可挑不出（回落网易）
-            //    也不硬凑，挑错等于给用户看**另一首歌**的歌词。
             val term = searchTerm(song)
             if (term.isEmpty()) {
                 trail += "Apple搜索=跳过(无可搜信息)"
@@ -190,7 +196,18 @@ class LyricsRepository(
             }
         }
 
-        // ③ 回落到手里这份 AMLL TTML
+        val amll = attempt("AMLL", failures) { amllRequest.await() }
+        trail += if (amll == null) {
+            "AMLL=未命中"
+        } else {
+            "AMLL=命中(${amll.ttml.length}B, appleIds=${amll.appleMusicIds})"
+        }
+        if (configured == true) {
+            for (appleId in amll?.appleMusicIds.orEmpty()) {
+                takeApple(appleId, via = "via=amll")?.let { return deliver(it) }
+            }
+        }
+
         if (amll != null) {
             val parsed = parseTtml(amll.ttml, LyricsSource.AMLL_TTML_DB, failures)
             trail += "AMLL解析=${if (parsed == null) "失败" else "成功"}"
@@ -198,7 +215,7 @@ class LyricsRepository(
         }
 
         // ④ 网易 LRC（只逐行）
-        val netease = attempt("网易", failures) { LyricsBridge.netease(song.id) }
+        val netease = attempt("网易", failures) { neteaseRequest.await() }
         if (netease == null) {
             trail += "网易=未命中"
         } else {
@@ -272,12 +289,13 @@ class LyricsRepository(
      * 返回 null 有三种情形，这里**故意不区分**：这一级没有词（正常回落）、这一级请求失败、
      * 或者这一级的桥接调用直接抛了（也往下回落）。失败原因只记进口袋，最后一起报。
      */
-    private fun <T> attempt(
+    private suspend fun <T> attempt(
         label: String,
         failures: MutableList<String>,
-        block: () -> Result<T?>,
+        block: suspend () -> Result<T?>,
     ): T? = runCatching { block().onFailure { failures += "$label: ${it.message}" }.getOrNull() }
         .getOrElse {
+            if (it is CancellationException) throw it
             // 🔴 兜 `Error`（`UnsatisfiedLinkError` 之类）：`.so` 没打进包、或它与 Kotlin 侧
             // 的签名对不上时，异常不是 `Result.failure` 而是直接抛 —— 不接住就会从 [resolve]
             // 冒出去，把整条四级链一起带走，退化成「一首歌都取不到」。接住之后最差也只是逐级回落。

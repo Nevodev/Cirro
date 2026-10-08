@@ -69,7 +69,6 @@ private val LyricsScrollSpring = LyricsScrollChain.of(durationMillis = 300f, bou
  * @param songId 当前这首歌的网易云 id。换歌时列表状态整个重建。
  * @param connection 播放连接。位置订阅在面板内部完成——把 `positionMs` 当参数传进来会让
  *   播放页每 500ms 重组一次，而那一页最贵的封面舞台经不起这个。
- * @param color 正文色。收 `ColorProducer` 而不是 `Color`：换歌那 500ms 它是逐帧变的。
  */
 @Composable
 fun LyricsPanel(
@@ -77,14 +76,12 @@ fun LyricsPanel(
     connection: PlaybackConnection,
     seekPreviewPosition: State<Long?>,
     isSeeking: State<Boolean>,
-    color: ColorProducer,
     modifier: Modifier = Modifier,
 ) {
     val repository = koinInject<LyricsRepository>()
     val listState = key(songId) { rememberLyricsLazyListState() }
     val position = rememberLyricsPosition(connection)
     val seeking by isSeeking
-    val textColor = rememberSettledLyricsColor(color)
 
     // 缓存命中是同步的（切歌时 PlaybackService 已经预取过），所以绝大多数情况下第一帧就有词。
     var lyrics by remember(songId) { mutableStateOf(repository.cached(songId)) }
@@ -115,15 +112,20 @@ fun LyricsPanel(
         remember(connection) { { line: ISyncedLine -> connection.seekTo(line.start.toLong()) } }
     val onLinePressed = remember { { _: ISyncedLine -> } }
 
+    val textColor = Color.White
+
     Box(modifier = modifier) {
         val source = lyrics
         val model = remember(source, songId) {
             source?.takeIf { !it.instrumental }?.toSyncedLyrics(songId)
         }
         when {
-            source == null -> LyricsPlaceholder(failure ?: "正在找歌词…", textColor)
-            source.instrumental -> LyricsPlaceholder("纯音乐，请欣赏", textColor)
-            model == null || model.lines.isEmpty() -> LyricsPlaceholder("暂无歌词", textColor)
+            source == null -> LyricsPlaceholder(failure ?: "正在获取歌词...", textColor)
+            model == null || model.lines.isEmpty() || source.instrumental -> LyricsPlaceholder(
+                "暂无歌词",
+                textColor
+            )
+
             else ->
                 KaraokeLyricsView(
                     listState = listState,

@@ -1,4 +1,4 @@
-//! AMLL TTML DB（取词链的第 1 级实际起点，也是第 2 级）。
+//! AMLL TTML DB（官方取词的补充索引与第 2 优先源）。
 //!
 //! 用**网易歌曲 id** 直取：`ncm-lyrics/<ncm_id>.ttml`。这一份文件就是 Apple 官方
 //! TTML 的同源产物，且 `<amll:meta>` 里同时带着 `appleMusicId` —— 所以**一次请求**
@@ -10,8 +10,9 @@
 //! Apple 对应版本，属数据实况 —— 此时跳过 Apple 那级、直接用这份 AMLL TTML。
 
 use crate::engine;
+use tokio::task::JoinSet;
 
-/// 取词 base，源站优先、镜像兜底。
+/// 同时请求的源站与镜像。
 ///
 /// `{id}` 会替换成网易歌曲 id。注意 stevexmh 那家**没有 `.ttml` 后缀**。
 ///
@@ -33,39 +34,61 @@ pub struct AmllHit {
     pub base: String,
 }
 
-/// 按网易歌曲 id 取 AMLL TTML，逐家轮换。
+/// 按网易歌曲 id 并发取 AMLL TTML。
 ///
 /// 返回值分三种：
 /// - `Ok(Some(_))` 取到了；
-/// - `Ok(None)` 每家都明确回「没有这首」（404 / 内容不是 TTML）—— 这**不是错误**；
-/// - `Err(_)` 每家都是传输失败（断网、全部超时）—— 这才是错误，值得让上层知道。
+/// - `Ok(None)` 任意一家明确回「没有这首」（404），取消剩余镜像；
+/// - `Err(_)` 全部请求失败，没有有效的存在 / 不存在响应。
 pub async fn fetch(id: &str) -> Result<Option<AmllHit>, String> {
-    let mut transport_errors: Vec<String> = Vec::new();
-    let mut answered = false;
-
+    let mut requests = JoinSet::new();
     for base in BASES {
         let url = base.replace("{id}", id);
-        match engine::HTTP.get(&url).send().await {
-            Ok(resp) => {
-                let status = resp.status();
-                let body = resp.text().await.unwrap_or_default();
-                answered = true;
+        requests.spawn(fetch_url(engine::HTTP.clone(), url));
+    }
+    first_answer(requests).await
+}
 
-                if status.is_success() && looks_like_ttml(&body) {
-                    return Ok(Some(AmllHit { ttml: body, base: url }));
-                }
-                // 404 或返回了错误页：这家没有，换下一家
-                transport_errors.push(format!("{url} -> HTTP {status} len={}", body.len()));
+async fn fetch_url(client: reqwest::Client, url: String) -> Result<Option<AmllHit>, String> {
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("{url} -> {e}"))?;
+    let status = resp.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !status.is_success() {
+        return Err(format!("{url} -> HTTP {status}"));
+    }
+    let body = resp.text().await.map_err(|e| format!("{url} -> {e}"))?;
+    if looks_like_ttml(&body) {
+        Ok(Some(AmllHit {
+            ttml: body,
+            base: url,
+        }))
+    } else {
+        // HTTP 200 + 限流 HTML 不是「库里没有这首」，不能据此取消其他镜像。
+        Err(format!("{url} -> 非 TTML 响应 len={}", body.len()))
+    }
+}
+
+async fn first_answer(
+    mut requests: JoinSet<Result<Option<AmllHit>, String>>,
+) -> Result<Option<AmllHit>, String> {
+    let mut errors = Vec::new();
+    while let Some(result) = requests.join_next().await {
+        match result {
+            Ok(Ok(answer)) => {
+                requests.abort_all();
+                return Ok(answer);
             }
-            Err(e) => transport_errors.push(format!("{url} -> {e}")),
+            Ok(Err(error)) => errors.push(error),
+            Err(error) => errors.push(error.to_string()),
         }
     }
-
-    if answered {
-        Ok(None)
-    } else {
-        Err(format!("AMLL DB 全部镜像不可达: {}", transport_errors.join("; ")))
-    }
+    Err(format!("AMLL DB 全部镜像请求失败: {}", errors.join("; ")))
 }
 
 /// 判断拿到的是不是 TTML（而不是限流错误页）。
@@ -116,4 +139,99 @@ fn attr(tag: &str, name: &str) -> Option<String> {
     let start = tag.find(&pat)? + pat.len();
     let end = tag[start..].find('"')? + start;
     Some(tag[start..end].to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::future::pending;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    use std::time::Duration;
+
+    struct Dropped(Arc<AtomicBool>);
+
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn missing_answer_cancels_pending_mirrors() {
+        runtime().block_on(async {
+            let dropped = Arc::new(AtomicBool::new(false));
+            let guard = Dropped(dropped.clone());
+            let mut requests = JoinSet::new();
+            requests.spawn(async move {
+                let _guard = guard;
+                pending::<Result<Option<AmllHit>, String>>().await
+            });
+            requests.spawn(async { Ok(None) });
+            let result = tokio::time::timeout(Duration::from_secs(1), first_answer(requests))
+                .await
+                .unwrap();
+            assert!(matches!(result, Ok(None)));
+            tokio::task::yield_now().await;
+            assert!(dropped.load(Ordering::SeqCst));
+        });
+    }
+
+    #[test]
+    fn successful_answer_does_not_wait_for_pending_mirrors() {
+        runtime().block_on(async {
+            let mut requests = JoinSet::new();
+            requests.spawn(pending::<Result<Option<AmllHit>, String>>());
+            requests.spawn(async {
+                Ok(Some(AmllHit {
+                    ttml: "<tt/>".into(),
+                    base: "fast".into(),
+                }))
+            });
+            let result = tokio::time::timeout(Duration::from_secs(1), first_answer(requests))
+                .await
+                .unwrap();
+            assert_eq!(result.unwrap().unwrap().base, "fast");
+        });
+    }
+
+    #[test]
+    fn transport_failure_keeps_other_mirrors_running() {
+        runtime().block_on(async {
+            let mut requests = JoinSet::new();
+            requests.spawn(async { Err("timeout".into()) });
+            requests.spawn(async {
+                tokio::task::yield_now().await;
+                Ok(Some(AmllHit {
+                    ttml: "<tt/>".into(),
+                    base: "healthy".into(),
+                }))
+            });
+            assert_eq!(
+                first_answer(requests).await.unwrap().unwrap().base,
+                "healthy"
+            );
+        });
+    }
+
+    #[test]
+    fn all_transport_failures_report_an_error() {
+        runtime().block_on(async {
+            let mut requests = JoinSet::new();
+            requests.spawn(async { Err("timeout".into()) });
+            requests.spawn(async { Err("HTTP 500".into()) });
+            let error = first_answer(requests).await.err().unwrap();
+            assert!(error.contains("timeout"));
+            assert!(error.contains("HTTP 500"));
+        });
+    }
 }

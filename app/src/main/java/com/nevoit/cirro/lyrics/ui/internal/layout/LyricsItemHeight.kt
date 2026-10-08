@@ -10,6 +10,15 @@ import com.nevoit.cirro.lyrics.ui.preparation.PreparedLine
  */
 internal const val LineVerticalPaddingDp = 12f
 
+internal fun PreparedLine.settledLeadingHeight(
+    translationShown: Boolean,
+    phoneticShown: Boolean,
+    density: Float,
+    ownerFocused: Boolean,
+): Float = before.sumOf {
+    it.settledHeight(translationShown, phoneticShown, density, ownerFocused, true).toDouble()
+}.toFloat()
+
 /** Nested vocals occupy space only while their owning list item is focused. */
 internal fun PreparedLine.settledHeight(
     translationShown: Boolean,

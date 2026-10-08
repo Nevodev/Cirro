@@ -27,6 +27,9 @@ import com.nevoit.cirro.lyrics.ui.internal.diagnostics.traceLyrics
 import com.nevoit.cirro.lyrics.ui.internal.effects.LyricsReveal
 import com.nevoit.cirro.lyrics.ui.internal.effects.LyricsRevealSpring
 import com.nevoit.cirro.lyrics.ui.internal.effects.BgvExitSpring
+import com.nevoit.cirro.lyrics.ui.internal.effects.lyricsContentOffset
+import com.nevoit.cirro.lyrics.ui.internal.layout.settledHeight
+import com.nevoit.cirro.lyrics.ui.internal.layout.LineVerticalPaddingDp
 import com.nevoit.cirro.lyrics.ui.internal.playback.LyricsPlaybackState
 import com.nevoit.cirro.lyrics.ui.preparation.PreparedLine
 import kotlin.math.roundToInt
@@ -43,6 +46,7 @@ internal fun PreparedLineText(
     showPhonetic: Boolean = true,
     showDebugRectangles: Boolean = false,
     occupied: (() -> Boolean)? = null,
+    leadingContentOffset: () -> Float = { 0f },
 ) {
     val density = LocalDensity.current
     val activeColor = resources.color
@@ -56,6 +60,14 @@ internal fun PreparedLineText(
             label = "inlinePhonetic",
         )
     val accompaniment = prepared.source is KaraokeLine.AccompanimentKaraokeLine
+    val leadingHeights = remember(prepared, density.density) {
+        prepared.before.map { it.settledHeight(true, true, density.density, true, true) }
+    }
+    val leadingHeight = leadingHeights.sum()
+    val visualHeight = remember(prepared, density.density, verticalPadding) {
+        prepared.settledHeight(true, true, density.density, true) +
+            2f * (verticalPadding.value - LineVerticalPaddingDp) * density.density
+    }
     LyricsReveal(
         visible = playback.line(prepared).visible.value,
         animateInitial = accompaniment,
@@ -69,6 +81,8 @@ internal fun PreparedLineText(
             else TransformOrigin.Center,
         // The owner supplies occupancy independently of the backing vocal's visible window.
         occupied = occupied ?: if (accompaniment) ownerFocused else null,
+        visualHeight = visualHeight,
+        verticalOverflow = leadingHeight,
     ) {
         Column(
             modifier
@@ -80,129 +94,145 @@ internal fun PreparedLineText(
                 ),
             horizontalAlignment = alignment,
         ) {
-            for (line in prepared.before) PreparedLineText(
-                line,
-                playback = playback,
-                resources = resources,
-                ownerFocused = ownerFocused,
-                occupied = ownerFocused,
-                showTranslation = showTranslation,
-                showPhonetic = showPhonetic,
-                showDebugRectangles = showDebugRectangles,
-            )
-            // Separate draw scopes mean a ticking row cannot invalidate its static neighbours.
-            Column(Modifier.fillMaxWidth()) {
-                for ((index, row) in prepared.rows.withIndex()) {
-                    val clock = playback.row(row).time
-                    val renderState = resources.row(row)
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .layout { measurable, constraints ->
-                                val placeable = measurable.measure(constraints)
-                                val hidden =
-                                    row.phoneticHeight * (1f - phoneticProgress.value.coerceIn(
-                                        0f,
-                                        1f
-                                    ))
-                                layout(
-                                    placeable.width,
-                                    (placeable.height - hidden).roundToInt().coerceAtLeast(0),
-                                ) {
-                                    placeable.place(0, 0)
-                                }
-                            }
-                            .height(with(density) { row.height.toDp() })
-                            .drawWithCache {
-                                val layers = raster.rows[index]
-                                val glows =
-                                    layers
-                                        .takeIf { it.hasGlow || it.hasPhonetics }
-                                        ?.let {
-                                            traceLyrics("Lyrics.layerCache") {
-                                                RowGlowLayers(
-                                                    this,
-                                                    it
-                                                )
-                                            }
-                                        }
-                                onDrawBehind {
-                                    val progress = phoneticProgress.value.coerceIn(0f, 1f)
-                                    translate(
-                                        top = -row.top - row.phoneticHeight * (1f - progress)
+            var prefix = 0f
+            for ((index, line) in prepared.before.withIndex()) {
+                val precedingHeight = prefix
+                Box(Modifier.lyricsContentOffset(precedingHeight, leadingHeights[index]) {
+                    leadingContentOffset() * (precedingHeight / leadingHeight)
+                }) {
+                    PreparedLineText(
+                        line,
+                        playback = playback,
+                        resources = resources,
+                        ownerFocused = ownerFocused,
+                        occupied = ownerFocused,
+                        showTranslation = showTranslation,
+                        showPhonetic = showPhonetic,
+                        showDebugRectangles = showDebugRectangles,
+                    )
+                }
+                prefix += leadingHeights[index]
+            }
+            Column(
+                Modifier.fillMaxWidth().lyricsContentOffset(
+                    leadingHeight, visualHeight - leadingHeight, leadingContentOffset,
+                ),
+                horizontalAlignment = alignment,
+            ) {
+                // Separate draw scopes mean a ticking row cannot invalidate its static neighbours.
+                Column(Modifier.fillMaxWidth()) {
+                    for ((index, row) in prepared.rows.withIndex()) {
+                        val clock = playback.row(row).time
+                        val renderState = resources.row(row)
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .layout { measurable, constraints ->
+                                    val placeable = measurable.measure(constraints)
+                                    val hidden =
+                                        row.phoneticHeight * (1f - phoneticProgress.value.coerceIn(
+                                            0f,
+                                            1f
+                                        ))
+                                    layout(
+                                        placeable.width,
+                                        (placeable.height - hidden).roundToInt().coerceAtLeast(0),
                                     ) {
-                                        drawPreparedRow(
-                                            row,
-                                            clock.intValue,
-                                            renderState,
-                                            activeColor,
-                                            paints,
-                                            showDebugRectangles,
-                                            layers,
-                                            glows,
-                                            progress,
-                                        )
+                                        placeable.place(0, 0)
                                     }
                                 }
-                            }
+                                .height(with(density) { row.height.toDp() })
+                                .drawWithCache {
+                                    val layers = raster.rows[index]
+                                    val glows =
+                                        layers
+                                            .takeIf { it.hasGlow || it.hasPhonetics }
+                                            ?.let {
+                                                traceLyrics("Lyrics.layerCache") {
+                                                    RowGlowLayers(
+                                                        this,
+                                                        it
+                                                    )
+                                                }
+                                            }
+                                    onDrawBehind {
+                                        val progress = phoneticProgress.value.coerceIn(0f, 1f)
+                                        translate(
+                                            top = -row.top - row.phoneticHeight * (1f - progress)
+                                        ) {
+                                            drawPreparedRow(
+                                                row,
+                                                clock.intValue,
+                                                renderState,
+                                                activeColor,
+                                                paints,
+                                                showDebugRectangles,
+                                                layers,
+                                                glows,
+                                                progress,
+                                            )
+                                        }
+                                    }
+                                }
+                        )
+                    }
+                }
+                if (prepared.translation != null || prepared.phonetic != null) {
+                    val captionGap =
+                        animateFloatAsState(
+                            if (
+                                (showTranslation && prepared.translation != null) ||
+                                (showPhonetic && prepared.phonetic != null)
+                            )
+                                8f
+                            else 0f,
+                            LyricsRevealSpring,
+                            label = "captionGap",
+                        )
+                    Spacer(
+                        Modifier.layout { _, constraints ->
+                            layout(
+                                constraints.minWidth,
+                                constraints.constrainHeight(captionGap.value.dp.roundToPx()),
+                            ) {}
+                        }
                     )
                 }
-            }
-            if (prepared.translation != null || prepared.phonetic != null) {
-                val captionGap =
-                    animateFloatAsState(
-                        if (
-                            (showTranslation && prepared.translation != null) ||
-                            (showPhonetic && prepared.phonetic != null)
-                        )
-                            8f
-                        else 0f,
-                        LyricsRevealSpring,
-                        label = "captionGap",
-                    )
-                Spacer(
-                    Modifier.layout { _, constraints ->
-                        layout(
-                            constraints.minWidth,
-                            constraints.constrainHeight(captionGap.value.dp.roundToPx()),
-                        ) {}
+                prepared.translation?.let { layout ->
+                    LyricsReveal(showTranslation) {
+                        Canvas(
+                            Modifier.size(
+                                with(density) { layout.size.width.toDp() },
+                                with(density) { layout.size.height.toDp() },
+                            )
+                        ) {
+                            drawText(layout, paints.phoneticColor)
+                        }
                     }
+                }
+                prepared.phonetic?.let { layout ->
+                    LyricsReveal(showPhonetic) {
+                        Canvas(
+                            Modifier.size(
+                                with(density) { layout.size.width.toDp() },
+                                with(density) { layout.size.height.toDp() },
+                            )
+                        ) {
+                            drawText(layout, paints.phoneticColor)
+                        }
+                    }
+                }
+                for (line in prepared.after) PreparedLineText(
+                    line,
+                    playback = playback,
+                    resources = resources,
+                    ownerFocused = ownerFocused,
+                    occupied = ownerFocused,
+                    showTranslation = showTranslation,
+                    showPhonetic = showPhonetic,
+                    showDebugRectangles = showDebugRectangles,
                 )
             }
-            prepared.translation?.let { layout ->
-                LyricsReveal(showTranslation) {
-                    Canvas(
-                        Modifier.size(
-                            with(density) { layout.size.width.toDp() },
-                            with(density) { layout.size.height.toDp() },
-                        )
-                    ) {
-                        drawText(layout, paints.phoneticColor)
-                    }
-                }
-            }
-            prepared.phonetic?.let { layout ->
-                LyricsReveal(showPhonetic) {
-                    Canvas(
-                        Modifier.size(
-                            with(density) { layout.size.width.toDp() },
-                            with(density) { layout.size.height.toDp() },
-                        )
-                    ) {
-                        drawText(layout, paints.phoneticColor)
-                    }
-                }
-            }
-            for (line in prepared.after) PreparedLineText(
-                line,
-                playback = playback,
-                resources = resources,
-                ownerFocused = ownerFocused,
-                occupied = ownerFocused,
-                showTranslation = showTranslation,
-                showPhonetic = showPhonetic,
-                showDebugRectangles = showDebugRectangles,
-            )
         }
     }
 }

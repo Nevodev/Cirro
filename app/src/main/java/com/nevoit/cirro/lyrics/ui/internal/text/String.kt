@@ -7,19 +7,19 @@ import android.os.Build
 
 private val cjkBlocks: Set<Character.UnicodeBlock> by lazy {
     mutableSetOf(
-            Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS,
-            Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A,
-            Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_B,
-            Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_C,
-            Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_D,
-            Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS,
-            Character.UnicodeBlock.CJK_SYMBOLS_AND_PUNCTUATION,
-            Character.UnicodeBlock.HIRAGANA,
-            Character.UnicodeBlock.KATAKANA,
-            Character.UnicodeBlock.HANGUL_SYLLABLES,
-            Character.UnicodeBlock.HANGUL_JAMO,
-            Character.UnicodeBlock.HANGUL_COMPATIBILITY_JAMO,
-        )
+        Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS,
+        Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A,
+        Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_B,
+        Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_C,
+        Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_D,
+        Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS,
+        Character.UnicodeBlock.CJK_SYMBOLS_AND_PUNCTUATION,
+        Character.UnicodeBlock.HIRAGANA,
+        Character.UnicodeBlock.KATAKANA,
+        Character.UnicodeBlock.HANGUL_SYLLABLES,
+        Character.UnicodeBlock.HANGUL_JAMO,
+        Character.UnicodeBlock.HANGUL_COMPATIBILITY_JAMO,
+    )
         .apply {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 add(Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_E)
@@ -34,12 +34,12 @@ private val cjkBlocks: Set<Character.UnicodeBlock> by lazy {
 
 private val arabicBlocks: Set<Character.UnicodeBlock> by lazy {
     mutableSetOf(
-            Character.UnicodeBlock.ARABIC,
-            Character.UnicodeBlock.ARABIC_SUPPLEMENT,
-            Character.UnicodeBlock.ARABIC_EXTENDED_A,
-            Character.UnicodeBlock.ARABIC_PRESENTATION_FORMS_A,
-            Character.UnicodeBlock.ARABIC_PRESENTATION_FORMS_B,
-        )
+        Character.UnicodeBlock.ARABIC,
+        Character.UnicodeBlock.ARABIC_SUPPLEMENT,
+        Character.UnicodeBlock.ARABIC_EXTENDED_A,
+        Character.UnicodeBlock.ARABIC_PRESENTATION_FORMS_A,
+        Character.UnicodeBlock.ARABIC_PRESENTATION_FORMS_B,
+    )
         .apply {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
                 add(Character.UnicodeBlock.ARABIC_EXTENDED_B)
@@ -53,7 +53,7 @@ private val devanagariBlocks: Set<Character.UnicodeBlock> by lazy {
 
 internal fun Char.isCjk(): Boolean {
     return try {
-        Character.UnicodeBlock.of(this) in cjkBlocks
+        Character.UnicodeBlock.of(this)?.let { it in cjkBlocks } == true
     } catch (e: Exception) {
         false
     }
@@ -69,7 +69,7 @@ internal fun Char.isKorean(): Boolean {
 
 internal fun Char.isArabic(): Boolean {
     return try {
-        Character.UnicodeBlock.of(this) in arabicBlocks
+        Character.UnicodeBlock.of(this)?.let { it in arabicBlocks } == true
     } catch (e: Exception) {
         false
     }
@@ -77,7 +77,7 @@ internal fun Char.isArabic(): Boolean {
 
 internal fun Char.isDevanagari(): Boolean {
     return try {
-        Character.UnicodeBlock.of(this) in devanagariBlocks
+        Character.UnicodeBlock.of(this)?.let { it in devanagariBlocks } == true
     } catch (e: Exception) {
         false
     }
@@ -115,6 +115,7 @@ internal fun Char.isProfilePunctuation(): Boolean =
         CharCategory.INITIAL_QUOTE_PUNCTUATION,
         CharCategory.FINAL_QUOTE_PUNCTUATION,
         CharCategory.OTHER_PUNCTUATION -> true
+
         else -> this == '～'
     }
 
