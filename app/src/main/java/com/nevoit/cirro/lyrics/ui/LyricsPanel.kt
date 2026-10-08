@@ -94,10 +94,14 @@ fun LyricsPanel(
     /**
      * 歌词内容（或占位符）**测量完成**时上报。每帧布局都会调，播放页自己保证幂等。
      *
-     * 播放页把它当**歌词进场的第二道门**（第一道门是封面收回到位）：过了才让 alpha/scale 起跑。
-     * 不设这道门，进场动画会耗在「场景还没发布、无物可画」的空白期里，等真出画面时已经跑完了。
+     * 播放页把它当**歌词进场的门**：过了才让 alpha/scale 起跑。不设这道门，进场动画会耗在
+     * 「场景还没发布、无物可画」的空白期里，等真出画面时已经跑完了。
+     *
+     * @param renderable 这次落定的是**真歌词**吗。真歌词落定 ⟺ 场景已发布 ⟺ 位图缓存已经填上，
+     *   于是播放页知道**下一次**打开这首歌可以直接等歌词（三者同起）；占位符（没取到词 / 纯音乐）
+     *   那条路没有任何缓存可复用，不置位。
      */
-    onContentReady: () -> Unit = {},
+    onContentReady: (renderable: Boolean) -> Unit = {},
 ) {
     val repository = koinInject<LyricsRepository>()
     val listState = key(songId) { rememberLyricsLazyListState() }
@@ -107,20 +111,26 @@ fun LyricsPanel(
     // 上报是幂等的：布局每帧都回调，这里只放行第一次。`rememberUpdatedState` 兜住回调换实例。
     val latestReady = rememberUpdatedState(onContentReady)
     val reported = remember { booleanArrayOf(false) }
-    val reportReady = remember {
-        {
+    val reportReady: (Boolean) -> Unit = remember {
+        { renderable: Boolean ->
             if (!reported[0]) {
                 reported[0] = true
-                latestReady.value()
+                latestReady.value(renderable)
             }
         }
     }
+
+    // 占位符与真歌词两条路共用这一次上报，差别只在 `renderable`（见 `onContentReady` 的说明）。
+    // 占位符先到、之后才取到词的情况不会再补一次 —— 播放页那颗「已预热」的位就保守地不置，
+    // 下次打开退回「封面先行」，慢一点但不会卡。
+    val placeholderReady = remember { { reportReady(false) } }
+    val lyricsContentReady = remember { { reportReady(true) } }
 
     // 兜底：万一场景一直没落定（取词/排版出了岔子），封面不能永远不收——那是比动画难看
     // 严重得多的事故。正常路径上 `reportReady` 早就在第一帧布局后先到了，这里只是保险。
     LaunchedEffect(songId) {
         delay(ContentReadyFallbackMs.milliseconds)
-        reportReady()
+        reportReady(false)
     }
 
     // 占位符没有 `Plus` 合成层（只有一段文字），所以可以放心在它自己的图层上做进出场；
@@ -173,14 +183,14 @@ fun LyricsPanel(
             source == null -> LyricsPlaceholder(
                 failure ?: "正在获取歌词...",
                 textColor,
-                modifier = placeholderTransform.onMeasured(reportReady),
+                modifier = placeholderTransform.onMeasured(placeholderReady),
             )
 
             model == null || model.lines.isEmpty() || source.instrumental ->
                 LyricsPlaceholder(
                     "暂无歌词",
                     textColor,
-                    modifier = placeholderTransform.onMeasured(reportReady),
+                    modifier = placeholderTransform.onMeasured(placeholderReady),
                 )
 
             else ->
@@ -198,7 +208,7 @@ fun LyricsPanel(
                     scrollChain = LyricsScrollSpring,
                     panelAlpha = panelAlpha,
                     panelScale = panelScale,
-                    contentReady = reportReady,
+                    contentReady = lyricsContentReady,
                     modifier = Modifier.fillMaxSize(),
                 )
         }

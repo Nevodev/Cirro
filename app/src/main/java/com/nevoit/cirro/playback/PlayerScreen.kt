@@ -152,11 +152,13 @@ private const val LyricsFadeInMs = 220
 private const val LyricsFadeOutMs = 160
 
 /**
- * 「封面已收回到位」的判定阈值 —— 歌词进场等它。
+ * 「封面已收回到位」的判定阈值 —— **未预热**时歌词进场等它。
  *
  * 不等到 1：封面那条弹簧的 `visibilityThreshold = 0.0001f` 是为**数学收敛**设的，ζ=0.85 时
  * 要跑到 ~700ms 才停；而视觉上 280ms 左右就已经到位了（这个阻尼比下过冲只有 0.6%，峰值在
  * 379ms，所以 0.98 是在峰前跨过的）。取 0.98 = 「看得出来已经到了」的那一帧。
+ *
+ * 预热过的那条路不用它：场景发布只剩两三帧，让封面和歌词一起等更整齐。
  */
 private const val CollapseSettled = 0.98f
 
@@ -499,21 +501,46 @@ private fun PlayerOverlay(
     // 只留当前这一首（换歌即替换），常驻占用上限与「面板开着」时相同。
     val lyricsRenderCache = remember { LyricsRenderCache() }
 
-    // 歌词内容（或占位符）**测量完成**的 latch，进场的第二道门（第一道门是封面落位）。
-    // 布局每帧都会上报，这里只认第一次。
+    // 这首歌在本播放页里**已经跑过一次真歌词场景**（于是位图缓存已填）。两种时序在这里分岔：
+    //
+    // - 已预热：场景发布只剩两帧（排版缓存 + 位图缓存都命中）。等它的代价可以忽略，那就让封面
+    //   和标题行一起等 —— 歌词落定那一帧，三件事同起。
+    // - 未预热：首次要付一次整曲光栅化。等它就是「点下去先僵一段、再一起动」，不如按老办法让
+    //   封面先走，收完再放歌词出来。
+    //
+    // `remember(song.id)`：换歌即重置（位图缓存是单槽，换歌就被顶掉）；关掉播放页整个 remember
+    // 一起没。判的是「打开过」而不是逐字段比 key —— 播放页拿不到 `prepared` 引用（那是歌词侧才
+    // 有的东西），精确比对在这里做不到。而颜色写死、密度与方向在一次播放页里不变，
+    // 「打开过」与「缓存命中」实际等价。
+    var lyricsWarmed by remember(song.id) { mutableStateOf(false) }
+
+    // 歌词内容**测量完成**的 latch，进场的门。布局每帧都会上报，这里只认第一次。
     var lyricsReady by remember { mutableStateOf(false) }
-    val onLyricsReady = remember { { lyricsReady = true } }
+    // 参数是「这次落定的是真歌词吗」：真歌词落定意味着位图缓存已经填上，置位后**下一次**打开
+    // 就走「三者同起」；占位符（没取到词 / 纯音乐）没有任何缓存可复用，不置位。
+    val onLyricsReady: (Boolean) -> Unit = remember(song.id) {
+        { renderable: Boolean ->
+            lyricsReady = true
+            if (renderable) lyricsWarmed = true
+        }
+    }
 
     // 收起进度：0 = 展开（大封面居中 + 信息整行），1 = 收起（封面缩成小方块、落到标题左侧）。
     // 只建 State，值一律留到 graphicsLayer 的 block 里读——它每帧都在变，组合期读一次就等于
     // 整棵子树每帧重组，跟主题色那条规矩一模一样。
     //
-    // 🔴 **不等歌词**：一点就得看得见封面在动。曾经让它等「歌词落定」，结果点下去到动画起步
-    // 之间隔着一整段场景发布的时间（两次后台往返，其中一次是整曲光栅化）—— 那段光标不动，
-    // 用户感觉就是「卡了一下」。现在顺序反过来：封面立刻收，收完再放歌词出来。
+    // 🔴 唯一会推迟它的就是上面那条 `waitForLyrics`，而且代价有上限：预热路径下场景发布只剩
+    // 两三帧。曾经无条件等歌词，结果点下去到动画起步之间隔着整段场景发布（两次后台往返，其中
+    // 一次是整曲光栅化）—— 那段光标不动，用户感觉就是「卡了一下」。所以未预热时封面照旧立刻走。
     val collapsed = panel != null
+
+    // 要不要为了歌词把封面 / 标题行也推迟。只在「歌词面板开着 + 预热过 + 还没落定」时成立。
+    // `lyricsVisible` 必须在条件里：待播列表面板下 `collapsed` 同样为真，而 `lyricsReady` 是
+    // false，少了它封面就永远收不了。
+    val waitForLyrics = collapsed && lyricsVisible && lyricsWarmed && !lyricsReady
+
     val collapseCover = animateFloatAsState(
-        targetValue = if (collapsed) 1f else 0f,
+        targetValue = if (collapsed && !waitForLyrics) 1f else 0f,
         animationSpec = if (collapsed) Springs.smooth(
             durationMillis = 400,
             visibilityThreshold = 0.0001f,
@@ -526,10 +553,27 @@ private fun PlayerOverlay(
     )
 
     val collapseMeta = animateFloatAsState(
-        targetValue = if (collapsed) 1f else 0f,
+        targetValue = if (collapsed && !waitForLyrics) 1f else 0f,
         animationSpec = Springs.smooth(durationMillis = 400, visibilityThreshold = 0.0001f),
         label = "PlayerCollapse",
     )
+
+    // 「标题行左边给封面占出的那一格」什么时候才算数。
+    //
+    // 🔴 不能直接用 `collapsed`。这一格是**布局一步到位**的：`PlayerMeta` 在 Row 里是 `weight(1f)`，
+    // 格子一占上，标题/歌手的可用宽度立刻少一格（两个 `marquee()` 的可视区跟着变），而**位移**
+    // 是由 meta 自己的 `graphicsLayer` 补出来的。宽度跑在位移前面 → 长标题会在**原地**先缩一下、
+    // 再滑过去。`waitForLyrics` 又给「点开到真的动」之间插了几帧，更看得出来。
+    //
+    // 所以拿位移本身当开关：收起时等 progress 离开 0，展开时等它离开 1，才换宽度。
+    // ⚠️ **位置不受这个开关影响**：两种布局下视觉位置都是 `rowLeft + gap * progress`（见下面
+    // `translationX` 的两支），所以这一格什么时候翻都不会把位移弄断。
+    var metaCell by remember { mutableStateOf(false) }
+    LaunchedEffect(collapsed) {
+        if (collapsed) snapshotFlow { collapseMeta.value }.first { it > 0f }
+        else snapshotFlow { collapseMeta.value }.first { it < 1f }
+        metaCell = collapsed
+    }
 
     LaunchedEffect(lyricsVisible) {
         if (!lyricsVisible) {
@@ -544,13 +588,13 @@ private fun PlayerOverlay(
             lyricsReady = false
             return@LaunchedEffect
         }
-        // 第一道门：**封面收回到位**。两道门都过了才起跑，所以「封面先回去、歌词再出来」
-        // 是硬顺序，不是靠两个时长凑出来的巧合 —— 以后改封面弹簧也不会把它改坏。
-        if (collapseCover.value < CollapseSettled)
+        // 未预热：封面先收，收完再放歌词出来。这道门不能省，否则歌词的淡入会整段耗在
+        // 「场景还没发布」的空白期里 —— 那正是最早那版翻车的形态。
+        // 预热过就跳过它：封面 / 标题行的 target 也挂在同一个 `lyricsReady` 上（见
+        // `waitForLyrics`），所以三件事在同一帧起跑，不需要在这里对齐。
+        if (!lyricsWarmed && collapseCover.value < CollapseSettled)
             snapshotFlow { collapseCover.value }.first { it >= CollapseSettled }
-        // 第二道门：歌词落定。已经 true 就不等 —— 占位符分支在第一帧布局就会上报，那条路零等待。
-        // 这道门不能省：封面 280ms 就到位了，而场景发布可能更慢，不等的话进场动画又会
-        // 整段耗在「还没东西可画」的空白期里（那正是上一版翻车的形态）。
+        // 歌词落定。已经 true 就不等 —— 占位符分支在第一帧布局就会上报，那条路零等待。
         if (!lyricsReady) snapshotFlow { lyricsReady }.first { it }
         lyricsPresent = true
         launch { lyricsAlpha.animateTo(1f, tween(LyricsFadeInMs)) }
@@ -616,6 +660,7 @@ private fun PlayerOverlay(
                 // 所以两块必须同父，`zIndex` 才管得住谁压谁。Box 默认不裁剪，封面飞出去也不会被切。
                 Box(
                     modifier = Modifier
+                        .zIndex(999f)
                         .weight(1f)
                         .fillMaxWidth()
                 ) {
@@ -642,7 +687,6 @@ private fun PlayerOverlay(
                     }
                     PlayerStage(
                         modifier = Modifier
-                            .zIndex(999f)
                             .padding(24.dp),
                         cover = cover,
                         collapse = collapseCover,
@@ -663,9 +707,11 @@ private fun PlayerOverlay(
                     // 收起时在标题左边占出一格给封面：直接把这个 Row 的剩余宽度减掉
                     // 「封面边长 + 间距」。宽度是布局一步到位的（meta「直接变成目标大小」），
                     // 位移动画由 meta 自己的 graphicsLayer 补出来，这里只负责把格子占住。
+                    // 🔴 开关是 `metaCell` 而不是 `collapsed` —— 要等位移真的开始，这一格才占上，
+                    // 否则标题会先在原地缩一下（见那边的说明）。
                     Spacer(
                         Modifier.width(
-                            if (collapsed) CollapsedCoverSize + CollapsedCoverGap else 0.dp
+                            if (metaCell) CollapsedCoverSize + CollapsedCoverGap else 0.dp
                         )
                     )
                     PlayerMeta(
@@ -677,10 +723,12 @@ private fun PlayerOverlay(
                             // 收起：布局已经被上面那格推到右边，先把 meta 拉回原位再滑过去；
                             // 展开：布局已经回到左边，从收起位滑回来。方向跟当前布局是
                             // 「有格子」还是「没格子」绑着，两个方向都得对得上，不能只写一边。
+                            // 🔴 判据必须跟上面那格**同一个** `metaCell`：布局位置和补偿量一旦
+                            // 对不上，视觉位置就会从 `rowLeft + gap * progress` 上跳一下。
                             val shift = (CollapsedCoverSize + CollapsedCoverGap).toPx()
                             val progress = collapseMeta.value.coerceIn(0f, 1f)
                             translationX =
-                                if (collapsed) -shift * (1f - progress) else shift * progress
+                                if (metaCell) -shift * (1f - progress) else shift * progress
                         },
                     )
                     HGap()
