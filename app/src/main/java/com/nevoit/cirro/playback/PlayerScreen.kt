@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
@@ -35,6 +36,7 @@ import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
@@ -79,6 +81,8 @@ import com.kyant.shapes.RoundedRectangle
 import com.nevoit.cirro.R
 import com.nevoit.cirro.data.model.PlayMode
 import com.nevoit.cirro.lyrics.ui.LyricsPanel
+import com.nevoit.cirro.lyrics.ui.internal.rendering.LocalLyricsRenderCache
+import com.nevoit.cirro.lyrics.ui.internal.rendering.LyricsRenderCache
 import com.nevoit.cirro.palette.CoverPalette
 import com.nevoit.cirro.playback.pearmesh.PearMeshState
 import com.nevoit.cirro.playback.pearmesh.PearMeshSurface
@@ -96,11 +100,14 @@ import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.local.ProvideContentColor
 import com.nevoit.material.theme.tokens.Springs
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.compose.koinInject
 import java.util.Locale
@@ -126,6 +133,32 @@ private val MetaButtonSize = 40.dp
 
 /** 收起（点歌词/待播列表）时封面缩到的小方块边长：落到标题行左侧让出的那一格。 */
 private val CollapsedCoverSize = 48.dp
+
+/**
+ * 歌词面板退场时的缩放（出场就是从它长到 1）。大小变化走 [LyricsScaleSpring]。
+ *
+ * 取比 1 略小而不是从 0 起：歌词是「换一块内容」而不是「弹出一个东西」，幅度大了像飞盘。
+ */
+private const val LyricsPanelScale = 0.92f
+
+/** 歌词面板缩放的弹簧。`Springs.smooth` 的 bounce 是 0，不会过冲——过冲会被外面的裁剪切掉。 */
+private val LyricsScaleSpring =
+    Springs.smooth<Float>(durationMillis = 400, visibilityThreshold = 0.0001f)
+
+/** 歌词面板出场的不透明度时长。透明走普通 tween，不跟弹簧掺在一起。 */
+private const val LyricsFadeInMs = 220
+
+/** 退场比出场快一点：收得利落些，也不至于让被压在下面的封面等太久。 */
+private const val LyricsFadeOutMs = 160
+
+/**
+ * 「封面已收回到位」的判定阈值 —— 歌词进场等它。
+ *
+ * 不等到 1：封面那条弹簧的 `visibilityThreshold = 0.0001f` 是为**数学收敛**设的，ζ=0.85 时
+ * 要跑到 ~700ms 才停；而视觉上 280ms 左右就已经到位了（这个阻尼比下过冲只有 0.6%，峰值在
+ * 379ms，所以 0.98 是在峰前跨过的）。取 0.98 = 「看得出来已经到了」的那一帧。
+ */
+private const val CollapseSettled = 0.98f
 
 /** 收起时小封面与标题之间的间隔。 */
 private val CollapsedCoverGap = 12.dp
@@ -447,9 +480,37 @@ private fun PlayerOverlay(
     // 所以不能拿一个"总有一边选中"的枚举初值来起头。
     var panel by remember { mutableStateOf<PlayerPanel?>(null) }
 
+    // 歌词面板的进出场：**缩放走 spring、透明度走 tween**，两个值都交给 `LyricsPanel`，
+    // 由它转交给 `KaraokeLyricsView` 的 `Plus` 合成层 —— 动画必须挂在那层上，在外面再包一层
+    // 会把叠加上色的对象换成空图层，发光就没了。这里只持有动画值和**组合生命周期**：
+    // 退出动画跑完才把子树摘掉，否则没有退场可言。
+    val lyricsVisible = panel == PlayerPanel.LYRICS
+    var lyricsPresent by remember { mutableStateOf(false) }
+    val lyricsAlpha = remember { Animatable(0f) }
+    val lyricsScale = remember { Animatable(LyricsPanelScale) }
+    // 生产者保持引用恒定，免得每帧给下游一个新 lambda。
+    // `Animatable.value` 是快照状态，在图层段读 → 只重绘不重组。
+    val lyricsAlphaProducer = remember { { lyricsAlpha.value } }
+    val lyricsScaleProducer = remember { { lyricsScale.value } }
+
+    // 歌词位图的单槽缓存：**挂在播放页的生命周期上**。
+    // `PlayerLayer` 在 `present == false` 时整棵子树从组合里摘掉，这个 remember 跟着一起没 ——
+    // 所以「页内关掉再打开歌词」是零成本复用，「关掉播放页」自动失效，不需要手工清理。
+    // 只留当前这一首（换歌即替换），常驻占用上限与「面板开着」时相同。
+    val lyricsRenderCache = remember { LyricsRenderCache() }
+
+    // 歌词内容（或占位符）**测量完成**的 latch，进场的第二道门（第一道门是封面落位）。
+    // 布局每帧都会上报，这里只认第一次。
+    var lyricsReady by remember { mutableStateOf(false) }
+    val onLyricsReady = remember { { lyricsReady = true } }
+
     // 收起进度：0 = 展开（大封面居中 + 信息整行），1 = 收起（封面缩成小方块、落到标题左侧）。
     // 只建 State，值一律留到 graphicsLayer 的 block 里读——它每帧都在变，组合期读一次就等于
     // 整棵子树每帧重组，跟主题色那条规矩一模一样。
+    //
+    // 🔴 **不等歌词**：一点就得看得见封面在动。曾经让它等「歌词落定」，结果点下去到动画起步
+    // 之间隔着一整段场景发布的时间（两次后台往返，其中一次是整曲光栅化）—— 那段光标不动，
+    // 用户感觉就是「卡了一下」。现在顺序反过来：封面立刻收，收完再放歌词出来。
     val collapsed = panel != null
     val collapseCover = animateFloatAsState(
         targetValue = if (collapsed) 1f else 0f,
@@ -469,6 +530,32 @@ private fun PlayerOverlay(
         animationSpec = Springs.smooth(durationMillis = 400, visibilityThreshold = 0.0001f),
         label = "PlayerCollapse",
     )
+
+    LaunchedEffect(lyricsVisible) {
+        if (!lyricsVisible) {
+            coroutineScope {
+                launch { lyricsAlpha.animateTo(0f, tween(LyricsFadeOutMs)) }
+                launch { lyricsScale.animateTo(LyricsPanelScale, LyricsScaleSpring) }
+            }
+            // 摘子树。下一次打开是一次全新的组合，会重新上报一次落定（`lyricsReady` 一起归零）。
+            // 若用户在退场途中又点开，这个协程会被取消，两件事都不会发生 —— 面板没离开过。
+            lyricsPresent = false
+            // 归零放在**退场跑完之后**：这样「退场途中再点开」不会把 latch 清掉又卡住进场。
+            lyricsReady = false
+            return@LaunchedEffect
+        }
+        // 第一道门：**封面收回到位**。两道门都过了才起跑，所以「封面先回去、歌词再出来」
+        // 是硬顺序，不是靠两个时长凑出来的巧合 —— 以后改封面弹簧也不会把它改坏。
+        if (collapseCover.value < CollapseSettled)
+            snapshotFlow { collapseCover.value }.first { it >= CollapseSettled }
+        // 第二道门：歌词落定。已经 true 就不等 —— 占位符分支在第一帧布局就会上报，那条路零等待。
+        // 这道门不能省：封面 280ms 就到位了，而场景发布可能更慢，不等的话进场动画又会
+        // 整段耗在「还没东西可画」的空白期里（那正是上一版翻车的形态）。
+        if (!lyricsReady) snapshotFlow { lyricsReady }.first { it }
+        lyricsPresent = true
+        launch { lyricsAlpha.animateTo(1f, tween(LyricsFadeInMs)) }
+        lyricsScale.animateTo(1f, LyricsScaleSpring)
+    }
 
     // 标题行的竖直中心（窗口坐标）。小封面要对齐到这一行，只有量出来才知道它落在哪。
     var metaCenterY by remember { mutableFloatStateOf(0f) }
@@ -532,16 +619,26 @@ private fun PlayerOverlay(
                         .weight(1f)
                         .fillMaxWidth()
                 ) {
-                    if (panel == PlayerPanel.LYRICS) {
-                        LyricsPanel(
-                            songId = song.id,
-                            connection = connection,
-                            seekPreviewPosition = seekState.previewPosition,
-                            isSeeking = seekState.isDragging,
-                            modifier = Modifier
-                                .padding(12.dp)
-                                .fillMaxSize(),
-                        )
+                    if (lyricsVisible || lyricsPresent) {
+                        // 只从这里进——歌词场景深处（`rememberLyricsScene`）读它。
+                        // 挂在环境上而不是加参数：`KaraokeLyricsView` 是搬进来的公开 API，
+                        // 塞 `internal` 类型进签名编不过，一路降级又会把上游 diff 弄脏。
+                        CompositionLocalProvider(
+                            LocalLyricsRenderCache provides lyricsRenderCache
+                        ) {
+                            LyricsPanel(
+                                songId = song.id,
+                                connection = connection,
+                                seekPreviewPosition = seekState.previewPosition,
+                                isSeeking = seekState.isDragging,
+                                modifier = Modifier
+                                    .padding(12.dp)
+                                    .fillMaxSize(),
+                                panelAlpha = lyricsAlphaProducer,
+                                panelScale = lyricsScaleProducer,
+                                onContentReady = onLyricsReady,
+                            )
+                        }
                     }
                     PlayerStage(
                         modifier = Modifier

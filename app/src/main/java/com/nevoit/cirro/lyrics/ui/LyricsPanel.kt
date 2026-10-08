@@ -10,12 +10,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorProducer
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.lyrics.core.model.ISyncedLine
@@ -34,6 +36,7 @@ import com.nevoit.cirro.lyrics.ui.composable.list.rememberLyricsLazyListState
 import com.nevoit.cirro.lyrics.ui.composable.lyrics.KaraokeLyricsView
 import com.nevoit.cirro.lyrics.ui.composable.lyrics.LyricsAnchor
 import com.nevoit.cirro.lyrics.ui.composable.lyrics.LyricsFade
+import com.nevoit.cirro.lyrics.ui.internal.layout.onMeasured
 import com.nevoit.cirro.playback.PlaybackConnection
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.theme.MaterialTheme
@@ -44,6 +47,14 @@ import kotlin.time.Duration.Companion.milliseconds
 
 /** 颜色过渡停下来多久才算「稳定」。见 [rememberSettledLyricsColor]。 */
 private const val ColorSettleMs = 120L
+
+/**
+ * 「歌词已落定」上报的兜底时限（毫秒）。
+ *
+ * 正常路径上第一帧布局就会上报；真到要用它的时候，说明场景根本没建起来。宁可让封面先收、
+ * 歌词晚一步补上，也不能让封面和进场动画一起卡在等信号上。
+ */
+private const val ContentReadyFallbackMs = 900L
 
 /**
  * 歌词跟随的手感，调参就改这一行（换算见 [LyricsScrollChain.of]）。
@@ -77,11 +88,50 @@ fun LyricsPanel(
     seekPreviewPosition: State<Long?>,
     isSeeking: State<Boolean>,
     modifier: Modifier = Modifier,
+    /** 面板进出场的不透明度与缩放，由播放页驱动。**不要在这里 `by`**，逐帧值只在绘制段读。 */
+    panelAlpha: () -> Float = { 1f },
+    panelScale: () -> Float = { 1f },
+    /**
+     * 歌词内容（或占位符）**测量完成**时上报。每帧布局都会调，播放页自己保证幂等。
+     *
+     * 播放页把它当**歌词进场的第二道门**（第一道门是封面收回到位）：过了才让 alpha/scale 起跑。
+     * 不设这道门，进场动画会耗在「场景还没发布、无物可画」的空白期里，等真出画面时已经跑完了。
+     */
+    onContentReady: () -> Unit = {},
 ) {
     val repository = koinInject<LyricsRepository>()
     val listState = key(songId) { rememberLyricsLazyListState() }
     val position = rememberLyricsPosition(connection)
     val seeking by isSeeking
+
+    // 上报是幂等的：布局每帧都回调，这里只放行第一次。`rememberUpdatedState` 兜住回调换实例。
+    val latestReady = rememberUpdatedState(onContentReady)
+    val reported = remember { booleanArrayOf(false) }
+    val reportReady = remember {
+        {
+            if (!reported[0]) {
+                reported[0] = true
+                latestReady.value()
+            }
+        }
+    }
+
+    // 兜底：万一场景一直没落定（取词/排版出了岔子），封面不能永远不收——那是比动画难看
+    // 严重得多的事故。正常路径上 `reportReady` 早就在第一帧布局后先到了，这里只是保险。
+    LaunchedEffect(songId) {
+        delay(ContentReadyFallbackMs.milliseconds)
+        reportReady()
+    }
+
+    // 占位符没有 `Plus` 合成层（只有一段文字），所以可以放心在它自己的图层上做进出场；
+    // 歌词那边不行——必须挂在 `KaraokeLyricsView` 那个叠加层上（见那边的注释）。
+    val placeholderTransform =
+        Modifier.graphicsLayer {
+            alpha = panelAlpha().coerceIn(0f, 1f)
+            val panelScaleValue = panelScale().coerceAtLeast(0f)
+            scaleX = panelScaleValue
+            scaleY = panelScaleValue
+        }
 
     // 缓存命中是同步的（切歌时 PlaybackService 已经预取过），所以绝大多数情况下第一帧就有词。
     var lyrics by remember(songId) { mutableStateOf(repository.cached(songId)) }
@@ -120,11 +170,18 @@ fun LyricsPanel(
             source?.takeIf { !it.instrumental }?.toSyncedLyrics(songId)
         }
         when {
-            source == null -> LyricsPlaceholder(failure ?: "正在获取歌词...", textColor)
-            model == null || model.lines.isEmpty() || source.instrumental -> LyricsPlaceholder(
-                "暂无歌词",
-                textColor
+            source == null -> LyricsPlaceholder(
+                failure ?: "正在获取歌词...",
+                textColor,
+                modifier = placeholderTransform.onMeasured(reportReady),
             )
+
+            model == null || model.lines.isEmpty() || source.instrumental ->
+                LyricsPlaceholder(
+                    "暂无歌词",
+                    textColor,
+                    modifier = placeholderTransform.onMeasured(reportReady),
+                )
 
             else ->
                 KaraokeLyricsView(
@@ -139,6 +196,9 @@ fun LyricsPanel(
                     anchor = LyricsAnchor.Fraction(0.3f),
                     bottomFade = LyricsFade.Fraction(0.2f),
                     scrollChain = LyricsScrollSpring,
+                    panelAlpha = panelAlpha,
+                    panelScale = panelScale,
+                    contentReady = reportReady,
                     modifier = Modifier.fillMaxSize(),
                 )
         }
@@ -183,8 +243,11 @@ private fun rememberSettledLyricsColor(color: ColorProducer): Color {
 }
 
 @Composable
-private fun LyricsPlaceholder(text: String, color: Color) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+private fun LyricsPlaceholder(text: String, color: Color, modifier: Modifier = Modifier) {
+    Box(
+        modifier = Modifier.fillMaxSize().then(modifier),
+        contentAlignment = Alignment.Center,
+    ) {
         Text(
             text = text,
             style = MaterialTheme.type.body,

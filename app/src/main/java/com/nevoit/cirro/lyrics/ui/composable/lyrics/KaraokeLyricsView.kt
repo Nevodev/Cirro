@@ -42,6 +42,7 @@ import com.nevoit.cirro.lyrics.ui.internal.effects.lyricsEdgeFade
 import com.nevoit.cirro.lyrics.ui.internal.layout.LineVerticalPaddingDp
 import com.nevoit.cirro.lyrics.ui.internal.layout.LyricsLazyColumn
 import com.nevoit.cirro.lyrics.ui.internal.layout.lyricsAutoScroll
+import com.nevoit.cirro.lyrics.ui.internal.layout.onMeasured
 import com.nevoit.cirro.lyrics.ui.internal.layout.settledHeight
 import com.nevoit.cirro.lyrics.ui.internal.layout.settledLeadingHeight
 import com.nevoit.cirro.lyrics.ui.internal.rendering.LyricsTexturePrefetch
@@ -100,6 +101,14 @@ fun KaraokeLyricsView(
     autoScrollResumeDelayMillis: Long = 2500,
     scrollChain: LyricsScrollChain? = LyricsScrollChain(),
     isSeeking: Boolean = false,
+    /**
+     * 面板级进/出场的不透明度与缩放。**调用方不要 `by`**，这两个值每一帧都在变，
+     * 组合期读一次就等于整个歌词页每帧重组；它们只在 [graphicsLayer] 段被读。
+     */
+    panelAlpha: () -> Float = { 1f },
+    panelScale: () -> Float = { 1f },
+    /** 歌词内容**测量完成**时回调一次（每帧布局都会调，调用方自己保证幂等）。*/
+    contentReady: (() -> Unit)? = null,
 ) {
     val currentProvider by rememberUpdatedState(currentPosition)
     val timeProvider = remember { { currentProvider() } }
@@ -260,8 +269,18 @@ fun KaraokeLyricsView(
                     .graphicsLayer {
                         compositingStrategy = CompositingStrategy.Offscreen
                         this.blendMode = blendMode
+                        // 面板进出场**必须挂在这一层上**。这一层正是 `Plus` 的合成层：它的内容
+                        // 先画进离屏缓冲，再以叠加上色合成到底色上。若在它外面再包一层
+                        // `alpha`/`scale`，叠加对象就从「底色」变成了那层空缓冲 —— 发光会整个失效
+                        // （屏幕上看就是歌词忽然不亮了）。挂在这一层则 alpha 只是把叠加量整体
+                        // 缩放、scale 只是缩放叠加内容，`Plus` 全程成立。
+                        alpha = panelAlpha().coerceIn(0f, 1f)
+                        val panelScaleValue = panelScale().coerceAtLeast(0f)
+                        scaleX = panelScaleValue
+                        scaleY = panelScaleValue
                     }
-                    .lyricsEdgeFade(topFade, bottomFade, anchorOffset),
+                    .lyricsEdgeFade(topFade, bottomFade, anchorOffset)
+                    .onMeasured(contentReady),
         ) { itemIndex ->
             val index = sourceIndices[itemIndex]
             val line = lyrics.lines[index]
