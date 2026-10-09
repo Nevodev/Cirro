@@ -139,7 +139,7 @@ class PlaybackConnection(
                         this.controller = controller
                         controller.addListener(listener)
                         // 进程里服务可能比这个连接活得久（Activity 重建过），先把模式对齐
-                        controller.repeatMode = queueStore.queue.value.mode.toRepeatMode()
+                        controller.repeatMode = queueStore.queue.value.repeatMode()
                     }
                     .onFailure {
                         _state.value = _state.value.copy(error = "播放器没连上")
@@ -242,27 +242,45 @@ class PlaybackConnection(
     }
 
     /**
-     * 切播放模式。
+     * 切**循环**那一轴（顺序 / 列表循环 / 单曲循环）。随机那一轴原样保留 —— 两根轴互不干扰。
+     */
+    fun setLoopMode(mode: PlayMode) {
+        applyMode(loop = mode, shuffle = currentShuffle())
+    }
+
+    /**
+     * 切**随机**那一轴。
      *
      * 随机不是播放器那个 shuffle，而是把播放列表重排一遍（只动当前位置之后的基准条目，
-     * 插播条目原地不动），所以要多一步 `moveMediaItem`。离开随机时按建队时的基准序还原。
+     * 插播条目原地不动），所以要多一步 `moveMediaItem`。关掉时按建队时的基准序还原。
      */
-    fun setPlayMode(mode: PlayMode) {
+    fun setShuffle(enabled: Boolean) {
+        applyMode(loop = currentMode(), shuffle = enabled)
+    }
+
+    /**
+     * 两根轴一起落到模型和播放器上。
+     *
+     * 🔴 只在随机那一轴真的翻转时才重排列表：重复随机一次等于换一批顺序（用户只是点了一下
+     * 循环，不该看到列表被打乱），照原样调 `shuffledTail()` 会白白重新洗一遍。
+     */
+    private fun applyMode(loop: PlayMode, shuffle: Boolean) {
         scope.launch(Dispatchers.Main) {
             val controller = controller
             val queue = liveQueue()
             if (controller == null || queue == null) {
-                queueStore.set(queueStore.queue.value.copy(mode = mode))
+                queueStore.set(queueStore.queue.value.copy(mode = loop, shuffle = shuffle))
                 return@launch
             }
 
-            val reordered = when (mode) {
-                PlayMode.SHUFFLE -> queue.shuffledTail()
+            val reordered = when {
+                shuffle == queue.shuffle -> queue
+                shuffle -> queue.shuffledTail()
                 else -> queue.restoredTail()
-            }.copy(mode = mode)
+            }.copy(mode = loop, shuffle = shuffle)
 
             reorderPlayer(queue.entries, reordered.entries)
-            controller.repeatMode = mode.toRepeatMode()
+            controller.repeatMode = reordered.repeatMode()
             queueStore.set(reordered)
         }
     }
@@ -292,6 +310,8 @@ class PlaybackConnection(
 
     private fun currentMode(): PlayMode = queueStore.queue.value.mode
 
+    private fun currentShuffle(): Boolean = queueStore.queue.value.shuffle
+
     /** 整队换掉：先把顺序算好（随机模式下建队即打乱），再一次性交给播放器。 */
     private fun startQueue(controller: MediaController, queue: PlaybackQueue) {
         controller.setMediaItems(
@@ -299,7 +319,7 @@ class PlaybackConnection(
             queue.currentIndex,
             0L,
         )
-        controller.repeatMode = queue.mode.toRepeatMode()
+        controller.repeatMode = queue.repeatMode()
         controller.prepare()
         controller.play()
         queueStore.set(queue)
@@ -377,14 +397,16 @@ class PlaybackConnection(
 }
 
 /**
- * 播放模式 → 播放器的 `repeatMode`。
+ * 队列的两根轴 → 播放器的 `repeatMode`。
  *
- * 只有单曲循环用得到 `REPEAT_MODE_ONE`；随机用 `REPEAT_MODE_ALL` 让整份重排过的列表循环
- * （播放器的 shuffle **始终不开**，顺序是我们自己排的）。
+ * 只有单曲循环用得到 `REPEAT_MODE_ONE`，列表循环用 `REPEAT_MODE_ALL`。
+ *
+ * 🔴 随机**不进这里**：播放器的 shuffle 始终不开（顺序是我们自己排的），随机也不改循环 ——
+ * 「随机 + 顺序」就是打乱之后放完就停，「随机 + 列表循环」才是整份重排过的列表循环。
  */
-private fun PlayMode.toRepeatMode(): Int = when (this) {
+private fun PlaybackQueue.repeatMode(): Int = when (mode) {
     PlayMode.SEQUENTIAL -> Player.REPEAT_MODE_OFF
-    PlayMode.REPEAT_ALL, PlayMode.SHUFFLE -> Player.REPEAT_MODE_ALL
+    PlayMode.REPEAT_ALL -> Player.REPEAT_MODE_ALL
     PlayMode.REPEAT_ONE -> Player.REPEAT_MODE_ONE
 }
 

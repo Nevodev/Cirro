@@ -81,7 +81,6 @@ import coil3.toBitmap
 import com.kyant.shapes.Capsule
 import com.kyant.shapes.RoundedRectangle
 import com.nevoit.cirro.R
-import com.nevoit.cirro.data.model.PlayMode
 import com.nevoit.cirro.lyrics.ui.LyricsPanel
 import com.nevoit.cirro.lyrics.ui.internal.rendering.LocalLyricsRenderCache
 import com.nevoit.cirro.lyrics.ui.internal.rendering.LyricsRenderCache
@@ -321,9 +320,9 @@ private fun rememberThemedColor(target: Color, label: String): ColorProducer =
  * 进度 1 时铺满。这个位移**在 graphicsLayer 的 block 里算**，所以拖拽/开合动画期间
  * 只有这一层重画，播放页的内容一次都不重组。
  *
- * 内容按"多久变一次"分层订阅：换歌/播放状态在最外层，位置心跳下沉到进度条。子块之间的
- * 参数是稳定的（`song`、`isPlaying`、`mode`），所以重组只落在真正变了的那一块上——
- * **回调必须 `remember` 固定**，否则每次都是新 lambda，Compose 的跳过就全失效了。
+ * 内容按"多久变一次"分层订阅：换歌/播放状态在最外层，位置心跳下沉到进度条，队列（模式 + 列表）
+ * 由待播列表面板自己订。子块之间的参数是稳定的（`song`、`isPlaying`），所以重组只落在真正变了
+ * 的那一块上——**回调必须 `remember` 固定**，否则每次都是新 lambda，Compose 的跳过就全失效了。
  */
 @Composable
 private fun PlayerOverlay(
@@ -337,9 +336,6 @@ private fun PlayerOverlay(
     val header by remember(connection) {
         connection.state.map { it.song to it.isPlaying }.distinctUntilChanged()
     }.collectAsState(initial = connection.state.collectAsState().value.let { it.song to it.isPlaying })
-    val mode by remember(connection) {
-        connection.queue.map { it.mode }.distinctUntilChanged()
-    }.collectAsState(initial = connection.queue.collectAsState().value.mode)
 
     val song = header.first
     val isPlaying = header.second
@@ -651,7 +647,6 @@ private fun PlayerOverlay(
         val onPrevious = remember(connection) { { connection.skipToPrevious() } }
         val onNext = remember(connection) { { connection.skipToNext() } }
         val onSeek = remember(connection) { { ms: Long -> connection.seekTo(ms) } }
-        val onCycleMode = remember(connection, mode) { { connection.setPlayMode(mode.next()) } }
         // 底部那排（歌词/待播列表）、名字右边那两颗（收藏、更多）都还没接线——待播列表是队列
         // 面板的入口、投屏还没做。用 remember 固定空回调：按下有正常的反馈，但先什么都不做；
         // 接线时只换这几个 lambda。歌词那块已经有面板了，这两个回调留着做埋点/自动滚动之类的钩子。
@@ -707,6 +702,24 @@ private fun PlayerOverlay(
                             )
                         }
                     }
+
+                    // 待播列表面板。出现动画还没做，所以不挂 alpha/scale，选中即整块出现。
+                    if (panel == PlayerPanel.QUEUE) {
+                        QueuePanel(
+                            connection = connection,
+                            modifier = Modifier
+                                .padding(24.dp)
+                                .fillMaxSize(),
+                            rowBackground = buttonColor,
+                            content = contentColor,
+                            contentVariant = contentVariantColor,
+                            buttonBackground = buttonColor,
+                            buttonIcon = buttonIconColor,
+                            activeButtonBackground = playButtonColor,
+                            activeButtonIcon = playButtonIconColor,
+                        )
+                    }
+
                     PlayerStage(
                         modifier = Modifier
                             .padding(24.dp),
@@ -726,11 +739,6 @@ private fun PlayerOverlay(
                         },
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // 收起时在标题左边占出一格给封面：直接把这个 Row 的剩余宽度减掉
-                    // 「封面边长 + 间距」。宽度是布局一步到位的（meta「直接变成目标大小」），
-                    // 位移动画由 meta 自己的 graphicsLayer 补出来，这里只负责把格子占住。
-                    // 🔴 开关是 `metaCell` 而不是 `collapsed` —— 要等位移真的开始，这一格才占上，
-                    // 否则标题会先在原地缩一下（见那边的说明）。
                     Spacer(
                         Modifier.width(
                             if (metaCell) CollapsedCoverSize + CollapsedCoverGap else 0.dp
@@ -742,11 +750,6 @@ private fun PlayerOverlay(
                         titleColor = contentColor,
                         artistColor = contentVariantColor,
                         modifier = Modifier.graphicsLayer {
-                            // 收起：布局已经被上面那格推到右边，先把 meta 拉回原位再滑过去；
-                            // 展开：布局已经回到左边，从收起位滑回来。方向跟当前布局是
-                            // 「有格子」还是「没格子」绑着，两个方向都得对得上，不能只写一边。
-                            // 🔴 判据必须跟上面那格**同一个** `metaCell`：布局位置和补偿量一旦
-                            // 对不上，视觉位置就会从 `rowLeft + gap * progress` 上跳一下。
                             val shift = (CollapsedCoverSize + CollapsedCoverGap).toPx()
                             val progress = collapseMeta.value.coerceIn(0f, 1f)
                             translationX =
@@ -784,11 +787,9 @@ private fun PlayerOverlay(
                 VGap(24.dp)
                 PlayerControls(
                     isPlaying = isPlaying,
-                    mode = mode,
                     onTogglePlay = onTogglePlay,
                     onPrevious = onPrevious,
                     onNext = onNext,
-                    onCycleMode = onCycleMode,
                     buttonColor = buttonColor,
                     buttonIconColor = buttonIconColor,
                     playButtonColor = playButtonColor,
@@ -1158,7 +1159,8 @@ private fun PlayerProgress(
  *
  * 「播放/暂停」用实心圆底反白，是这一页唯一的主操作；两侧是纯图标按钮，跟详情页头部那排
  * 按钮同档配（底 T40/T90、图标 T90/T40），视觉上让开。
- * 最右边那个槽位留给「查看队列」，功能还没做，先占着——少一个元素整条就不对称了。
+ *
+ * 播放模式（循环 / 随机）挪进了待播列表面板那排按钮，这里不再管 —— 参数也跟着少了两个。
  *
  * 四种颜色都收 producer：条子是换歌时跟着主题色一起过渡的，收值的话这 500ms 里整条控制条
  * 每帧重组，还会顺着参数把上面那层也带上。
@@ -1169,11 +1171,9 @@ private fun PlayerProgress(
 @Composable
 private fun PlayerControls(
     isPlaying: Boolean,
-    mode: PlayMode,
     onTogglePlay: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
-    onCycleMode: () -> Unit,
     buttonColor: ColorProducer,
     buttonIconColor: ColorProducer,
     playButtonColor: ColorProducer,
@@ -1247,28 +1247,6 @@ private fun PlayerControls(
 //        // 和左边的模式按钮对称：现在的队列入口是「查看队列」，还没做，先留空位
 //        Box(modifier = Modifier.size(48.dp))
     }
-}
-
-/** 播放模式轮换一圈：顺序 → 列表循环 → 单曲循环 → 随机 → 顺序。 */
-private fun PlayMode.next(): PlayMode = when (this) {
-    PlayMode.SEQUENTIAL -> PlayMode.REPEAT_ALL
-    PlayMode.REPEAT_ALL -> PlayMode.REPEAT_ONE
-    PlayMode.REPEAT_ONE -> PlayMode.SHUFFLE
-    PlayMode.SHUFFLE -> PlayMode.SEQUENTIAL
-}
-
-private fun PlayMode.iconRes(): Int = when (this) {
-    PlayMode.SEQUENTIAL -> R.drawable.list_play
-    PlayMode.REPEAT_ALL -> R.drawable.repeat
-    PlayMode.REPEAT_ONE -> R.drawable.repeat_one
-    PlayMode.SHUFFLE -> R.drawable.shuffle
-}
-
-private fun PlayMode.label(): String = when (this) {
-    PlayMode.SEQUENTIAL -> "顺序播放"
-    PlayMode.REPEAT_ALL -> "列表循环"
-    PlayMode.REPEAT_ONE -> "单曲循环"
-    PlayMode.SHUFFLE -> "随机播放"
 }
 
 private fun formatTime(ms: Long): String {

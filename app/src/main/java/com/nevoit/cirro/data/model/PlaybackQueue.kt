@@ -4,11 +4,14 @@ import kotlinx.serialization.Serializable
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * 播放模式。
+ * 播放模式 —— **循环那一轴**：顺序 / 列表循环 / 单曲循环。
  *
- * 顺序 / 列表循环 / 单曲循环 交给播放器自己的 `repeatMode`；**随机不走播放器的 shuffle**
- * ——它由我们重排播放列表实现。理由是播放器的 shuffle 会把临时插播的歌一起卷进乱序里，
- * 那就做不到"紧接着播"了。
+ * 🔴 **随机不在这里**，它是另一根正交的轴（[PlaybackQueue.shuffle]）。播放页那两颗按钮各自
+ * 记自己的状态：循环三档、随机一开一关，所以「随机 + 单曲循环」这种组合必须能同时成立 ——
+ * 塞进一个枚举就只能二选一了。
+ *
+ * 三个循环档都交给播放器自己的 `repeatMode`；**随机不走播放器的 shuffle**——它由我们重排
+ * 播放列表实现。理由是播放器的 shuffle 会把临时插播的歌一起卷进乱序里，那就做不到"紧接着播"了。
  */
 enum class PlayMode {
     /** 顺序播放：最后一首放完就停。 */
@@ -23,10 +26,14 @@ enum class PlayMode {
      * 所以手动切歌一律自己算目标下标，不能用 `seekToNextMediaItem()`——那个跟着 `repeatMode` 走，
      * 在单曲循环下会原地不动。而自然放完交给 `REPEAT_MODE_ONE`，插播区就自然被跳过了。
      */
-    REPEAT_ONE,
+    REPEAT_ONE;
 
-    /** 随机播放：一轮内不重复。 */
-    SHUFFLE,
+    /** 循环按钮转一圈：顺序 → 列表循环 → 单曲循环 → 顺序。 */
+    fun nextLoop(): PlayMode = when (this) {
+        SEQUENTIAL -> REPEAT_ALL
+        REPEAT_ALL -> REPEAT_ONE
+        REPEAT_ONE -> SEQUENTIAL
+    }
 }
 
 /**
@@ -75,6 +82,13 @@ data class PlaybackQueue(
     val entries: List<QueueEntry> = emptyList(),
     val currentIndex: Int = 0,
     val mode: PlayMode = PlayMode.SEQUENTIAL,
+    /**
+     * 随机那一轴，跟 [mode] 正交。
+     *
+     * 开 = 当前位置之后的基准条目打乱（插播条目原地不动），关 = 按建队基准序还原。
+     * 它**不改循环**：随机 + 顺序就是"打乱之后放完就停"。
+     */
+    val shuffle: Boolean = false,
 )
 
 /** 建队：歌单 / 专辑 / 每日推荐点一首、首页播一整块都走这里。随机模式下建队即打乱。 */
@@ -83,14 +97,20 @@ fun playQueueOf(
     startIndex: Int,
     source: QueueSource?,
     mode: PlayMode = PlayMode.SEQUENTIAL,
+    shuffle: Boolean = false,
 ): PlaybackQueue {
-    if (songs.isEmpty()) return PlaybackQueue(mode = mode)
+    if (songs.isEmpty()) return PlaybackQueue(mode = mode, shuffle = shuffle)
     val index = startIndex.coerceIn(0, songs.lastIndex)
     val entries = songs.mapIndexed { i, song ->
         QueueEntry(uid = nextEntryUid(), song = song, source = source, seq = i)
     }
-    val queue = PlaybackQueue(entries = entries, currentIndex = index, mode = mode)
-    return if (mode == PlayMode.SHUFFLE) queue.shuffledTail() else queue
+    val queue = PlaybackQueue(
+        entries = entries,
+        currentIndex = index,
+        mode = mode,
+        shuffle = shuffle,
+    )
+    return if (shuffle) queue.shuffledTail() else queue
 }
 
 /** 把 [index] 认作当前位置（播放器说了算）。越界就原样返回。 */
@@ -142,21 +162,17 @@ fun PlaybackQueue.restoredTail(): PlaybackQueue {
 /**
  * 手动「下一首」的目标，**忽略单曲循环**（手动切歌不受模式约束）。
  *
- * 到头了返回 null：顺序 / 单曲循环就是没有下一首，列表循环 / 随机则回到第一首。
+ * 到头了返回 null：顺序（含"随机 + 顺序"）就是没有下一首，列表循环则回到第一首。
  */
-fun PlaybackQueue.manualNextIndex(from: Int): Int? = when {
-    from + 1 < entries.size -> from + 1
-    mode == PlayMode.SEQUENTIAL || mode == PlayMode.REPEAT_ONE -> null
-    entries.isNotEmpty() -> 0
-    else -> null
+fun PlaybackQueue.manualNextIndex(from: Int): Int? {
+    if (from + 1 < entries.size) return from + 1
+    return if (mode == PlayMode.REPEAT_ALL && entries.isNotEmpty()) 0 else null
 }
 
 /** 手动「上一首」的目标，**忽略单曲循环**。到头了返回 null。 */
-fun PlaybackQueue.manualPreviousIndex(from: Int): Int? = when {
-    from - 1 >= 0 -> from - 1
-    mode == PlayMode.SEQUENTIAL || mode == PlayMode.REPEAT_ONE -> null
-    entries.isNotEmpty() -> entries.lastIndex
-    else -> null
+fun PlaybackQueue.manualPreviousIndex(from: Int): Int? {
+    if (from - 1 >= 0) return from - 1
+    return if (mode == PlayMode.REPEAT_ALL && entries.isNotEmpty()) entries.lastIndex else null
 }
 
 /** 第 [index] 条该报的 `sourceId`，没有就是空串。 */
