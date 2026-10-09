@@ -39,6 +39,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -65,6 +66,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextMotion
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
@@ -514,10 +516,14 @@ private fun PlayerOverlay(
     // 「打开过」与「缓存命中」实际等价。
     var lyricsWarmed by remember(song.id) { mutableStateOf(false) }
 
-    // 歌词内容**测量完成**的 latch，进场的门。布局每帧都会上报，这里只认第一次。
+    // 歌词内容**测量完成**的 latch，进场的门。布局每帧都会上报，面板侧已经保证只送结论。
     var lyricsReady by remember { mutableStateOf(false) }
     // 参数是「这次落定的是真歌词吗」：真歌词落定意味着位图缓存已经填上，置位后**下一次**打开
     // 就走「三者同起」；占位符（没取到词 / 纯音乐）没有任何缓存可复用，不置位。
+    //
+    // ⚠️ 同一首歌**会收到两次**（切歌瞬间预取还没落盘 → 先占位符 false，取到词后真歌词 true），
+    // 两次都作用在这两个状态上、天然幂等。真歌词那次必须能作数 —— 否则「歌词已经出来、
+    // 缓存也填上了，这里却还记着无缓存」。面板侧按 `songId` 记 latch，两条路各记一条。
     val onLyricsReady: (Boolean) -> Unit = remember(song.id) {
         { renderable: Boolean ->
             lyricsReady = true
@@ -529,15 +535,33 @@ private fun PlayerOverlay(
     // 只建 State，值一律留到 graphicsLayer 的 block 里读——它每帧都在变，组合期读一次就等于
     // 整棵子树每帧重组，跟主题色那条规矩一模一样。
     //
-    // 🔴 唯一会推迟它的就是上面那条 `waitForLyrics`，而且代价有上限：预热路径下场景发布只剩
+    // 🔴 唯一会推迟它的就是下面那条 `waitForLyrics`，而且代价有上限：预热路径下场景发布只剩
     // 两三帧。曾经无条件等歌词，结果点下去到动画起步之间隔着整段场景发布（两次后台往返，其中
     // 一次是整曲光栅化）—— 那段光标不动，用户感觉就是「卡了一下」。所以未预热时封面照旧立刻走。
     val collapsed = panel != null
 
-    // 要不要为了歌词把封面 / 标题行也推迟。只在「歌词面板开着 + 预热过 + 还没落定」时成立。
-    // `lyricsVisible` 必须在条件里：待播列表面板下 `collapsed` 同样为真，而 `lyricsReady` 是
-    // false，少了它封面就永远收不了。
-    val waitForLyrics = collapsed && lyricsVisible && lyricsWarmed && !lyricsReady
+    // 上一次组合时有没有面板开着。用来分辨「从展开态点开歌词」和「从待播列表切到歌词」：
+    // 后者的封面**早就收着了**，这时再为歌词推迟收封面，就是把收好的封面顶回展开 ——
+    // 那一下肉眼可见：封面飞回中央放大、meta 滑回左边，两三帧后再收回去。
+    //
+    // ⚠️ 只能比「上一次」，不能读 `collapsed` 的边沿：待播列表 → 歌词这条路径上 `collapsed`
+    // 自始至终为 true，压根没有边沿。
+    // 用数组装而不是 `mutableStateOf`：它只在下面那句 `SideEffect` 里写、只被那一句 `remember`
+    // 在换键时读一次，没必要为它挂一次重组订阅（同 `LyricsPanel` 里那个 `reported`）。
+    val hadPanelBefore = remember { booleanArrayOf(false) }
+
+    // 这次打开歌词的时候封面还展开着吗 —— 只有这种才需要为歌词推迟收封面。
+    //
+    // 🔴 `remember(lyricsVisible)` 是关键：这个决定必须**锁在 `lyricsVisible` 翻成 true 的那一帧**。
+    // 写成 live 表达式的话，下面那个 `SideEffect` 一刷新 `hadPanelBefore`，判断就跟着翻掉 ——
+    // 封面刚被 hold 住、下一帧又放它走，收到一半弹回来，比现在这个 bug 还难看。
+    val holdCoverForLyrics = remember(lyricsVisible) { lyricsVisible && !hadPanelBefore[0] }
+    SideEffect { hadPanelBefore[0] = collapsed }
+
+    // 要不要为了歌词把封面 / 标题行也推迟。只在「从展开态点开歌词 + 预热过 + 还没落定」时成立。
+    // 原来那个 `lyricsVisible` 并进了 `holdCoverForLyrics`，但不能丢：待播列表面板下 `collapsed`
+    // 同样为真、`lyricsReady` 是 false，少了这一项封面就永远收不了。
+    val waitForLyrics = collapsed && holdCoverForLyrics && lyricsWarmed && !lyricsReady
 
     val collapseCover = animateFloatAsState(
         targetValue = if (collapsed && !waitForLyrics) 1f else 0f,
@@ -1027,7 +1051,7 @@ private fun PlayerText(
 ) {
     Text(
         text = text,
-        style = style,
+        style = style.merge(textMotion = TextMotion.Animated),
         color = color(),
         maxLines = 1,
         modifier = modifier,

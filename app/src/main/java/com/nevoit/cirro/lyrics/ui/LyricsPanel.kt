@@ -100,6 +100,9 @@ fun LyricsPanel(
      * @param renderable 这次落定的是**真歌词**吗。真歌词落定 ⟺ 场景已发布 ⟺ 位图缓存已经填上，
      *   于是播放页知道**下一次**打开这首歌可以直接等歌词（三者同起）；占位符（没取到词 / 纯音乐）
      *   那条路没有任何缓存可复用，不置位。
+     *
+     *   同一首歌**可能上报两次**：先占位符（`false`）后真歌词（`true`）。真歌词那次永远作数，
+     *   因为它标记的是「位图缓存真的填上了」，与先到的那次无关。
      */
     onContentReady: (renderable: Boolean) -> Unit = {},
 ) {
@@ -110,21 +113,40 @@ fun LyricsPanel(
 
     // 上报是幂等的：布局每帧都回调，这里只放行第一次。`rememberUpdatedState` 兜住回调换实例。
     val latestReady = rememberUpdatedState(onContentReady)
-    val reported = remember { booleanArrayOf(false) }
-    val reportReady: (Boolean) -> Unit = remember {
+
+    // 🔴 两个 latch 都必须跟着 `songId` 走。面板在**换歌时不会离开组合**（播放页只在自己那次
+    // 退场动画跑完才摘子树），一个活在组合上的 latch 会把新歌那次上报当「重复」吃掉 ——
+    // 于是「歌词明明已经出来、位图缓存也填上了，播放页却还记着无缓存」，下次打开这首歌又退回
+    // 「封面先行」。latch 的语义本来就是「本次组合里已经报过」，作用域就该是一首歌：换歌=重来一次。
+    //
+    // 分成两条记，是为了让**真歌词永远作数**（`reported` = 已经有结论了，占位符或真歌词都算；
+    // `reportedRenderable` = 已经报过真歌词）。占位符先到是**常态**而不是例外，两条路都会走到：
+    //   - 打开歌词页时词还没取到（下面那个 `repository.lyrics(song)` 还在飞 —— 首开一首慢网络的歌
+    //     就是这个形态，不是切歌专属）；
+    //   - 开着歌词页换歌（`prefetch` 是异步读磁盘快照，面板先落到「正在获取歌词...」）。
+    // 只认第一次的话，这两条路都永远学不到「其实已经有缓存」—— 而那正是位图缓存填上的时刻。
+    // 下面那条 900ms 兜底的 `reportReady(false)` 同理：它只能占 `reported`，挡不住后面那次 true。
+    val reported = remember(songId) { booleanArrayOf(false) }
+    val reportedRenderable = remember(songId) { booleanArrayOf(false) }
+    // 键写成两个 latch 本身（数组按引用比）：换了新数组，回调还攥着旧的就全白改了。
+    val reportReady: (Boolean) -> Unit = remember(reported, reportedRenderable) {
         { renderable: Boolean ->
-            if (!reported[0]) {
+            if (renderable) {
+                if (!reportedRenderable[0]) {
+                    reportedRenderable[0] = true
+                    reported[0] = true
+                    latestReady.value(true)
+                }
+            } else if (!reported[0]) {
                 reported[0] = true
-                latestReady.value(renderable)
+                latestReady.value(false)
             }
         }
     }
 
-    // 占位符与真歌词两条路共用这一次上报，差别只在 `renderable`（见 `onContentReady` 的说明）。
-    // 占位符先到、之后才取到词的情况不会再补一次 —— 播放页那颗「已预热」的位就保守地不置，
-    // 下次打开退回「封面先行」，慢一点但不会卡。
-    val placeholderReady = remember { { reportReady(false) } }
-    val lyricsContentReady = remember { { reportReady(true) } }
+    // 占位符与真歌词两条路共用这套上报，差别只在 `renderable`（见 `onContentReady` 的说明）。
+    val placeholderReady = remember(reportReady) { { reportReady(false) } }
+    val lyricsContentReady = remember(reportReady) { { reportReady(true) } }
 
     // 兜底：万一场景一直没落定（取词/排版出了岔子），封面不能永远不收——那是比动画难看
     // 严重得多的事故。正常路径上 `reportReady` 早就在第一帧布局后先到了，这里只是保险。
