@@ -48,6 +48,14 @@ pub fn apple_configured() -> bool {
     apple::is_configured()
 }
 
+/// 下发**开发者 token 的落盘缓存目录**（App 启动时调一次，值来自 `context.filesDir`）。
+///
+/// 开发者 token 与账号无关，抓一次能用几小时；把它连同 `exp` 缓存下来，是为了让
+/// **冷启动**也不必再抓那个一百多 KB 的网页 + JS。空串 = 不落盘（只在进程内存里缓存）。
+pub fn set_apple_cache_dir(dir: String) {
+    apple::set_cache_dir(dir);
+}
+
 // ---------------------------------------------------------------------------
 // 四个取词源
 // ---------------------------------------------------------------------------
@@ -81,17 +89,19 @@ pub async fn amll_ttml(ncm_id: String) -> Value {
     }
 }
 
-/// Apple Music 官方 TTML（需 media-user-token）。
+/// Apple Music 取词。已登录走官方直连、未登录走第三方（`lyrics.paxsenix.org`），
+/// 由原生层按有没有 `media-user-token` 自己分岔 —— 调用方不必关心。
 ///
-/// 一并带上 `storefront` / `storefrontProbed`：区域取错会让这一级**每一首都空手**，
-/// 而 `reason` 只会写 `no_lyrics` —— 没有这两个字段就分不清"这首歌没有官方词"
-/// 和"区域取错了"。
+/// 一并带上 `via`（`official` / `paxsenix`）、`storefront` / `storefrontProbed`：
+/// 区域取错会让官方那条路**每一首都空手**，而 `reason` 只会写 `no_lyrics` ——
+/// 没有这些字段就分不清"这首歌没有官方词"和"区域取错了"。
 pub async fn apple_ttml(am_id: String) -> Value {
     match apple::fetch(&am_id).await {
         Ok(f) => json!({
             "ok": true,
             "ttml": f.ttml,
             "reason": f.reason,
+            "via": f.via,
             "storefront": f.storefront,
             "storefrontProbed": f.storefront_probed,
         }),
@@ -104,15 +114,25 @@ pub async fn apple_ttml(am_id: String) -> Value {
 /// 存在的理由：Apple 官方取词需要一个 Apple 歌曲 id，而之前这个 id 只能从 AMLL 的
 /// `amll:meta` 里拿 —— AMLL 索引只有网易曲库的一小部分，没命中的歌就永远够不到官方词。
 ///
-/// `limit` 是字符串（JNI 侧一律传字符串），空/非法走默认值。
-pub async fn apple_search(term: String, limit: String) -> Value {
+/// 🔴 **不需要登录**：只要从网页抓来的开发者 token（[`apple::search`]），未登录照样能搜。
+///
+/// `limit` / `storefront` 都是字符串（JNI 侧一律传字符串）：`limit` 空/非法走默认值；
+/// `storefront` 空 = 自动（已登录用账号区域、未登录用默认区域），非空 = 显式指定
+/// （未登录时 `cn` 搜不到够格候选、拿 `us` 兜一次用）。
+pub async fn apple_search(term: String, limit: String, storefront: String) -> Value {
     let limit = limit
         .trim()
         .parse::<usize>()
         .unwrap_or(SEARCH_LIMIT_DEFAULT)
         .clamp(1, SEARCH_LIMIT_MAX);
+    let storefront = storefront.trim();
+    let storefront = if storefront.is_empty() {
+        None
+    } else {
+        Some(storefront)
+    };
 
-    match apple::search(&term, limit).await {
+    match apple::search(&term, limit, storefront).await {
         Ok(hit) => json!({
             "ok": true,
             "storefront": hit.storefront,

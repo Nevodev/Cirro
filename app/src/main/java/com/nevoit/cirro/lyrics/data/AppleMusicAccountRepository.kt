@@ -24,8 +24,8 @@ sealed interface AppleMusicSession {
  * Apple Music 登录态的**唯一真相源**。
  *
  * 与网易那个 [com.nevoit.cirro.data.AccountRepository] 完全无关、互不影响：网易是主账号，
- * Apple 只是歌词取词链**第 1 级**（官方逐字 TTML）的凭据，没登也照常用 App —— 那一级会被
- * AMLL TTML DB 顶替，只是拿不到「直连官方」而已。
+ * Apple 只是歌词取词链**第 1 级**（Apple 逐字 TTML）的凭据。没登也照常用 App —— 那一级会
+ * 改用第三方（`lyrics.paxsenix.org`）取**同一份 Apple 同源 TTML**，只是不直连官方、质量略低而已。
  *
  * 令牌走 [AppleMusicTokenStore]（AndroidKeyStore AES-GCM）落盘；明文只活在原生层内存里。
  * 推给原生层时与 [LyricsBridge] 的 `setAppleToken` 对齐，冷启动由 [restore] 回灌 —— 和 cookie

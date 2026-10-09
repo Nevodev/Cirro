@@ -1,6 +1,6 @@
 [package]
 name = "cirro-lyrics"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 description = "Cirro 歌词取词引擎（网易 / AMLL TTML DB / Apple Music / lrclib）"
 publish = false
@@ -14,7 +14,9 @@ crate-type = ["cdylib", "rlib"]
 ncm-api-rs = { path = "../ncm-api-rs" }
 # 第三方取词（AMLL DB / Apple amp-api / lrclib）走自己的裸 HTTP。
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
-tokio = { version = "1", features = ["rt-multi-thread"] }
+# `sync` 是给「抓开发者 token 的单飞锁」用的。它本来就被 `ncm-api-rs` 的 `full` 打开了，
+# 这里只是把自己的直接依赖写清楚 —— 不增加任何代码体积（特性是全图统一的）。
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync"] }
 once_cell = "1"
 jni = "0.21"
 serde = { version = "1", features = ["derive"] }

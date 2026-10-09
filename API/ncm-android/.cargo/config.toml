@@ -1,0 +1,35 @@
+# Android 目标专用的体积开关（与 `../cirro-lyrics/.cargo/config.toml` 同一套）。
+#
+# 为什么在 `.cargo/` 而不是 `Cargo.toml` 的 `[profile]`：profile 里没有对应的键，这些是
+# **代码生成 / 链接**层面的开关，只能走 rustflags。放在包目录下，执行 `cargo ndk ...` 时自动
+# 生效 —— 不用记环境变量，也不会跟手敲的 `RUSTFLAGS` 打架（环境变量优先级更高，会整体覆盖）。
+#
+# 🔴 实测（NDK r28.2 / arm64-v8a / 2026-10-09）：`libncm_android.so` 3.14MB → **约 -17%**。
+#    三个开关分别打掉 `.eh_frame`、`.rela.dyn`、重复机器码，与 cirro-lyrics 那边同理。
+#
+# ⚠️ 只对 Android 目标生效：host（`cargo check` / 测试）不受影响。
+#
+# ⚠️ 本 crate 依赖 `ncm-api-rs`：`[target.<triple>] rustflags` 会作用到**为该目标编译的所有
+#    crate**（含依赖），所以省下来的不只是本 crate 的代码。
+
+[target.aarch64-linux-android]
+rustflags = [
+    # 关掉 unwind 表。`panic = "abort"`（见 Cargo.toml）下异常不跨栈帧，但 Android 目标默认
+    # 仍给每个函数生成 `.eh_frame` —— 纯占体积。
+    # 代价：native 崩溃报告里会缺本库的栈帧（只影响可读性）。调试期摘掉重编即可。
+    "-C", "force-unwind-tables=no",
+
+    # Android 的 APS2「打包重定位」格式（设备端 API 23+ 支持）。本项目 minSdk = 30。
+    "-C", "link-arg=-Wl,--pack-dyn-relocs=android",
+
+    # 相同机器码的函数折叠。Rust 不保证函数地址的同一性，折叠是安全的。
+    # ⚠️ 若怀疑遇到诡异行为，第一个该摘的就是这一条。
+    "-C", "link-arg=-Wl,--icf=all",
+]
+
+[target.x86_64-linux-android]
+rustflags = [
+    "-C", "force-unwind-tables=no",
+    "-C", "link-arg=-Wl,--pack-dyn-relocs=android",
+    "-C", "link-arg=-Wl,--icf=all",
+]

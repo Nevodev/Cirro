@@ -75,6 +75,21 @@ pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeSetA
     api::set_apple_token(token)
 }
 
+/// 下发**开发者 token 的落盘缓存目录**（App 启动时调一次，值来自 `context.filesDir`）。
+///
+/// 原生层拿不到 Context，所以这个可写路径只能由上层给。给完它会立刻把磁盘上的缓存读进内存
+/// —— 冷启动第一次取词就直接命中，不用再抓 Apple 的网页 + JS。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeSetAppleCacheDir<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    dir: JString<'local>,
+) -> jint {
+    let dir = jni_in(&mut env, &dir);
+    api::set_apple_cache_dir(dir);
+    0
+}
+
 /// 是否已配置 Apple 凭据。
 #[no_mangle]
 pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeAppleConfigured<'local>(
@@ -123,17 +138,22 @@ pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeAppl
     jni_out(&mut env, value)
 }
 
-/// Apple Music 搜索（不依赖 AMLL 的 Apple id 入口）。
+/// Apple Music 搜索（不依赖 AMLL 的 Apple id 入口，**未登录也能用**）。
+///
+/// `storefront` 空串 = 自动（已登录用账号区域、未登录用默认区域）；非空 = 显式指定区域
+/// （未登录时 `cn` 搜不到够格候选、拿 `us` 兜一次用）。
 #[no_mangle]
 pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeAppleSearch<'local>(
     mut env: JNIEnv<'local>,
     _this: JObject<'local>,
     term: JString<'local>,
     limit: JString<'local>,
+    storefront: JString<'local>,
 ) -> jstring {
     let term = jni_in(&mut env, &term);
     let limit = jni_in(&mut env, &limit);
-    let value = engine::RUNTIME.block_on(api::apple_search(term, limit));
+    let storefront = jni_in(&mut env, &storefront);
+    let value = engine::RUNTIME.block_on(api::apple_search(term, limit, storefront));
     jni_out(&mut env, value)
 }
 

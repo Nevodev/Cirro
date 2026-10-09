@@ -21,13 +21,15 @@ import java.util.concurrent.ConcurrentHashMap
  * 歌词的唯一入口：按歌曲自动走四级取词链，解析成统一模型，并缓存 / 落盘。
  *
  * ## 取词链
- * 1. **Apple Music 官方 TTML**（需 `media-user-token`）—— 拿 Apple id 有两条路：
- *    ①a **自己搜** Apple，①b AMLL 的 `amll:meta`（免费）；
+ * 1. **Apple Music TTML** —— 拿 Apple id 有两条路：①a **自己搜** Apple，①b AMLL 的
+ *    `amll:meta`（免费）。取词分两种口径：**登录**时直连官方（`media-user-token`），
+ *    **未登录**时用开发者 token 搜索 + 第三方（`lyrics.paxsenix.org`）取同一份 Apple 同源 TTML ——
+ *    两条路都由原生层自动分岔，Kotlin 侧只看有没有登录来决定搜索区域；
  * 2. **AMLL TTML DB** —— 用网易歌曲 id 直取，**一次请求同时拿到 TTML 和 `appleMusicId`**；
  * 3. **网易 LRC**（只逐行）；
  * 4. **lrclib**。
  *
- * Apple 搜索、AMLL 和网易同时开始。官方命中立即返回；官方未命中时再采用 AMLL、
+ * Apple 搜索、AMLL 和网易同时开始。Apple 命中立即返回；未命中时再采用 AMLL、
  * 已在请求中的网易歌词，最后查询 lrclib。AMLL 提供的 Apple id 仍可补充搜索未命中的结果。
  *
  * ## 缓存
@@ -150,10 +152,11 @@ class LyricsRepository(
         }
 
         // 引擎自检排最前：`.so` 的版本、以及 Apple 凭据在不在原生层 —— 两样都不在 Kotlin
-        // 侧，只能问它，而它们共同决定了「到底有没有可能拿到官方词」。`null` = 调用抛了
-        // （`UnsatisfiedLinkError` 之类，多半是 .so 没打进包 / 与 Kotlin 侧签名对不上）。
+        // 侧，只能问它。`null` = 调用抛了（`UnsatisfiedLinkError` 之类，多半是 .so 没打进包 /
+        // 与 Kotlin 侧签名对不上）。
         val configured = runCatching { LyricsBridge.appleConfigured() }.getOrNull()
-        trail += "engine=${runCatching { LyricsBridge.version() }.getOrNull() ?: "-"}/apple=$configured"
+        trail += "engine=${runCatching { LyricsBridge.version() }.getOrNull() ?: "-"}/" +
+            "apple=${if (configured == true) "official" else "paxsenix"}"
 
         val tried = LinkedHashSet<String>()
 
@@ -164,8 +167,14 @@ class LyricsRepository(
                 trail += "Apple($id)=请求失败"
                 return null
             }
-            val where = "sf=${hit.storefront.ifEmpty { "-" }}" +
-                if (hit.storefrontProbed) "" else "!"
+            val where = buildString {
+                append("via=").append(hit.via.ifEmpty { "-" })
+                if (hit.storefront.isNotEmpty()) {
+                    append(", sf=").append(hit.storefront)
+                    // 叹号只在官方路径有意义（探测失败 → 区域不可信）；第三方与区域无关。
+                    if (hit.via == "official" && !hit.storefrontProbed) append("!")
+                }
+            }
             trail += "Apple($id)=" + if (hit.ttml.isBlank()) {
                 "无词(reason=${hit.reason.ifEmpty { "-" }}, $where, $via)"
             } else {
@@ -175,24 +184,33 @@ class LyricsRepository(
             return parseTtml(hit.ttml, LyricsSource.APPLE_MUSIC, failures)
         }
 
-        if (configured != true) {
-            trail += "Apple=跳过(凭据未就绪)"
+        // Apple 这一级**不再要求登录**：未登录时原生层改用「开发者 token 搜索 +
+        // 第三方(paxsenix) 取词」，所以这里不再按 configured 跳过，只在**搜索口径**上分岔。
+        // 已登录 → 用账号区域（storefront 传空 = 自动探测）；
+        // 未登录 → 按项目实测以 cn 起手，匹配器判定「无够格候选」时再拿 us 兜一次。
+        val term = searchTerm(song)
+        if (term.isEmpty()) {
+            trail += "Apple搜索=跳过(无可搜信息)"
         } else {
-            val term = searchTerm(song)
-            if (term.isEmpty()) {
-                trail += "Apple搜索=跳过(无可搜信息)"
-            } else {
-                val found = attempt("Apple搜索", failures) { LyricsBridge.appleSearch(term) }
+            val storefronts =
+                if (configured == true) listOf("") else listOf(StorefrontPrimary, StorefrontFallback)
+            search@ for (sf in storefronts) {
+                val found = attempt("Apple搜索", failures) {
+                    LyricsBridge.appleSearch(term, storefront = sf)
+                }
                 if (found == null) {
                     trail += "Apple搜索($term)=请求失败"
-                } else {
-                    val picked = AppleSongMatcher.best(found.songs, song)
-                    val where = "sf=${found.storefront.ifEmpty { "-" }}" +
-                        if (found.storefrontProbed) "" else "!"
-                    trail += "Apple搜索($term)=${found.songs.size}条/$where/" +
-                        (picked?.let { "选中${it.id}(${it.name}-${it.artist})" } ?: "无够格候选")
-                    picked?.let { takeApple(it.id, via = "via=search") }?.let { return deliver(it) }
+                    break@search
                 }
+                val picked = AppleSongMatcher.best(found.songs, song)
+                val where = "sf=${found.storefront.ifEmpty { "-" }}" +
+                    if (configured == true && !found.storefrontProbed) "!" else ""
+                trail += "Apple搜索($term)=${found.songs.size}条/$where/" +
+                    (picked?.let { "选中${it.id}(${it.name}-${it.artist})" } ?: "无够格候选")
+                if (picked == null) continue@search
+                // 有够格候选就定了 —— 不再为它换区域（哪怕取词落空，也照用户口径停在这一档）。
+                takeApple(picked.id, via = "via=search")?.let { return deliver(it) }
+                break@search
             }
         }
 
@@ -202,10 +220,10 @@ class LyricsRepository(
         } else {
             "AMLL=命中(${amll.ttml.length}B, appleIds=${amll.appleMusicIds})"
         }
-        if (configured == true) {
-            for (appleId in amll?.appleMusicIds.orEmpty()) {
-                takeApple(appleId, via = "via=amll")?.let { return deliver(it) }
-            }
+        // AMLL 的 `amll:meta.appleMusicId` 同样是「够到 Apple 词」的入口：未登录时原生层会
+        // 拿它去第三方取词，所以这一路**不再按 configured 跳过**。
+        for (appleId in amll?.appleMusicIds.orEmpty()) {
+            takeApple(appleId, via = "via=amll")?.let { return deliver(it) }
         }
 
         if (amll != null) {
@@ -311,5 +329,16 @@ class LyricsRepository(
 
     private companion object {
         const val Tag = "LyricsRepository"
+
+        /**
+         * 未登录搜索的**起手区域**。
+         *
+         * 🔴 本项目实测：Apple catalog 按 storefront 分区，中文歌的官方词只在 `cn` 区有，
+         * `us` 区是零歌词。未登录问不到账号区域，所以以 `cn` 起手。
+         */
+        const val StorefrontPrimary = "cn"
+
+        /** 未登录搜索的**兜底区域**：`cn` 匹配不到够格候选时再用它搜一次（欧美曲目多在 `us`）。 */
+        const val StorefrontFallback = "us"
     }
 }

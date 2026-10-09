@@ -42,8 +42,16 @@ android {
         applicationId = "com.nevoit.cirro"
         minSdk = 30
         targetSdk = 37
-        versionCode = 4
+        versionCode = 5
         versionName = "1.0"
+
+        // 只出 arm64-v8a。x86_64 那份 `.so` 只服务模拟器，真机装不上也不该打进包 ——
+        // 原生库占 APK 体积的大头，剔掉它等于直接砍掉约一半的原生负载。
+        // `abiFilters` 对 `jniLibs/` 里手工放的预编译 `.so` 同样生效（不只是 ndk 构建产物）。
+        // ⚠️ 要跑 x86_64 模拟器时，把 "x86_64" 加回来。
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
