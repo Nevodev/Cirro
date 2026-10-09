@@ -28,6 +28,7 @@ data class LyricsListItem(
     val preserveAnchorOnHeightChange: Boolean = true,
     val focusHeightPx: (() -> Int)? = null,
     val focusLeadingHeightPx: (() -> Int)? = null,
+    val breathingHeightPx: (() -> Int)? = null,
 ) {
     init {
         require(estimatedHeightPx >= 0)
@@ -56,9 +57,6 @@ class LyricsLazyListState(
     internal var followAnchorIndex = -1
         private set
 
-    /** Item whose leading interlude dots are currently changing height. */
-    internal var interludeItemIndex = -1
-    private var clearInterludeAfterMeasure = false
     internal var anchoringContentChange = false
         private set
 
@@ -67,24 +65,6 @@ class LyricsLazyListState(
     /** Reflow around the followed aggregate without displacing its screen position or spring. */
     internal fun preserveFollowAnchorForContentChange() {
         if (!isManualScrolling && followAnchorIndex in items.indices) anchoringContentChange = true
-    }
-
-    internal fun setInterludeItem(index: Int) {
-        if (index >= 0) {
-            interludeItemIndex = index
-            clearInterludeAfterMeasure = false
-        } else if (interludeItemIndex >= 0) {
-            // Keep the old index through the removal measure so the collapsing gap follows the
-            // same direct-plus-one-spring path as its appearance.
-            clearInterludeAfterMeasure = true
-        }
-    }
-
-    internal fun finishInterludeMeasure() {
-        if (clearInterludeAfterMeasure) {
-            interludeItemIndex = -1
-            clearInterludeAfterMeasure = false
-        }
     }
 
     internal fun compensateContentHeightChange(delta: Int) {
@@ -144,6 +124,7 @@ class LyricsLazyListState(
     private var configuredSpacing = -1
     private var focusHeights = intArrayOf()
     private var focusLeadingHeights = intArrayOf()
+    private var breathingHeights = intArrayOf()
     private var keys: Map<Any, Int> = emptyMap()
     private var pendingIndex: Int? = initialFirstVisibleItemIndex
     private var pendingOffset = initialFirstVisibleItemScrollOffset
@@ -223,6 +204,7 @@ class LyricsLazyListState(
                 LyricsHeightIndex(IntArray(items.size) { items[it].estimatedHeightPx }, spacing)
             focusHeights = IntArray(items.size) { items[it].focusHeightPx?.invoke() ?: 0 }
             focusLeadingHeights = IntArray(items.size) { items[it].focusLeadingHeightPx?.invoke() ?: 0 }
+            breathingHeights = IntArray(items.size) { items[it].breathingHeightPx?.invoke() ?: 0 }
             configuredWidth = width
             configuredSpacing = spacing
             chain.reset(position)
@@ -263,14 +245,18 @@ class LyricsLazyListState(
 
     internal fun updateFocusHeights() {
         for (index in items.indices) {
-            val expected = items[index].focusHeightPx?.invoke() ?: continue
-            val delta = expected - focusHeights[index]
+            val expected = items[index].focusHeightPx?.invoke() ?: 0
+            val breathing = items[index].breathingHeightPx?.invoke() ?: 0
+            val breathingDelta = breathing - breathingHeights[index]
+            val delta = expected - focusHeights[index] + breathingDelta
             if (delta != 0) {
                 heights.update(index, (heights.height(index) + delta).coerceAtLeast(0))
                 // Commit target geometry now, preserving the drawn positions through one spring.
                 chain.applyContentShift(index, delta.toDouble())
-                focusHeights[index] = expected
             }
+            focusHeights[index] = expected
+            chain.applyBreathingContentShift(index, breathingDelta.toDouble())
+            breathingHeights[index] = breathing
             val leading = items[index].focusLeadingHeightPx?.invoke() ?: 0
             chain.applyLeadingContentShift(index, (leading - focusLeadingHeights[index]).toDouble())
             focusLeadingHeights[index] = leading

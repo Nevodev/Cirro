@@ -1,25 +1,27 @@
 package com.nevoit.cirro.lyrics.ui.composable.lyrics
 
-import com.nevoit.cirro.lyrics.ui.internal.effects.PreparedBreathingDots
-
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.*
-import androidx.compose.runtime.*
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.nevoit.cirro.lyrics.core.model.karaoke.KaraokeAlignment
-import kotlin.math.roundToInt
+import com.nevoit.cirro.lyrics.ui.internal.effects.PreparedBreathingDots
 
 data class KaraokeBreathingDotsDefaults(
     val number: Int = 3,
-    val size: Dp = 16.dp,
-    val margin: Dp = 12.dp,
-    val enterDurationMs: Int = 3000,
+    val size: Dp = 12.dp,
+    val margin: Dp = 8.dp,
+    val enterDurationMs: Int = 2000,
     val preExitStillDuration: Int = 200,
     val preExitDipAndRiseDuration: Int = 3000,
     val exitDurationMs: Int = 200,
@@ -42,10 +44,6 @@ fun KaraokeBreathingDots(
         remember(startTimeMs, endTimeMs, defaults) {
             PreparedBreathingDots(startTimeMs, endTimeMs, defaults)
         }
-    val visibility =
-        remember(timeline) {
-            derivedStateOf { timeline.visibility(timeline.elapsed(currentTime())) }
-        }
     val diameter = defaults.size.coerceAtLeast(1.dp)
     val margin = defaults.margin.coerceAtLeast(0.dp)
     val density = LocalDensity.current
@@ -55,14 +53,7 @@ fun KaraokeBreathingDots(
     Canvas(
         modifier
             .fillMaxWidth()
-            .layout { measurable, constraints ->
-                val placeable = measurable.measure(constraints)
-                layout(placeable.width, (placeable.height * visibility.value).roundToInt()) {
-                    placeable.place(0, 0)
-                }
-            }
-            .padding(horizontal = 16.dp)
-            // Part of the collapsing content, so hidden dots leave no residual list gap.
+            .padding(horizontal = 12.dp)
             .padding(bottom = trailingSpacing.coerceAtLeast(0.dp))
             .height(lineHeight.coerceAtLeast(diameter))
     ) {

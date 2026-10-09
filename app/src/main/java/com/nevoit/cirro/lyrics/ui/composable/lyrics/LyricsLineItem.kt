@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.BlurEffect
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.TransformOrigin
@@ -18,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import com.kyant.shapes.RoundedRectangle
 import com.nevoit.cirro.lyrics.ui.internal.effects.lyricsVisualLayer
 import com.nevoit.material.core.animation.rememberPressAnimatable
+import com.nevoit.material.core.interaction.DimIndication
 import com.nevoit.material.theme.tokens.Springs
 
 @Composable
@@ -99,7 +101,8 @@ fun LyricsLineItem(
                     .combinedClickable(
                         onClick = onLineClicked,
                         onLongClick = onLinePressed,
-                        interactionSource = press.interactionSource
+                        interactionSource = press.interactionSource,
+                        indication = DimIndication(color = Color.White)
                     )
             )
         content()

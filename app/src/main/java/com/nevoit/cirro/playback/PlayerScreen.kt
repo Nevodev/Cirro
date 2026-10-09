@@ -114,6 +114,7 @@ import kotlinx.coroutines.withContext
 import org.koin.compose.koinInject
 import java.util.Locale
 import kotlin.random.Random
+import kotlin.time.Duration.Companion.milliseconds
 
 /** 喂给网格背景的封面纹理边长。背景要被放大很多倍又始终在糊，再大的分辨率是纯浪费。 */
 private const val CoverTextureSize = 512
@@ -123,9 +124,6 @@ private const val CoverCrossfadeMs = 300
 
 /** 大封面的边长上限。竖屏由可用区域的短边说了算，这个只防横屏/平板把它拉得过大。 */
 private val CoverSideCap = 360.dp
-
-/** 顶部浮排（歌词/投屏）的左右边距，跟详情页头部那排浮钮取同一个值（那边 PagePadding 也是 12dp）。 */
-private val TopBarPadding = 12.dp
 
 /** 正文区的左右边距。歌曲信息、进度条、控制条都跟这条线对齐。 */
 private val ContentPadding = 24.dp
@@ -794,8 +792,7 @@ private fun PlayerOverlay(
                     buttonColor = buttonColor,
                     buttonIconColor = buttonIconColor,
                     playButtonColor = playButtonColor,
-                    playButtonIconColor = playButtonIconColor,
-                    modifier = Modifier.padding(horizontal = ContentPadding),
+                    playButtonIconColor = playButtonIconColor
                 )
                 VGap(36.dp)
                 Row(
@@ -1093,7 +1090,7 @@ private fun PlayerProgress(
     }
     LaunchedEffect(seekState, dragging, previewPosition != null) {
         if (!dragging && seekState.previewPosition.value != null) {
-            delay(1500L)
+            delay(1500.milliseconds)
             seekState.cancel()
         }
     }

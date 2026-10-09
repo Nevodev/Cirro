@@ -225,12 +225,6 @@ fun LyricsLazyColumn(
                         val placeable = compose(index).single().measure(childConstraints)
                         val previousHeight = state.heights.height(index)
                         state.heights.update(index, placeable.height)
-                        val heightDelta = placeable.height - previousHeight
-                        if (index == state.interludeItemIndex && heightDelta != 0) {
-                            // Dots are leading content of this item. Shift every later item as a
-                            // single geometry update; do not feed the same delta into each spring.
-                            state.chain.applyContentShift(index, heightDelta.toDouble())
-                        }
                         // Expansion above the visible anchor must not shove the reader's current
                         // line.
                         if (index < anchor && state.anchoringContentChange) {
@@ -257,7 +251,6 @@ fun LyricsLazyColumn(
                         state.chain.rebase(state.position)
                     }
                     state.chain.retain(startIndex, index)
-                    state.finishInterludeMeasure()
                     state.retainedFirst = startIndex
                     state.retainedEnd = index
                     val anchorCorrection =

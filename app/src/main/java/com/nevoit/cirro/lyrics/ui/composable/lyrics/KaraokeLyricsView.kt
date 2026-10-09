@@ -39,6 +39,7 @@ import com.nevoit.cirro.lyrics.ui.composable.list.LyricsLazyListState
 import com.nevoit.cirro.lyrics.ui.composable.list.LyricsListItem
 import com.nevoit.cirro.lyrics.ui.composable.list.LyricsScrollChain
 import com.nevoit.cirro.lyrics.ui.internal.effects.lyricsEdgeFade
+import com.nevoit.cirro.lyrics.ui.internal.effects.lyricsContentOffset
 import com.nevoit.cirro.lyrics.ui.internal.layout.LineVerticalPaddingDp
 import com.nevoit.cirro.lyrics.ui.internal.layout.LyricsLazyColumn
 import com.nevoit.cirro.lyrics.ui.internal.layout.lyricsAutoScroll
@@ -145,6 +146,10 @@ fun KaraokeLyricsView(
                 .maxOrNull()
             if (height == null) 40.dp else with(density) { height.toDp() }
         }
+        val breathingHeightPx = with(density) {
+            breathingLineHeight.coerceAtLeast(breathingDotsDefaults.size.coerceAtLeast(1.dp))
+                .roundToPx() + itemSpacing.coerceAtLeast(0.dp).roundToPx()
+        }
         val previousCaptions =
             remember(timeline, listState) { booleanArrayOf(showTranslation, showPhonetic) }
         SideEffect {
@@ -173,15 +178,16 @@ fun KaraokeLyricsView(
             mapping.itemIndex(timeline.focus.value.firstIndex)
         }
         val phoneticShown = rememberUpdatedState(showPhonetic)
-        SideEffect {
-            listState.setInterludeItem(
-                focus.activeInterludeIndex?.let(mapping::itemIndex) ?: -1
-            )
-        }
         val listItems =
-            remember(scene.lyrics, timeline, mapping) {
+            remember(scene.lyrics, timeline, mapping, density.density, breathingHeightPx) {
                 sourceIndices.map { index ->
                     val line = scene.lyrics.lines[index]
+                    val breathingHeight = {
+                        val currentFocus = timeline.focus.value
+                        if ((index == 0 && currentFocus.activeIntro) ||
+                            currentFocus.activeInterludeIndex == index
+                        ) breathingHeightPx else 0
+                    }
                     LyricsListItem(
                         key = "${lyrics.lines[index].start}-${lyrics.lines[index].end}-$index",
                         preserveAnchorOnHeightChange = false,
@@ -203,29 +209,25 @@ fun KaraokeLyricsView(
                                 ).toInt()
                             }
                         },
-                        settledHeightPx =
-                            line?.let { prepared ->
-                                {
-                                    prepared
-                                        .settledHeight(
-                                            translationShown.value,
-                                            phoneticShown.value,
-                                            density.density,
-                                            index in timeline.focus.value.allIndices,
-                                        )
-                                        .toInt()
-                                }
-                            },
+                        breathingHeightPx = breathingHeight,
+                        settledHeightPx = {
+                            (line?.settledHeight(
+                                translationShown.value,
+                                phoneticShown.value,
+                                density.density,
+                                index in timeline.focus.value.allIndices,
+                            )?.toInt() ?: 0) + breathingHeight()
+                        },
                         // Start with the same focus occupancy as the geometry model.
                         estimatedHeightPx =
-                            line
+                            (line
                                 ?.settledHeight(
                                     true,
                                     true,
                                     density.density,
                                     index in timeline.focus.value.allIndices,
                                 )
-                                ?.toInt() ?: 0,
+                                ?.toInt() ?: 0) + breathingHeight(),
                     )
                 }
             }
@@ -285,6 +287,11 @@ fun KaraokeLyricsView(
             val index = sourceIndices[itemIndex]
             val line = lyrics.lines[index]
             val prepared = scene.lyrics.lines[index]
+            val breathingExtent = if (
+                (index == 0 && timeline.introEnd > 5000) ||
+                (index > 0 && timeline.interludeEnds[index].toLong() -
+                    timeline.interludeStarts[index] > 5000)
+            ) breathingHeightPx.toFloat() else 0f
             val focused = index in focus.allIndices
             val distance =
                 maxOf(
@@ -329,6 +336,10 @@ fun KaraokeLyricsView(
                     )
                 if (prepared !in scene.lyrics.embeddedLines)
                     LyricsLineItem(
+                        modifier = Modifier.lyricsContentOffset(
+                            breathingExtent,
+                            prepared?.settledHeight(true, true, density.density, true) ?: 0f,
+                        ) { listState.chain.breathingOffset(itemIndex) },
                         isFocused = focused,
                         isRightAligned =
                             prepared?.rightAligned

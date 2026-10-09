@@ -1,9 +1,6 @@
 package com.nevoit.cirro.lyrics.ui.internal.effects
 
 import com.nevoit.cirro.lyrics.ui.composable.lyrics.KaraokeBreathingDotsDefaults
-
-import androidx.compose.foundation.layout.*
-import androidx.compose.runtime.*
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.roundToInt
@@ -29,6 +26,7 @@ internal class PreparedBreathingDots(
     val dipStart = stillStart - dip * factor
     private val breathingDuration = (dipStart - enterEnd).coerceAtLeast(0f)
     private val hasBreathing = breathingDuration > 16f
+    private val enterScale = if (hasBreathing) 0.8f else 1f
     private val halfCycles =
         (breathingDuration / 1500f).roundToInt().coerceAtLeast(1).let {
             if (it % 2 == 0) it + 1 else it
@@ -41,19 +39,23 @@ internal class PreparedBreathingDots(
     fun scale(time: Float): Float =
         when {
             !valid -> 0f
-            time < enterEnd -> smooth(time / enterEnd) * if (hasBreathing) 0.8f else 1f
+            time < enterEnd -> 0.5f + (enterScale - 0.5f) * smooth(time / enterEnd)
             hasBreathing && time < dipStart ->
                 0.9f - 0.1f * cos((time - enterEnd) / period * 2f * PI.toFloat())
+
             time < dipStart -> 1f
             time < stillStart ->
-                0.8f +
-                    0.2f *
+                0.85f +
+                        0.15f *
                         cos(
                             ((time - dipStart) / (stillStart - dipStart).coerceAtLeast(0.000001f))
                                 .coerceIn(0f, 1f) * 2f * PI.toFloat()
                         )
+
             time < exitStart -> 1f
-            else -> smooth((duration - time) / (duration - exitStart).coerceAtLeast(0.000001f))
+            else -> 0.5f + 0.5f * smooth(
+                (duration - time) / (duration - exitStart).coerceAtLeast(0.000001f)
+            )
         }
 
     fun alpha(time: Float): Float =
@@ -66,10 +68,6 @@ internal class PreparedBreathingDots(
 
     fun dotAlpha(index: Int, time: Float) =
         0.4f + 0.6f * ((time - enterEnd - dotSpan * index) / dotSpan).coerceIn(0f, 1f)
-
-    fun visibility(time: Float): Float =
-        if (!valid || time < 0f || time >= duration) 0f
-        else minOf(smooth(time / 220f), smooth((duration - time) / 220f))
 
     private fun smooth(value: Float): Float {
         val t = value.coerceIn(0f, 1f)

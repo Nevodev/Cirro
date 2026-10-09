@@ -136,15 +136,19 @@ class LyricsScrollChainStateTest {
     }
 
     @Test
-    fun resetAndRecycledItemsDiscardLeadingOffsets() {
+    fun resetAndRecycledItemsDiscardLeadingAndBreathingOffsets() {
         val state = chain()
         state.applyLeadingContentShift(2, 60.0)
+        state.applyBreathingContentShift(2, 40.0)
         state.reset(0.0)
         assertEquals(0f, state.leadingOffset(2), 0f)
+        assertEquals(0f, state.breathingOffset(2), 0f)
         state.applyLeadingContentShift(2, 60.0)
+        state.applyBreathingContentShift(2, 40.0)
         state.retain(0, 2)
         state.retain(0, 4)
         assertEquals(0f, state.leadingOffset(2), 0f)
+        assertEquals(0f, state.breathingOffset(2), 0f)
     }
 
     private fun chain(config: LyricsScrollChain = LyricsScrollChain.of(300f, 0.3f)) =

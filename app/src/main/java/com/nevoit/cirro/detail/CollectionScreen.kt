@@ -79,6 +79,8 @@ import com.nevoit.material.core.utility.NavigationBarSpacer
 import com.nevoit.material.theme.MaterialShapes
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.tokens.Springs
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import org.koin.core.parameter.parametersOf
@@ -162,7 +164,9 @@ fun CollectionRoute(
     }
 
     val songs = state.songs.dataOrNull.orEmpty()
-    val playingId = playback.state.collectAsState().value.song?.id
+    val playingId by remember(playback) {
+        playback.state.map { it.song?.id }.distinctUntilChanged()
+    }.collectAsState(initial = playback.state.value.song?.id)
     // 这一页的出身：随歌一起交给队列，打卡时回传 sourceId（每日推荐没有服务端集合，QueueSource 会留空）
     val queueSource = QueueSource(kind, id.toString())
 

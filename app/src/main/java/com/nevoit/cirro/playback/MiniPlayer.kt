@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -25,6 +26,7 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextMotion
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
@@ -39,6 +41,8 @@ import com.nevoit.material.core.modifier.marquee
 import com.nevoit.material.core.utility.rememberColorProducer
 import com.nevoit.material.theme.MaterialTheme
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
 /**
  * 吸底的迷你播放条。没有在放的歌时不渲染。
@@ -47,8 +51,7 @@ import kotlinx.coroutines.flow.StateFlow
  * 每帧重组一次；传 producer 就只有 draw 阶段去读，颜色变化只失效绘制。
  * 容器反色（深色页浅胶囊）时，调用方把文字色一起换掉。
  *
- * 状态收的是 [StateFlow] 而不是值：进度条每 500ms 要重画一次，读的位置留在这一层，
- * 重组范围就只有这条胶囊本身——传值的话每次心跳都会顺着参数把调用方连带重组一遍。
+ * 位置心跳只在 Canvas 的绘制期读取；歌曲、播放状态和错误独立订阅，避免封面和按钮跟着重组。
  */
 @Composable
 fun MiniPlayer(
@@ -62,13 +65,22 @@ fun MiniPlayer(
     contentVariantColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.contentVariant),
     progressColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.primary),
 ) {
-    val state by stateFlow.collectAsState()
-    val song = state.song ?: return
+    val header by remember(stateFlow) {
+        stateFlow.map { Triple(it.song, it.isPlaying, it.error) }.distinctUntilChanged()
+    }.collectAsState(initial = stateFlow.collectAsState().value.let {
+        Triple(
+            it.song,
+            it.isPlaying,
+            it.error
+        )
+    })
+    val progressState = stateFlow.collectAsState()
+    val song = header.first ?: return
     val boxWidth = LocalWindowInfo.current.containerDpSize.width - 24.dp
     val boxHeight = 56.dp
     val progressBarWidth = boxWidth - boxHeight
 
-    val error = state.error
+    val error = header.third
     val errorColor = rememberColorProducer(MaterialTheme.colors.error)
 
     Box(
@@ -125,9 +137,9 @@ fun MiniPlayer(
             ) {
                 Icon(
                     painter = painterResource(
-                        if (state.isPlaying) R.drawable.pause_fill else R.drawable.play_fill
+                        if (header.second) R.drawable.pause_fill else R.drawable.play_fill
                     ),
-                    contentDescription = if (state.isPlaying) "暂停" else "播放",
+                    contentDescription = if (header.second) "暂停" else "播放",
                     modifier = Modifier.size(28.dp),
                     tint = contentColor,
                 )
@@ -158,7 +170,7 @@ fun MiniPlayer(
         ) {
             drawRect(
                 color = progressColor(),
-                size = size.copy(width = size.width * state.progress),
+                size = size.copy(width = size.width * progressState.value.progress),
             )
         }
     }
@@ -176,7 +188,7 @@ private fun MiniPlayerText(
 ) {
     Text(
         text = text,
-        style = style,
+        style = style.merge(textMotion = TextMotion.Animated),
         color = color(),
         fontWeight = fontWeight,
         maxLines = 1,
