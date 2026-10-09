@@ -5,6 +5,7 @@ import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.lyrics.model.Lyrics
 import com.nevoit.cirro.lyrics.model.LyricsSource
 import com.nevoit.cirro.lyrics.parser.LrcLyricsParser
+import com.nevoit.cirro.lyrics.parser.LyricTrackRef
 import com.nevoit.cirro.lyrics.parser.TtmlLyricsParser
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -160,6 +161,10 @@ class LyricsRepository(
 
         val tried = LinkedHashSet<String>()
 
+        // 曲目身份：LRC 清洗靠它认「歌名 - 歌手」那条标题行（网易会把它混在 credit 中间）。
+        // 来源是界面正在播的这首，与取词命中的是哪一首无关 —— 它只参与一段很弱的判据。
+        val track = LyricTrackRef(song.name, song.artists)
+
         suspend fun takeApple(id: String, via: String): Lyrics? {
             if (id.isEmpty() || !tried.add(id)) return null
             val hit = attempt("Apple($id)", failures) { LyricsBridge.apple(id) }
@@ -239,7 +244,13 @@ class LyricsRepository(
         } else {
             trail += "网易=${if (netease.isEmpty) "空" else "${netease.lrc.length}B"}"
             LrcLyricsParser
-                .parse(netease.lrc, LyricsSource.NETEASE, netease.translation, netease.roman)
+                .parse(
+                    lrc = netease.lrc,
+                    source = LyricsSource.NETEASE,
+                    translation = netease.translation,
+                    roman = netease.roman,
+                    track = track,
+                )
                 .onFailure { failures += "网易解析: ${it.message}" }
                 .getOrNull()
                 ?.takeIf { it.lines.isNotEmpty() }
@@ -260,9 +271,14 @@ class LyricsRepository(
         } else {
             trail += "lrclib=${if (lrclib.synced.isNotBlank()) "synced" else "plain"}"
             val result = if (lrclib.synced.isNotBlank()) {
-                LrcLyricsParser.parse(lrclib.synced, LyricsSource.LRCLIB)
+                LrcLyricsParser.parse(lrclib.synced, LyricsSource.LRCLIB, track = track)
             } else {
-                LrcLyricsParser.parsePlain(lrclib.plain, LyricsSource.LRCLIB, lrclib.instrumental)
+                LrcLyricsParser.parsePlain(
+                    text = lrclib.plain,
+                    source = LyricsSource.LRCLIB,
+                    instrumental = lrclib.instrumental,
+                    track = track,
+                )
             }
             result
                 .onFailure { failures += "lrclib 解析: ${it.message}" }

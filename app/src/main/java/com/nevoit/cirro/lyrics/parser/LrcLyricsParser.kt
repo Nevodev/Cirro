@@ -22,6 +22,10 @@ import kotlin.math.abs
  * - 增强型 LRC 的行内逐字 `<mm:ss.xx>`（lrclib 有时会给）：解析成音节，同时从显示文本里剥掉；
  * - 整行被括号包住 → 背景人声（[LyricLine.isBackground]）；
  * - 结束时间统一在这里推导完（末行封顶），模型里不放哨兵值。
+ *
+ * 🔴 网易那份 `lrc` 前面（有时还有后面）会混进制作人员表与版权声明，`[00:00.000] 作词 : XXX`
+ * 这种，在 [readEntries] 之后、[buildLines] 之前由 [LyricInfoLines] 剔掉 —— 判据与实测数据
+ * 都在那个类里。
  */
 object LrcLyricsParser {
 
@@ -41,20 +45,28 @@ object LrcLyricsParser {
      * 解析带时间轴的 LRC。
      *
      * [translation] / [roman] 分别是网易 `tlyric` / `romalrc` 那两份独立文本，可为空。
+     * [track] 只用来认「歌名 - 歌手」标题行，拿不到就传 null（见 [LyricTrackRef]）。
      */
     fun parse(
         lrc: String,
         source: LyricsSource,
         translation: String? = null,
         roman: String? = null,
+        track: LyricTrackRef? = null,
     ): Result<Lyrics> = runCatching {
-        val parsed = readEntries(lrc)
-        var lines = buildLines(parsed)
+        val parsed = readEntries(lrc).withoutInfoLines(track)
+        var lines = buildLines(parsed.entries)
 
-        translation?.takeIf { it.isNotBlank() }?.let { lines = mergeByTime(lines, readEntries(it)) }
+        translation?.takeIf { it.isNotBlank() }?.let {
+            lines = mergeByTime(lines, readEntries(it).withoutInfoLines(track))
+        }
         roman?.takeIf { it.isNotBlank() }?.let { romanEntries ->
             // 罗马音塞进 romanizations 而不是 translations
-            lines = mergeByTime(lines, readEntries(romanEntries), intoRomanization = true)
+            lines = mergeByTime(
+                lines,
+                readEntries(romanEntries).withoutInfoLines(track),
+                intoRomanization = true,
+            )
         }
 
         Lyrics(
@@ -74,12 +86,18 @@ object LrcLyricsParser {
         text: String,
         source: LyricsSource,
         instrumental: Boolean = false,
+        track: LyricTrackRef? = null,
     ): Result<Lyrics> = runCatching {
-        val lines = text.lineSequence()
+        // 没有时间轴也照样有信息块（lrclib 的纯文本常带一段 `作词：…`），位置判据一样能用
+        val raw = text.lineSequence()
             .map { it.trim() }
             .filter { it.isNotEmpty() }
-            .map { LyricLine(startMs = 0L, endMs = 0L, text = it) }
             .toList()
+        val flags = LyricInfoLines.markInfoLines(raw, track)
+
+        val lines = raw
+            .filterIndexed { index, _ -> !flags[index] }
+            .map { LyricLine(startMs = 0L, endMs = 0L, text = it) }
 
         Lyrics(
             source = source,
@@ -87,6 +105,26 @@ object LrcLyricsParser {
             syncLevel = SyncLevel.PLAIN,
             instrumental = instrumental,
         )
+    }
+
+    // -----------------------------------------------------------------------
+    // 信息行清洗
+    // -----------------------------------------------------------------------
+
+    /**
+     * 剔掉信息行（作词 / 作曲 / 编曲 / 混音 …）。判据见 [LyricInfoLines]。
+     *
+     * 🔴 必须在 [readEntries] 之后、[buildLines] 之前做 —— 被删的行会参与结束时间推导，
+     * 而网易的 credit 常常连排同一个时间戳（`[00:00.000]` 四条），首行会因此拿到整首歌的时长。
+     *
+     * 翻译 / 罗马音也各过一遍：它们同样是 LRC 文本、同样可能带着那几行 credit；不过这一遍
+     * 只影响「翻译行会不会被并到主行上」（[mergeByTime] 按时间戳找宿主），去掉是安全的。
+     */
+    private fun Parsed.withoutInfoLines(track: LyricTrackRef?): Parsed {
+        if (entries.isEmpty()) return this
+        val flags = LyricInfoLines.markInfoLines(entries.map { it.text }, track)
+        if (flags.none { it }) return this
+        return Parsed(entries.filterIndexed { index, _ -> !flags[index] }, tags)
     }
 
     // -----------------------------------------------------------------------
@@ -169,10 +207,10 @@ object LrcLyricsParser {
     // 组装
     // -----------------------------------------------------------------------
 
-    private fun buildLines(parsed: Parsed): List<LyricLine> {
+    private fun buildLines(entries: List<Entry>): List<LyricLine> {
         // 含「只有时间戳」的行：它们不产出歌词，但决定上一行的结束时间，
         // 所以先一起排进时间轴，等结束时间推导完再滤掉。
-        val drafts = parsed.entries.map { entry ->
+        val drafts = entries.map { entry ->
             val (plainText, syllables) = splitInlineSyllables(entry.text)
             LyricLine(
                 startMs = entry.startMs,
