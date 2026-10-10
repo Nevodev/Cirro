@@ -24,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,6 +37,7 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.heading
@@ -56,8 +58,8 @@ import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
-import com.nevoit.material.core.interaction.rememberFlingBehavior
 import com.nevoit.material.core.interaction.overscroll.OffsetOverscrollEffect
+import com.nevoit.material.core.interaction.rememberFlingBehavior
 import com.nevoit.material.core.modifier.drawBackground
 import com.nevoit.material.theme.MaterialTheme
 
@@ -123,6 +125,9 @@ internal fun QueuePanel(
     activeButtonBackground: ColorProducer,
     activeButtonIcon: ColorProducer,
     modifier: Modifier = Modifier,
+    panelAlpha: () -> Float = { 1f },
+    panelScale: () -> Float = { 1f },
+    onContentReady: () -> Unit = {},
 ) {
     val queue by connection.queue.collectAsState()
     val entries = queue.entries
@@ -148,10 +153,22 @@ internal fun QueuePanel(
     val onInfinite = remember { {} }
 
     // 行要按"自己滚到了哪儿"算渐隐系数，所以列表状态得由面板持有、下发给每一行。
-    val listState = rememberLazyListState()
+    // 当前歌紧跟“继续播放”标题；从标题开始，避免吸顶标题遮住当前行。
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = continueHeaderIndex)
     val overscrollEffect = rememberOverscrollEffect()
+    val latestReady = rememberUpdatedState(onContentReady)
+    val readyReported = remember { booleanArrayOf(false) }
 
-    Column(modifier = modifier.fillMaxSize()) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                // Alpha belongs to each blend layer; an outer buffer would isolate Plus from the backdrop.
+                val scale = panelScale().coerceAtLeast(0f)
+                scaleX = scale
+                scaleY = scale
+            },
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -167,7 +184,9 @@ internal fun QueuePanel(
                 activeBackground = activeButtonBackground,
                 activeTint = activeButtonIcon,
                 onClick = onToggleShuffle,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .graphicsLayer { alpha = panelAlpha().coerceIn(0f, 1f) },
             )
             PanelButton(
                 iconRes = mode.buttonIconRes(),
@@ -178,7 +197,9 @@ internal fun QueuePanel(
                 activeBackground = activeButtonBackground,
                 activeTint = activeButtonIcon,
                 onClick = onCycleLoop,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .graphicsLayer { alpha = panelAlpha().coerceIn(0f, 1f) },
             )
             // 无限播放还没做，先摆着：按下有反馈，什么都不做。
             PanelButton(
@@ -190,7 +211,9 @@ internal fun QueuePanel(
                 activeBackground = activeButtonBackground,
                 activeTint = activeButtonIcon,
                 onClick = onInfinite,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .graphicsLayer { alpha = panelAlpha().coerceIn(0f, 1f) },
             )
         }
         VGap()
@@ -201,13 +224,21 @@ internal fun QueuePanel(
         ) {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .onGloballyPositioned { coordinates ->
+                        // LazyColumn composes its visible rows during measurement.
+                        if (!readyReported[0] && coordinates.size.width > 0 && coordinates.size.height > 0) {
+                            readyReported[0] = true
+                            latestReady.value()
+                        }
+                    },
                 flingBehavior = rememberFlingBehavior(),
                 overscrollEffect = overscrollEffect,
             ) {
                 if (history.isNotEmpty()) {
                     stickyHeader(key = HistoryHeaderKey) {
-                        QueueHeader("播放历史", HistoryHeaderKey, listState, overscrollEffect)
+                        QueueHeader("播放历史", HistoryHeaderKey, listState, overscrollEffect, panelAlpha)
                     }
                     items(history, key = { it.uid }, contentType = { "song" }) { entry ->
                         QueueRow(
@@ -216,15 +247,22 @@ internal fun QueuePanel(
                             listState = listState,
                             section = historySection,
                             overscrollEffect = overscrollEffect,
+                            panelAlpha = panelAlpha,
                         )
                     }
                 }
                 stickyHeader(key = ContinueHeaderKey) {
-                    QueueHeader("继续播放", ContinueHeaderKey, listState, overscrollEffect)
+                    QueueHeader("继续播放", ContinueHeaderKey, listState, overscrollEffect, panelAlpha)
                 }
                 if (continuation.isEmpty()) {
                     item(key = "queue_continue_empty") {
-                        QueueEmptySection("暂无待播歌曲", listState, continueSection, overscrollEffect)
+                        QueueEmptySection(
+                            "暂无待播歌曲",
+                            listState,
+                            continueSection,
+                            overscrollEffect,
+                            panelAlpha,
+                        )
                     }
                 }
                 items(continuation, key = { it.uid }, contentType = { "song" }) { entry ->
@@ -234,6 +272,7 @@ internal fun QueuePanel(
                         listState = listState,
                         section = continueSection,
                         overscrollEffect = overscrollEffect,
+                        panelAlpha = panelAlpha,
                     )
                 }
             }
@@ -247,13 +286,14 @@ private fun QueueHeader(
     headerKey: String,
     listState: LazyListState,
     overscrollEffect: OverscrollEffect?,
+    panelAlpha: () -> Float,
 ) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .headerEdgeFade(listState, headerKey, overscrollEffect)
+            .headerEdgeFade(listState, headerKey, overscrollEffect, panelAlpha)
             .semantics { heading() }
-            .padding(vertical = 8.dp),
+            .padding(vertical = 12.dp),
     ) {
         QueueText(
             title,
@@ -269,13 +309,14 @@ private fun QueueEmptySection(
     listState: LazyListState,
     section: QueueSection,
     overscrollEffect: OverscrollEffect?,
+    panelAlpha: () -> Float,
 ) {
     val rowKey = "queue_continue_empty"
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = RowMinHeight)
-            .edgeFade(listState, rowKey, BlendMode.Plus, section, overscrollEffect),
+            .edgeFade(listState, rowKey, BlendMode.Plus, section, overscrollEffect, panelAlpha),
         contentAlignment = Alignment.CenterStart,
     ) {
         QueueText(text, MaterialTheme.type.subHeadline2, Color.White.copy(alpha = 0.4f))
@@ -289,10 +330,12 @@ private fun Modifier.headerEdgeFade(
     listState: LazyListState,
     headerKey: String,
     overscrollEffect: OverscrollEffect?,
+    panelAlpha: () -> Float,
 ): Modifier = this
     .graphicsLayer {
         compositingStrategy = CompositingStrategy.Offscreen
         blendMode = BlendMode.Plus
+        alpha = panelAlpha().coerceIn(0f, 1f)
     }
     .drawWithContent {
         val layout = listState.layoutInfo
@@ -346,6 +389,7 @@ private fun QueueRow(
     listState: LazyListState,
     section: QueueSection,
     overscrollEffect: OverscrollEffect?,
+    panelAlpha: () -> Float,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -357,7 +401,7 @@ private fun QueueRow(
         Box(
             modifier = Modifier
                 .matchParentSize()
-                .edgeFade(listState, rowKey, BlendMode.SrcOver, section, overscrollEffect),
+                .edgeFade(listState, rowKey, BlendMode.SrcOver, section, overscrollEffect, panelAlpha),
             contentAlignment = Alignment.CenterStart,
         ) {
             AsyncImage(
@@ -375,7 +419,7 @@ private fun QueueRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = RowMinHeight)
-                .edgeFade(listState, rowKey, BlendMode.Plus, section, overscrollEffect),
+                .edgeFade(listState, rowKey, BlendMode.Plus, section, overscrollEffect, panelAlpha),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             HGap(CoverAdvance)
@@ -432,9 +476,11 @@ private fun Modifier.edgeFade(
     blendMode: BlendMode,
     section: QueueSection,
     overscrollEffect: OverscrollEffect?,
+    panelAlpha: () -> Float,
 ): Modifier = this
     .graphicsLayer {
         this.blendMode = blendMode
+        alpha = panelAlpha().coerceIn(0f, 1f)
         // `Auto` 只在"这行离两端都足够远、绘制段肯定不会铺遮罩"时才给（见 isNearEdge）。
         // ⚠️ 方向不能反：给了 `Auto`（没有独立缓冲）却铺了 `DstIn`，遮罩会直接作用在屏幕画布上，
         // 把底下的内容连背景一起擦掉。所以这个判据只允许**偏保守**（多建一层缓冲），不许偏激进。
@@ -564,7 +610,10 @@ private fun fadeScale(viewportHeight: Float, topFade: Float, bottomFade: Float):
  * overscroll 在外层平移内容，layoutInfo 不包含这段位移；把固定视口反向移回内容坐标，
  * 标题边界就能随内容移动，而屏幕边缘的渐隐和裁剪保持固定。
  */
-internal fun LazyListLayoutInfo.fadeViewport(section: QueueSection, visualOffsetY: Float): QueueFadeViewport {
+internal fun LazyListLayoutInfo.fadeViewport(
+    section: QueueSection,
+    visualOffsetY: Float
+): QueueFadeViewport {
     val start = viewportStartOffset - visualOffsetY
     val end = viewportEndOffset - visualOffsetY
     var top = start

@@ -112,7 +112,10 @@ void main() {
     }
     color += dither * (ditherStrength / 255.0);
     // OpenGL texture Y is opposite to Compose's top-to-bottom gradient direction.
-    float wash = smoothstep(0.2, 0.8, 1.0 - vTexCoord.y) * 0.8;
+    float ordinaryWash = smoothstep(0.2, 0.8, 1.0 - vOrdinaryTexCoord.y);
+    float lyricsWash = smoothstep(0.2, 0.8, 1.0 - vTexCoord.y);
+    // Fade the warped wash out with the mesh so the fullscreen path matches at zero.
+    float wash = mix(ordinaryWash, lyricsWash, uLyricsModeMix) * 0.8;
     color = mix(color, uBackdropWashColor, wash);
     outColor = vec4(clamp(color, 0.07, 0.97), 1.0);
 }

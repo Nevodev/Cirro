@@ -596,8 +596,14 @@ internal class PearMeshGlRenderer(
             Log.d(
                 "PearMeshAudio",
                 "renderer audioEnabled=${state.audioVisualizationEnabled} audioCurrent=$audioCurrent " +
-                    "updatedAt=${audioFrame.currentUpdatedAtNanos} lane=${lanePower.joinToString { "%.3f".format(it) }} " +
-                    "wash=${currentBackdropWashColor.joinToString { "%.3f".format(it) }}",
+                        "updatedAt=${audioFrame.currentUpdatedAtNanos} lane=${
+                            lanePower.joinToString {
+                                "%.3f".format(
+                                    it
+                                )
+                            }
+                        } " +
+                        "wash=${currentBackdropWashColor.joinToString { "%.3f".format(it) }}",
             )
         }
         return FloatArray(3) { index ->
@@ -704,7 +710,7 @@ internal class PearMeshGlRenderer(
         const val BLUR_DOWNSAMPLE = 4f
         const val KAWASE_SIGMA_PER_OFFSET = 16f
         const val LYRICS_BLUR_SIGMA = 42.5f
-        const val ORDINARY_BLUR_SIGMA = 80f
+        const val ORDINARY_BLUR_SIGMA = 100f
         const val ARTWORK_TRANSITION_SECONDS = 0.5
         const val IMAGE_PULSE_INTENSITY = 0.33f
         const val AUDIO_REPORT_TIMEOUT_NANOS = 250_000_000L
