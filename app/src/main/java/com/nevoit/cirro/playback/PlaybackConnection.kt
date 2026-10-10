@@ -29,6 +29,7 @@ import com.nevoit.cirro.data.model.withCurrent
 import com.nevoit.cirro.data.model.withInsert
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -40,6 +41,21 @@ import kotlin.time.Duration.Companion.milliseconds
 
 private const val PositionTickMs = 500L
 
+/**
+ * 起播宽限期（毫秒）。
+ *
+ * 点了播放 / 切了歌之后，`playWhenReady` 立刻就是 true，但播放器要缓冲完才出声——
+ * 这段窗口里界面照样显示"正在播放"（见 [PlaybackState.isPlayingOptimistic]），
+ * 超过这个时长还没出声才落回暂停。
+ */
+private const val PlayIntentGraceMs = 15_000L
+
+/** 播放失败后的自动重试次数上限（不含第一次尝试）。 */
+private const val MaxPlaybackRetries = 3
+
+/** 自动重试的退避基数：第 n 次重试等 `n × 这个值`。 */
+private const val RetryBaseDelayMs = 1_000L
+
 /** 正在播的那首歌，字段全部来自 MediaItem 的元数据，所以重连之后也拿得回来。 */
 data class NowPlaying(
     val id: Long,
@@ -50,7 +66,15 @@ data class NowPlaying(
 
 data class PlaybackState(
     val song: NowPlaying? = null,
+    /**
+     * 播放器**真的**在出声。
+     *
+     * 必须跟真实音频对齐的地方用它（歌词外推、进度波纹的滚动）——
+     * 界面上的播放键请用 [isPlayingOptimistic]。
+     */
     val isPlaying: Boolean = false,
+    /** 播放意图已亮、但还没出声（切歌缓冲 / 刚点播放），且还在 [PlayIntentGraceMs] 窗口内。 */
+    val pendingPlay: Boolean = false,
     val isBuffering: Boolean = false,
     val audioSessionId: Int = C.AUDIO_SESSION_ID_UNSET,
     val positionMs: Long = 0,
@@ -69,6 +93,15 @@ data class PlaybackState(
      */
     val discontinuity: Long = 0,
 ) {
+    /**
+     * 界面意义上的"正在播放"：真出声了，或者还在起播宽限期内（缓冲 / 重试中）。
+     *
+     * 播放键、迷你条、网格背景这些**用户感知**的地方看它。直接拿 [isPlaying] 驱动按钮的话，
+     * 每次切歌都会在缓冲期闪一下暂停——`ExoPlayer` 在 `STATE_BUFFERING` 时报的就是
+     * `isPlaying = false`，哪怕 `playWhenReady` 还亮着。
+     */
+    val isPlayingOptimistic: Boolean get() = isPlaying || pendingPlay
+
     val progress: Float
         get() = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
 }
@@ -106,10 +139,32 @@ class PlaybackConnection(
     /** 见 [PlaybackState.discontinuity]。只在这个 listener 里加。 */
     private var positionDiscontinuity = 0L
 
+    /** 见 [PlaybackState.pendingPlay]。 */
+    private var playIntentPending = false
+    private var playIntentJob: Job? = null
+
+    /** 自动重试计数，起播成功 / 换曲 / 重新点播时清零。 */
+    private var retryCount = 0
+    private var retryJob: Job? = null
+
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
             // 换曲也是一次位置不连续——整个时间轴换了一条，位置从新曲的 0 开始。
-            if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) positionDiscontinuity++
+            if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) {
+                positionDiscontinuity++
+                // 换了首歌，重试次数从头算：上一首的失败不该限制下一首。
+                retryCount = 0
+                retryJob?.cancel()
+                // 上一首的错误提示也不该跟着飘过来（新歌成不成，等它自己的结果）。
+                _state.value = _state.value.copy(error = null)
+            }
+            // 真的播起来了，之前攒的重试额度作废。
+            if (player.playbackState == Player.STATE_READY) {
+                retryCount = 0
+                retryJob?.cancel()
+            }
+            // 必须在 publish 之前算：宽限窗口是 publish 要读的状态。
+            updatePlayIntent(player)
             publish(player)
             syncCurrentIndex(player)
         }
@@ -124,8 +179,64 @@ class PlaybackConnection(
         }
 
         override fun onPlayerError(error: PlaybackException) {
-            _state.value = _state.value.copy(error = error.readableMessage())
+            // "这首歌确定放不了"（无版权 / 下架 / 拿不到直链）是结论而不是抖动，重试只是白等。
+            if (error.songUnavailable() != null || retryCount >= MaxPlaybackRetries) {
+                giveUp(error)
+                return
+            }
+            retryCount++
+            val attempt = retryCount
+            retryJob?.cancel()
+            _state.value = _state.value.copy(error = "播放出错，正在重试（$attempt/$MaxPlaybackRetries）")
+            retryJob = scope.launch(Dispatchers.Main) {
+                delay(RetryBaseDelayMs * attempt)
+                val controller = controller ?: return@launch
+                // prepare() 从当前进度重新加载——中途断网接回来是接着放，不是从头开始。
+                controller.prepare()
+                controller.play()
+            }
         }
+    }
+
+    /**
+     * 起播宽限窗口（见 [PlaybackState.pendingPlay]）。
+     *
+     * `playWhenReady` 亮着但还没出声 = 正在起播：开一个最多 [PlayIntentGraceMs] 的窗口，
+     * 窗口内界面照样显示"正在播放"。到点还没出声就把播放器真的按停——不按停的话
+     * `playWhenReady` 永远亮着，乐观状态会把按钮一直画成"正在播放"，点了也没反应。
+     */
+    private fun updatePlayIntent(player: Player) {
+        if (player.playWhenReady && !player.isPlaying) {
+            if (playIntentPending) return
+            playIntentPending = true
+            playIntentJob = scope.launch(Dispatchers.Main) {
+                delay(PlayIntentGraceMs)
+                playIntentPending = false
+                val controller = controller
+                if (controller != null && controller.playWhenReady && !controller.isPlaying) {
+                    controller.pause()
+                }
+                controller?.let(::publish)
+            }
+        } else if (playIntentPending) {
+            playIntentPending = false
+            playIntentJob?.cancel()
+            playIntentJob = null
+        }
+    }
+
+    /**
+     * 放弃这一首：报错，并把播放器真的按停。
+     *
+     * 按停是有意的——否则 `playWhenReady` 还亮着，界面会一直显示成"正在播放"，
+     * 但底下早就没声了，两套真相。
+     */
+    private fun giveUp(error: PlaybackException) {
+        retryJob?.cancel()
+        retryJob = null
+        retryCount = 0
+        controller?.pause()
+        _state.value = _state.value.copy(error = error.readableMessage())
     }
 
     init {
@@ -285,9 +396,23 @@ class PlaybackConnection(
         }
     }
 
+    /**
+     * 🔴 用 `playWhenReady`（播放**意图**）而不是 `isPlaying` 判方向。
+     *
+     * 缓冲期 `isPlaying` 是 false，拿它判断的话，"显示暂停图标时点一下"会变成 `play()`
+     * ——正好点反。意图是唯一不会在缓冲期抖动的信号。
+     */
     fun togglePlayPause() {
         val controller = controller ?: return
-        if (controller.isPlaying) controller.pause() else controller.play()
+        if (controller.playWhenReady) {
+            // 手动暂停要连重试一起取消，否则退避到点它又自己放起来。
+            retryJob?.cancel()
+            retryJob = null
+            controller.pause()
+        } else {
+            retryCount = 0
+            controller.play()
+        }
     }
 
     /**
@@ -314,6 +439,10 @@ class PlaybackConnection(
 
     /** 整队换掉：先把顺序算好（随机模式下建队即打乱），再一次性交给播放器。 */
     private fun startQueue(controller: MediaController, queue: PlaybackQueue) {
+        // 新点播一次：之前那首攒下的重试额度和退避任务都不该跟过来。
+        retryJob?.cancel()
+        retryJob = null
+        retryCount = 0
         controller.setMediaItems(
             queue.entries.map { it.song.toMediaItem() },
             queue.currentIndex,
@@ -379,11 +508,12 @@ class PlaybackConnection(
         val now = SystemClock.uptimeMillis()
         if (now - lastSessionLogMs >= 1000L) {
             lastSessionLogMs = now
-            Log.d("CirroPlayback", "publish playing=${player.isPlaying} playbackState=${player.playbackState} audioSessionId=${player.audioSessionId} mediaId=${player.currentMediaItem?.mediaId}")
+            Log.d("CirroPlayback", "publish playing=${player.isPlaying} pending=$playIntentPending playWhenReady=${player.playWhenReady} retry=$retryCount playbackState=${player.playbackState} audioSessionId=${player.audioSessionId} mediaId=${player.currentMediaItem?.mediaId}")
         }
         _state.value = PlaybackState(
             song = player.currentMediaItem?.toNowPlaying(),
             isPlaying = player.isPlaying,
+            pendingPlay = playIntentPending,
             isBuffering = player.playbackState == Player.STATE_BUFFERING,
             audioSessionId = player.audioSessionId,
             positionMs = player.currentPosition.coerceAtLeast(0),

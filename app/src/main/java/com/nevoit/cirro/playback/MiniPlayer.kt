@@ -65,14 +65,14 @@ fun MiniPlayer(
     contentVariantColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.contentVariant),
     progressColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.primary),
 ) {
+    // 按钮跟着「乐观播放」走：切歌缓冲期 `isPlaying` 是 false，直接拿它画会闪一下暂停图标。
+    // `initial` 是首帧快照，同步读一次即可——原先那层 `stateFlow.collectAsState()` 多开了
+    // 一份永不取消的订阅，只为取这一个值。
+    @Suppress("StateFlowValueCalledInComposition")
     val header by remember(stateFlow) {
-        stateFlow.map { Triple(it.song, it.isPlaying, it.error) }.distinctUntilChanged()
-    }.collectAsState(initial = stateFlow.collectAsState().value.let {
-        Triple(
-            it.song,
-            it.isPlaying,
-            it.error
-        )
+        stateFlow.map { Triple(it.song, it.isPlayingOptimistic, it.error) }.distinctUntilChanged()
+    }.collectAsState(initial = stateFlow.value.let {
+        Triple(it.song, it.isPlayingOptimistic, it.error)
     })
     val progressState = stateFlow.collectAsState()
     val song = header.first ?: return

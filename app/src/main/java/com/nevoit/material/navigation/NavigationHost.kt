@@ -12,6 +12,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -19,6 +20,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -33,8 +36,63 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import com.nevoit.material.theme.tokens.Springs
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import androidx.lifecycle.viewmodel.compose.viewModel as androidxViewModel
+
+/**
+ * Share of the entrance travel a page must complete before it *looks* settled — the default
+ * threshold of [PageTransitionState.awaitNearlySettled].
+ */
+private const val DefaultRevealProgress = 0.95f
+
+/**
+ * The entrance/exit state of the page currently rendering, handed to that page through
+ * [LocalPageTransitionState].
+ *
+ * Exists so a page can hold off work that would stutter its own entrance — a full list landing
+ * halfway through the slide, for instance. [progress] changes every frame, so `awaitSettled` /
+ * `awaitNearlySettled` (or a `snapshotFlow` of your own) is the only safe way to wait on it.
+ */
+@Stable
+class PageTransitionState internal constructor(
+    /** 0 = the page is fully off its resting place, 1 = in place. */
+    val progress: State<Float>,
+    /** True while the entrance or exit animation is still running. */
+    val isTransitioning: State<Boolean>,
+    /**
+     * Full slide distance of this page, in device px (= host width). `(1 - progress) * slideDistancePx`
+     * is how far the page still has to travel; zero when the parent gives no width to slide across.
+     */
+    val slideDistancePx: Float,
+) {
+    /** Suspends until the page has finished moving into or out of place. */
+    suspend fun awaitSettled() {
+        snapshotFlow { isTransitioning.value }.first { !it }
+    }
+
+    /**
+     * Suspends until the page *looks* settled, skipping the tail of the slide.
+     *
+     * The default threshold is the last 5% of the travel ([DefaultRevealProgress]): by then the
+     * spring has only a few px left and is moving at near-zero speed, so the eye already reads the
+     * page as in place — while that tail still costs a good chunk of the entrance. Pass
+     * [remainingDistancePx] to use an absolute distance (24f, say) instead; both are the same test.
+     */
+    suspend fun awaitNearlySettled(
+        remainingDistancePx: Float = (1f - DefaultRevealProgress) * slideDistancePx,
+    ) {
+        val threshold = remainingDistancePx.coerceAtLeast(0f)
+        snapshotFlow { isTransitioning.value && (1f - progress.value) * slideDistancePx > threshold }
+            .first { !it }
+    }
+}
+
+/**
+ * Null outside a [NavigationHost] (previews, isolated tests) — pages must treat that as "no
+ * transition to wait for" rather than skipping their content.
+ */
+val LocalPageTransitionState = staticCompositionLocalOf<PageTransitionState?> { null }
 
 private class PageTransition(
     initialProgress: Float,
@@ -46,7 +104,7 @@ private class PageTransition(
     val underlayProgress = Animatable(initialUnderlayProgress)
     var ready by mutableStateOf(initialProgress == 1f)
     var targetProgress by mutableFloatStateOf(1f)
-    var isPageTransitioning by mutableStateOf(initialProgress != 1f)
+    val isTransitioning = mutableStateOf(initialProgress != 1f)
     val lifecycleOwner = NavigationPageLifecycleOwner(parentLifecycle)
 }
 
@@ -205,7 +263,7 @@ fun <D : Any> NavigationHost(
                 navigator.reopen(exitingEntry)
                 transition.lifecycleOwner.activate()
                 transition.targetProgress = 1f
-                transition.isPageTransitioning = true
+                transition.isTransitioning.value = true
                 // Move the entry back to the top of the draw order.
                 visibleEntries = visibleEntries - exitingEntry + exitingEntry
                 return
@@ -236,7 +294,7 @@ fun <D : Any> NavigationHost(
 
             transition.lifecycleOwner.deactivate()
             transition.targetProgress = 0f
-            transition.isPageTransitioning = true
+            transition.isTransitioning.value = true
         }
 
         val hostHandle = remember(navigator) {
@@ -291,7 +349,7 @@ fun <D : Any> NavigationHost(
                         }
                         if (transition.targetProgress != targetProgress) return@LaunchedEffect
 
-                        transition.isPageTransitioning = false
+                        transition.isTransitioning.value = false
                         if (targetProgress == 0f && transition.progress.value == 0f) {
                             release(entry)
                         }
@@ -315,7 +373,7 @@ fun <D : Any> NavigationHost(
                                         underlayDriver?.underlayProgress?.value ?: 0f,
                                     )
                                 },
-                            transition.isPageTransitioning,
+                            transition.isTransitioning.value,
                         ).zIndex(index.toFloat()),
                     ) {
                         if (index != 0) {
@@ -336,6 +394,17 @@ fun <D : Any> NavigationHost(
                             CompositionLocalProvider(
                                 LocalLifecycleOwner provides transition.lifecycleOwner,
                                 LocalViewModelStoreOwner provides pageViewModelStoreOwner,
+                                // Remembered: a fresh instance every recomposition would invalidate
+                                // the whole page under a static local.
+                                LocalPageTransitionState provides remember(transition) {
+                                    PageTransitionState(
+                                        // `Animatable` is no longer a `State` (animation-core 1.12);
+                                        // `asState()` is the only way to hand it out read-only.
+                                        progress = transition.progress.asState(),
+                                        isTransitioning = transition.isTransitioning,
+                                        slideDistancePx = hostWidthPx.toFloat(),
+                                    )
+                                },
                             ) {
                                 if (index != 0) {
                                     BackHandler(onBack = ::closeTop)

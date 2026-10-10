@@ -76,6 +76,7 @@ import com.nevoit.material.core.interaction.overscroll.OffsetOverscrollFactory
 import com.nevoit.material.core.layout.VerticalStack
 import com.nevoit.material.core.modifier.smoothGradient
 import com.nevoit.material.core.utility.NavigationBarSpacer
+import com.nevoit.material.navigation.LocalPageTransitionState
 import com.nevoit.material.theme.MaterialShapes
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.tokens.Springs
@@ -163,7 +164,21 @@ fun CollectionRoute(
         }
     }
 
+    // 曲目请求已经由 ViewModel **和进场动画同时发出**了，这里只负责在动画**看着到位**之后把它亮出来：
+    // 一整屏列表（外加每行的封面请求）在滑动过程中落地，会把导航那条 350ms 的位移弹簧顶掉帧。
+    // 不等弹簧真正 settle —— 最后 5% 的位移只有几 px、速度已接近 0，肉眼早读作"到位"了，
+    // 卡在这一小段后面白等（约 0.05 × 宿主宽度 px，1080px 宽上就是 54px）。
+    // 头部不等——标题和底色本来就是进场动画的一部分。
+    // 拿不到导航状态（预览/独立测试）就直接亮，别把内容卡住。
+    val pageTransition = LocalPageTransitionState.current
+    LaunchedEffect(viewModel, pageTransition) {
+        pageTransition?.awaitNearlySettled()
+        viewModel.revealTracks()
+    }
+
     val songs = state.songs.dataOrNull.orEmpty()
+    // 这里是误报，不改
+    @Suppress("StateFlowValueCalledInComposition")
     val playingId by remember(playback) {
         playback.state.map { it.song?.id }.distinctUntilChanged()
     }.collectAsState(initial = playback.state.value.song?.id)
@@ -321,6 +336,7 @@ private fun CollectionScreen(
                         maxLines = if (expanded) Int.MAX_VALUE else 2,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier
+                            .animateItem(tween(200), Springs.crisp(), tween(200))
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp)
                             .clickable { expanded = !expanded },
@@ -328,60 +344,64 @@ private fun CollectionScreen(
                 }
             }
             if (state.info.dataOrNull != null) {
-                when (val songs = state.songs) {
-                    is Section.Ready -> {
-                        item {
-                            VGap(24.dp)
-                        }
-                        itemsIndexed(songs.data) { index, song ->
-                            TrackRow(
-                                song = song,
-                                backgroundColor = itemBgColor,
-                                showArtist = song.artistText != state.info.dataOrNull?.author,
-                                index = if (state.info.dataOrNull?.kind == CollectionKind.ALBUM) index + 1 else null,
-                                position = resolvePosition(songs.data.size, index),
-                                isPlaying = song.id == playingId,
-                                content = contentColor,
-                                contentVariant = contentVariantColor,
-                                onClick = { onPlay(index) },
-                                modifier = Modifier.padding(horizontal = PagePadding),
-                            )
-                            if (index < songs.data.size - 1) {
-                                VGap(4.dp)
-                            }
-                        }
-                    }
-
-                    Section.Loading -> item(key = "tracks-loading") {
-                        ListHint(text = "正在加载歌曲…", contentVariant = contentVariantColor)
-                    }
-
-                    is Section.Failed -> item(key = "tracks-failed") {
+                // 曲目区只有两种画面：列表，或者「加载失败」。**加载中什么都不画是故意的**——
+                // 曲目在进场动画期间就预取完了（见 `CollectionViewModel`），再插一个中间态
+                // 只会让列表落地时多抖一下。
+                val tracks = state.songs
+                if (tracks is Section.Failed) {
+                    item(key = "tracks-failed") {
                         ListHint(
                             text = "加载失败 · 点按重试",
                             contentVariant = contentVariantColor,
                             onClick = onRetry,
                         )
                     }
-                }
-
-                item(key = "footer") {
-                    val info = state.info.dataOrNull
-                    val songsLoaded = state.songs.dataOrNull
-                    val count = songsLoaded?.size ?: info?.trackCount ?: 0
-                    val totalMs = songsLoaded?.sumOf { it.durationMs } ?: 0L
-                    val footer = footerText(info, count, totalMs)
-                    if (footer.isNotEmpty()) {
-                        VGap(24.dp)
-                        Text(
-                            text = footer,
-                            style = MaterialTheme.type.subHeadline,
-                            lineHeight = 20.sp,
-                            color = contentVariantColor,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp)
-                        )
+                } else {
+                    val songs = tracks.dataOrNull.orEmpty()
+                    if (songs.isNotEmpty()) {
+                        item(key = "tracks-gap") {
+                            VGap(24.dp)
+                        }
+                        // 必须给 key：`animateItem()` 靠它做增删/位移，没 key 就只有默认的 index。
+                        itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
+                            TrackRow(
+                                song = song,
+                                backgroundColor = itemBgColor,
+                                showArtist = song.artistText != state.info.dataOrNull?.author,
+                                index = if (state.info.dataOrNull?.kind == CollectionKind.ALBUM) index + 1 else null,
+                                position = resolvePosition(songs.size, index),
+                                isPlaying = song.id == playingId,
+                                content = contentColor,
+                                contentVariant = contentVariantColor,
+                                onClick = { onPlay(index) },
+                                modifier = Modifier
+                                    .animateItem(tween(200), Springs.crisp(), tween(200))
+                                    .padding(horizontal = PagePadding),
+                            )
+                            if (index < songs.size - 1) {
+                                VGap(4.dp)
+                            }
+                        }
+                        item(key = "footer") {
+                            val info = state.info.dataOrNull
+                            val songsLoaded = state.songs.dataOrNull
+                            val count = songsLoaded?.size ?: info?.trackCount ?: 0
+                            val totalMs = songsLoaded?.sumOf { it.durationMs } ?: 0L
+                            val footer = footerText(info, count, totalMs)
+                            if (footer.isNotEmpty()) {
+                                VGap(24.dp)
+                                Text(
+                                    text = footer,
+                                    style = MaterialTheme.type.subHeadline,
+                                    lineHeight = 20.sp,
+                                    color = contentVariantColor,
+                                    modifier = Modifier
+                                        .animateItem(tween(200), Springs.crisp(), tween(200))
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }

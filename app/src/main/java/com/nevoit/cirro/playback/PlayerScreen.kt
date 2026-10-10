@@ -333,9 +333,16 @@ private fun PlayerOverlay(
     // 粗粒度订阅：只有换歌、或播放/暂停翻转，才让这一层重组。位置心跳（500ms 一次）不进这里，
     // 它只喂给进度条那一小块（见 PlayerProgress）——整页重组会重新 subcompose 封面区，
     // 而 BoxWithConstraints 是 SubcomposeLayout，那是这一页最贵的一步。
+    // 播放状态取「乐观播放」：切歌缓冲期 `isPlaying` 是 false，直接拿它画会让播放键闪一下暂停，
+    // 网格背景也跟着停一下再走（见 `PlaybackState.isPlayingOptimistic`）。
+    // `initial` 是首帧快照，同步读一次即可——原先那层 `collectAsState()` 多开了一份
+    // 永不取消的订阅，只为取这一个值。
+    @Suppress("StateFlowValueCalledInComposition")
     val header by remember(connection) {
-        connection.state.map { it.song to it.isPlaying }.distinctUntilChanged()
-    }.collectAsState(initial = connection.state.collectAsState().value.let { it.song to it.isPlaying })
+        connection.state.map { it.song to it.isPlayingOptimistic }.distinctUntilChanged()
+    }.collectAsState(
+        initial = connection.state.value.let { it.song to it.isPlayingOptimistic }
+    )
 
     val song = header.first
     val isPlaying = header.second

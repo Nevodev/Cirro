@@ -168,6 +168,9 @@ fun BoxScope.Main() {
     // 只订阅"到底有没有歌在放"这一位。订阅整个 state 会让 Main 跟着 500ms 的位置心跳重组，
     // 连带 NavigationHost、MiniPlayer 和它们底下的整棵树一起——播放位置该由真正需要它的
     // 那一小块自己去读（MiniPlayer / 播放页）。
+    // `initial` 是首帧快照：StateFlow.value 本来就是零成本的当前值，这里要的是一个**值**不是一份
+    // 订阅，所以刻意同步读一次。观察变化由紧随其后的 collectAsState 负责，不是漏订阅。
+    @Suppress("StateFlowValueCalledInComposition")
     val hasSong by remember(playbackConnection) {
         playbackConnection.state.map { it.song != null }.distinctUntilChanged()
     }.collectAsState(initial = playbackConnection.state.value.song != null)
