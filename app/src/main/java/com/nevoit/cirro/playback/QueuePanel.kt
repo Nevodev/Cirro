@@ -1,5 +1,6 @@
 package com.nevoit.cirro.playback
 
+import androidx.compose.foundation.OverscrollEffect
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,9 +14,12 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListItemInfo
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberOverscrollEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -29,11 +33,15 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
@@ -49,6 +57,7 @@ import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
 import com.nevoit.material.core.interaction.rememberFlingBehavior
+import com.nevoit.material.core.interaction.overscroll.OffsetOverscrollEffect
 import com.nevoit.material.core.modifier.drawBackground
 import com.nevoit.material.theme.MaterialTheme
 
@@ -71,7 +80,7 @@ private val CoverAdvance = CoverSize + CoverGap
  * 上和下是分开调的：列表挂在按钮排下面，上边缘顶着那颗按钮、下边缘也许要压到屏幕底，
  * 两边想要的过渡长度本来就不一样。
  */
-private val TopEdgeFade = 40.dp
+private val TopEdgeFade = 12.dp
 
 /** 列表**下**边缘的渐隐长度。 */
 private val BottomEdgeFade = 56.dp
@@ -82,19 +91,29 @@ private val ButtonGap = 8.dp
 
 private val ButtonIconSize = 24.dp
 
+private const val HistoryHeaderKey = "queue_history_header"
+private const val ContinueHeaderKey = "queue_continue_header"
+
+internal data class QueueSection(
+    val headerKey: String,
+    val nextHeaderKey: String?,
+    val firstRowIndex: Int,
+    val lastRowIndex: Int,
+)
+
+internal data class QueueFadeViewport(
+    val top: Float,
+    val bottom: Float,
+    val overhangAbove: Float,
+    val overhangBelow: Float,
+) {
+    val height: Float get() = bottom - top
+}
+
 /**
- * 播放页的「待播列表」面板。
+ * 播放页的队列面板，历史和当前及后续歌曲共用一个滚动列表。
  *
- * 结构就两块：**上面列表、下面按钮排**，中间空 12dp。
- *
- * - 列表：整体圆角裁切，行样式（含首尾圆角那套形状）跟详情页曲目行同款；
- *   行底和文字色都从调用方来（行底 = 上下一首按钮的底色，文字 = 播放页 meta 的 content / variant）。
- * - 按钮排：**随机**（两态）、**循环**（顺序 / 列表循环 / 单曲循环）、**无限**（还没有功能）。
- *   关闭态用上下一首按钮那套配色，打开态用播放键那套，一眼能看出哪颗是开着的。
- *
- * 🔴 出现动画还没做：调用方按选中状态直接挂/摘整棵子树。
- * 🔴 队列状态**由面板自己订**（而不是从 PlayerOverlay 传下来）：队列每加一条插播都会变，
- * 让播放页顶层跟着重组不划算。颜色是推进来的 producer，读值只在绘制段和叶子文字里。
+ * 队列状态由面板自己订阅，避免插播或切歌时让播放页顶层跟着重组。
  */
 @Composable
 internal fun QueuePanel(
@@ -107,6 +126,19 @@ internal fun QueuePanel(
 ) {
     val queue by connection.queue.collectAsState()
     val entries = queue.entries
+    val historySize = queue.currentIndex.coerceIn(0, entries.size)
+    val history = remember(entries, historySize) { entries.take(historySize) }
+    val continuation = remember(entries, historySize) { entries.drop(historySize) }
+    val historySection = remember(historySize) {
+        QueueSection(HistoryHeaderKey, ContinueHeaderKey, 1, historySize)
+    }
+    val continueHeaderIndex = if (history.isEmpty()) 0 else history.size + 1
+    val continueSection = remember(continueHeaderIndex, continuation.size) {
+        QueueSection(
+            ContinueHeaderKey, null, continueHeaderIndex + 1,
+            continueHeaderIndex + continuation.size.coerceAtLeast(1),
+        )
+    }
     val mode = queue.mode
     val shuffle = queue.shuffle
 
@@ -117,6 +149,7 @@ internal fun QueuePanel(
 
     // 行要按"自己滚到了哪儿"算渐隐系数，所以列表状态得由面板持有、下发给每一行。
     val listState = rememberLazyListState()
+    val overscrollEffect = rememberOverscrollEffect()
 
     Column(modifier = modifier.fillMaxSize()) {
         Row(
@@ -170,18 +203,131 @@ internal fun QueuePanel(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
                 flingBehavior = rememberFlingBehavior(),
+                overscrollEffect = overscrollEffect,
             ) {
-                itemsIndexed(entries, key = { _, entry -> entry.uid }) { _, entry ->
+                if (history.isNotEmpty()) {
+                    stickyHeader(key = HistoryHeaderKey) {
+                        QueueHeader("播放历史", HistoryHeaderKey, listState, overscrollEffect)
+                    }
+                    items(history, key = { it.uid }, contentType = { "song" }) { entry ->
+                        QueueRow(
+                            song = entry.song,
+                            rowKey = entry.uid,
+                            listState = listState,
+                            section = historySection,
+                            overscrollEffect = overscrollEffect,
+                        )
+                    }
+                }
+                stickyHeader(key = ContinueHeaderKey) {
+                    QueueHeader("继续播放", ContinueHeaderKey, listState, overscrollEffect)
+                }
+                if (continuation.isEmpty()) {
+                    item(key = "queue_continue_empty") {
+                        QueueEmptySection("暂无待播歌曲", listState, continueSection, overscrollEffect)
+                    }
+                }
+                items(continuation, key = { it.uid }, contentType = { "song" }) { entry ->
                     QueueRow(
                         song = entry.song,
                         rowKey = entry.uid,
                         listState = listState,
+                        section = continueSection,
+                        overscrollEffect = overscrollEffect,
                     )
                 }
             }
         }
     }
 }
+
+@Composable
+private fun QueueHeader(
+    title: String,
+    headerKey: String,
+    listState: LazyListState,
+    overscrollEffect: OverscrollEffect?,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .headerEdgeFade(listState, headerKey, overscrollEffect)
+            .semantics { heading() }
+            .padding(vertical = 8.dp),
+    ) {
+        QueueText(
+            title,
+            MaterialTheme.type.title4.copy(fontWeight = FontWeight.Medium),
+            Color.White
+        )
+    }
+}
+
+@Composable
+private fun QueueEmptySection(
+    text: String,
+    listState: LazyListState,
+    section: QueueSection,
+    overscrollEffect: OverscrollEffect?,
+) {
+    val rowKey = "queue_continue_empty"
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = RowMinHeight)
+            .edgeFade(listState, rowKey, BlendMode.Plus, section, overscrollEffect),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        QueueText(text, MaterialTheme.type.subHeadline2, Color.White.copy(alpha = 0.4f))
+    }
+}
+
+private val OverscrollEffect?.visualOffsetY: Float
+    get() = (this as? OffsetOverscrollEffect)?.visualOffset?.y ?: 0f
+
+private fun Modifier.headerEdgeFade(
+    listState: LazyListState,
+    headerKey: String,
+    overscrollEffect: OverscrollEffect?,
+): Modifier = this
+    .graphicsLayer {
+        compositingStrategy = CompositingStrategy.Offscreen
+        blendMode = BlendMode.Plus
+    }
+    .drawWithContent {
+        val layout = listState.layoutInfo
+        val header = layout.visibleItemsInfo.firstOrNull { it.key == headerKey }
+            ?: return@drawWithContent
+        val visualOffset = overscrollEffect.visualOffsetY
+        val top = layout.viewportStartOffset - visualOffset
+        val bottom = layout.viewportEndOffset - visualOffset
+        val viewportHeight = bottom - top
+        val clipTop = (top - header.offset).coerceAtLeast(0f)
+        val clipBottom = (bottom - header.offset).coerceAtMost(size.height)
+        if (viewportHeight <= 0f || clipBottom <= clipTop) return@drawWithContent
+
+        val scale = fadeScale(viewportHeight, TopEdgeFade.toPx(), BottomEdgeFade.toPx())
+        // 正常吸顶时不淡化标题，只在被下一个标题推出顶部时展开上渐隐带。
+        val topFade = minOf(TopEdgeFade.toPx() * scale, (top - header.offset).coerceAtLeast(0f))
+        val last = layout.visibleItemsInfo.maxByOrNull { it.index }
+        val overhangBelow = when {
+            last == null -> 0f
+            last.index < layout.totalItemsCount - 1 -> Float.POSITIVE_INFINITY
+            else -> (last.offset + last.size - bottom).coerceAtLeast(0f)
+        }
+        val bottomFade = minOf(BottomEdgeFade.toPx() * scale, overhangBelow)
+        clipRect(top = clipTop, bottom = clipBottom) {
+            this@drawWithContent.drawContent()
+            val brush = rowFadeBrush(
+                offset = header.offset - top,
+                size = header.size.toFloat(),
+                viewportHeight = viewportHeight,
+                topFade = topFade,
+                bottomFade = bottomFade,
+            )
+            if (brush != null) drawRect(brush = brush, blendMode = BlendMode.DstIn)
+        }
+    }
 
 /**
  * 待播列表的一行：**左半是封面、右半是文字 + 图标**，两半各是一个边缘渐隐层。
@@ -198,6 +344,8 @@ private fun QueueRow(
     song: Song,
     rowKey: Any,
     listState: LazyListState,
+    section: QueueSection,
+    overscrollEffect: OverscrollEffect?,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -209,7 +357,7 @@ private fun QueueRow(
         Box(
             modifier = Modifier
                 .matchParentSize()
-                .edgeFade(listState, rowKey, BlendMode.SrcOver),
+                .edgeFade(listState, rowKey, BlendMode.SrcOver, section, overscrollEffect),
             contentAlignment = Alignment.CenterStart,
         ) {
             AsyncImage(
@@ -227,7 +375,7 @@ private fun QueueRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = RowMinHeight)
-                .edgeFade(listState, rowKey, BlendMode.Plus),
+                .edgeFade(listState, rowKey, BlendMode.Plus, section, overscrollEffect),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             HGap(CoverAdvance)
@@ -271,9 +419,8 @@ private fun QueueRow(
  * 🔴 渐隐系数按**这一行在列表视口里的位置**算，所以只能在图层段 / 绘制段读 —— 跟播放页
  * "`progress` 只在 draw/layer 读"是同一条规矩；读在组合期就是滚一下重组整个列表。
  *
- * 🔴 带宽**从视口边起算**，两端各按"那一端被裁掉多少内容"展开（[fadeOverhangAbove] /
- * [fadeOverhangBelow]）：列表滚到顶时上面没有被切断的内容，带宽收到 0 —— 第一行的顶边一点都不淡；
- * 一滚起来就展开，而**裁剪线处永远收到 α = 0**，视口边上就看不到硬切口。
+ * 🔴 每个分区的视口从自己的标题下沿延伸到下一个标题或列表底部（[fadeViewport]）。
+ * 带宽按那一端被裁掉的歌曲内容展开；完整显示的首尾行不淡出，滚入边界时裁剪线处收到 α = 0。
  *
  * ⚠️ 反着做（带宽固定、只把系数整体往 1 抬）看着像等价，其实不是：裁剪线处的 α 会被抬到
  * `1 - gate`，被父级切掉的那半行就成了"半透明地被截断"，硬切口感官上更难看。带宽收到 0 就不存在
@@ -283,6 +430,8 @@ private fun Modifier.edgeFade(
     listState: LazyListState,
     rowKey: Any,
     blendMode: BlendMode,
+    section: QueueSection,
+    overscrollEffect: OverscrollEffect?,
 ): Modifier = this
     .graphicsLayer {
         this.blendMode = blendMode
@@ -291,7 +440,10 @@ private fun Modifier.edgeFade(
         // 把底下的内容连背景一起擦掉。所以这个判据只允许**偏保守**（多建一层缓冲），不许偏激进。
         compositingStrategy =
             if (blendMode == BlendMode.SrcOver &&
-                !listState.isNearEdge(rowKey, TopEdgeFade.toPx(), BottomEdgeFade.toPx())
+                !listState.isNearEdge(
+                    rowKey, section, overscrollEffect.visualOffsetY,
+                    TopEdgeFade.toPx(), BottomEdgeFade.toPx(),
+                )
             ) {
                 CompositingStrategy.Auto
             } else {
@@ -299,27 +451,32 @@ private fun Modifier.edgeFade(
             }
     }
     .drawWithContent {
-        drawContent()
         val layoutInfo = listState.layoutInfo
-        // 不可见的行根本不绘制；查不到就是没这根行，不用管。
         val info = layoutInfo.visibleItemsInfo.firstOrNull { it.key == rowKey }
             ?: return@drawWithContent
-        val viewportHeight = layoutInfo.viewportSize.height.toFloat()
+        val viewport = layoutInfo.fadeViewport(section, overscrollEffect.visualOffsetY)
+        val viewportHeight = viewport.height
+        val clipTop = (viewport.top - info.offset).coerceAtLeast(0f)
+        val clipBottom = (viewport.bottom - info.offset).coerceAtMost(size.height)
+        if (viewportHeight <= 0f || clipBottom <= clipTop) return@drawWithContent
         // 两条带各按各的上限来；总长赶上视口时等比收窄，保证中间还剩一段通透区。
         val scale = fadeScale(viewportHeight, TopEdgeFade.toPx(), BottomEdgeFade.toPx())
         // 🔴 再按"那一端被裁掉多少"把带宽收一下：滚到顶/底那端收到 0（整条带消失），有溢出时
         // 带宽 = 溢出量 —— 带始终从视口边起算，所以裁剪线处恒为 0，切口是透明的。
-        val topFade = minOf(TopEdgeFade.toPx() * scale, listState.fadeOverhangAbove())
-        val bottomFade = minOf(BottomEdgeFade.toPx() * scale, listState.fadeOverhangBelow())
-        if (topFade + bottomFade <= 0f) return@drawWithContent
-        val brush = rowFadeBrush(
-            offset = info.offset.toFloat(),
-            size = info.size.toFloat(),
-            viewportHeight = viewportHeight,
-            topFade = topFade,
-            bottomFade = bottomFade,
-        ) ?: return@drawWithContent
-        drawRect(brush = brush, blendMode = BlendMode.DstIn)
+        val topFade = minOf(TopEdgeFade.toPx() * scale, viewport.overhangAbove)
+        val bottomFade = minOf(BottomEdgeFade.toPx() * scale, viewport.overhangBelow)
+        // 标题保持透明；即使渐隐带收到了 0，歌曲也不能画进标题占据的区域。
+        clipRect(top = clipTop, bottom = clipBottom) {
+            this@drawWithContent.drawContent()
+            val brush = rowFadeBrush(
+                offset = info.offset - viewport.top,
+                size = info.size.toFloat(),
+                viewportHeight = viewportHeight,
+                topFade = topFade,
+                bottomFade = bottomFade,
+            )
+            if (brush != null) drawRect(brush = brush, blendMode = BlendMode.DstIn)
+        }
     }
 
 /**
@@ -369,9 +526,6 @@ private fun rowFadeBrush(
  * 🔴 带宽是**从视口边起算**的，所以裁剪线处恒为 0：父级（LazyColumn）就在那里把这一行切掉，
  * 断口是透明的，看不到硬边。行只露半截时尤其明显 —— 那半截的顶端正好压在裁剪线上。
  *
- * 🔴 [rowFadeBrush] 和 [isNearEdge] **都走这一个函数** —— 那两边必须同口径（一边决定画不画遮罩、
- * 一边决定要不要给独立缓冲），各写一份迟早走岔，而走岔的后果是把屏幕连 GL 一起擦掉。
- *
  * ⚠️ 带宽为 0（滚到头的那一端）时，它那个分支的条件会和前一个分支完全重合
  * （`topEnd == -offset`），永远命中不到 —— 但**下面两个取商的分支都必须自带 `> 0f` 守卫**：
  * `y < -offset` 是严格小于，边界那一像素（`y == -offset`）会落到带里来，那时除数是 0。
@@ -405,24 +559,42 @@ private fun fadeScale(viewportHeight: Float, topFade: Float, bottomFade: Float):
     if (topFade + bottomFade <= viewportHeight) 1f else viewportHeight / (topFade + bottomFade)
 
 /**
- * 视口上边**被裁掉多少内容**（px）。列表滚到顶时为 0 —— 上面没有被切断的内容，第一行的顶边
- * 一点都不该淡；上方还压着整项时给无穷大，让调用方的 `minOf` 直接落到带宽上限。
- *
- * 🔴 拿它去**收带宽**（而不是去抬系数）：带宽锚在视口边上，裁剪线处才恒为 α = 0。
- * 只读 [LazyListState.layoutInfo]，所以只能在 draw / layer 段调。
+ * 吸顶标题会被下一个标题推出视口，必须使用布局里的实际偏移，不能假设标题始终位于 0。
+ * 溢出量只统计本分区的歌曲行；把吸顶项算进去会让完整显示的首行也被淡出。
+ * overscroll 在外层平移内容，layoutInfo 不包含这段位移；把固定视口反向移回内容坐标，
+ * 标题边界就能随内容移动，而屏幕边缘的渐隐和裁剪保持固定。
  */
-private fun LazyListState.fadeOverhangAbove(): Float {
-    val first = layoutInfo.visibleItemsInfo.firstOrNull() ?: return 0f
-    if (first.index > 0) return Float.POSITIVE_INFINITY
-    return (-first.offset).coerceAtLeast(0).toFloat()
-}
-
-/** 视口下边**被裁掉多少内容**（px）。列表滚到底时为 0；下面还有没渲染的项时给无穷大。 */
-private fun LazyListState.fadeOverhangBelow(): Float {
-    val info = layoutInfo
-    val last = info.visibleItemsInfo.lastOrNull() ?: return 0f
-    if (last.index < info.totalItemsCount - 1) return Float.POSITIVE_INFINITY
-    return (last.offset + last.size - info.viewportSize.height).coerceAtLeast(0).toFloat()
+internal fun LazyListLayoutInfo.fadeViewport(section: QueueSection, visualOffsetY: Float): QueueFadeViewport {
+    val start = viewportStartOffset - visualOffsetY
+    val end = viewportEndOffset - visualOffsetY
+    var top = start
+    var bottom = end
+    var first: LazyListItemInfo? = null
+    var last: LazyListItemInfo? = null
+    for (item in visibleItemsInfo) {
+        if (item.key == section.headerKey) {
+            top = (item.offset + item.size).toFloat().coerceIn(start, end)
+        }
+        if (item.key == section.nextHeaderKey) {
+            bottom = item.offset.toFloat().coerceIn(start, end)
+        }
+        if (item.index in section.firstRowIndex..section.lastRowIndex) {
+            if (first == null || item.index < first.index) first = item
+            if (last == null || item.index > last.index) last = item
+        }
+    }
+    bottom = bottom.coerceAtLeast(top)
+    val above = when {
+        first == null -> 0f
+        first.index > section.firstRowIndex -> Float.POSITIVE_INFINITY
+        else -> (top - first.offset).coerceAtLeast(0f)
+    }
+    val below = when {
+        last == null -> 0f
+        last.index < section.lastRowIndex -> Float.POSITIVE_INFINITY
+        else -> (last.offset + last.size - bottom).coerceAtLeast(0f)
+    }
+    return QueueFadeViewport(top, bottom, above, below)
 }
 
 /**
@@ -433,13 +605,20 @@ private fun LazyListState.fadeOverhangBelow(): Float {
  * 缓冲 —— 这个方向是安全的。**反过来（该给 `Offscreen` 却给了 `Auto`）会把遮罩铺到屏幕画布上**，
  * 那才是要命的，所以宁可多建。
  */
-private fun LazyListState.isNearEdge(rowKey: Any, topFade: Float, bottomFade: Float): Boolean {
+private fun LazyListState.isNearEdge(
+    rowKey: Any,
+    section: QueueSection,
+    visualOffsetY: Float,
+    topFade: Float,
+    bottomFade: Float,
+): Boolean {
+    val layout = layoutInfo
+    val info = layout.visibleItemsInfo.firstOrNull { it.key == rowKey } ?: return true
+    val viewport = layout.fadeViewport(section, visualOffsetY)
+    if (viewport.height <= 0f) return true
     val reach = maxOf(topFade, bottomFade)
-    if (reach <= 0f) return false
-    val info = layoutInfo.visibleItemsInfo.firstOrNull { it.key == rowKey } ?: return false
     val offset = info.offset.toFloat()
-    val viewportHeight = layoutInfo.viewportSize.height.toFloat()
-    return offset < reach || offset + info.size > viewportHeight - reach
+    return offset < viewport.top + reach || offset + info.size > viewport.bottom - reach
 }
 
 /**

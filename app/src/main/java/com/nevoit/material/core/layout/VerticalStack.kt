@@ -1,11 +1,13 @@
 package com.nevoit.material.core.layout
 
+import androidx.compose.foundation.OverscrollEffect
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberOverscrollEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
@@ -27,6 +29,7 @@ fun VerticalStack(
         if (!reverseLayout) Arrangement.Top else Arrangement.Bottom,
     horizontalAlignment: Alignment.Horizontal = Alignment.Start,
     userScrollEnabled: Boolean = true,
+    overscrollEffect: OverscrollEffect? = rememberOverscrollEffect(),
     content: LazyListScope.() -> Unit
 ) {
     LazyColumn(
@@ -37,7 +40,8 @@ fun VerticalStack(
         verticalArrangement = verticalArrangement,
         horizontalAlignment = horizontalAlignment,
         flingBehavior = rememberFlingBehavior(),
-        userScrollEnabled = userScrollEnabled
+        userScrollEnabled = userScrollEnabled,
+        overscrollEffect = overscrollEffect,
     ) {
         content()
         paddingItem(state)

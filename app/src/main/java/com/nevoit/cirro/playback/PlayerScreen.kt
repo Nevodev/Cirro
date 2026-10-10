@@ -495,11 +495,7 @@ private fun PlayerOverlay(
     LaunchedEffect(meshBackdrop, queueVisible) {
         behindLyricsProgress.animateTo(
             targetValue = if (queueVisible) 0f else 1f,
-            animationSpec = Springs.smooth(
-                durationMillis = 400,
-                extraBounce = 0.0,
-                visibilityThreshold = 0.0001f
-            ),
+            animationSpec = Springs.smooth(durationMillis = 400),
         ) {
             meshBackdrop.setBehindLyricsProgress(value)
         }

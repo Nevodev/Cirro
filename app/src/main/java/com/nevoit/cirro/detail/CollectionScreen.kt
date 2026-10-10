@@ -4,7 +4,7 @@ import android.content.Intent
 import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.LocalOverscrollFactory
+import androidx.compose.foundation.OverscrollEffect
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberOverscrollEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -72,7 +73,7 @@ import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.MaterialShapeButton
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
-import com.nevoit.material.core.interaction.overscroll.OffsetOverscrollFactory
+import com.nevoit.material.core.interaction.overscroll.OffsetOverscrollEffect
 import com.nevoit.material.core.layout.VerticalStack
 import com.nevoit.material.core.modifier.smoothGradient
 import com.nevoit.material.core.utility.NavigationBarSpacer
@@ -295,13 +296,14 @@ private fun CollectionScreen(
     )
 
     val description = state.info.dataOrNull?.description.orEmpty().trim()
+    val overscrollEffect = rememberOverscrollEffect()
 
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(backgroundColor)
     ) {
-        VerticalStack(modifier = Modifier.fillMaxSize()) {
+        VerticalStack(modifier = Modifier.fillMaxSize(), overscrollEffect = overscrollEffect) {
             item(key = "header") {
                 val info = state.info.dataOrNull
                 when {
@@ -320,6 +322,7 @@ private fun CollectionScreen(
                         onPlay = { onPlay(0) },
                         onShuffle = onShuffle,
                         onToggleSubscribed = onToggleSubscribed,
+                        overscrollEffect = overscrollEffect,
                     )
                 }
             }
@@ -445,10 +448,10 @@ private fun HeaderBlock(
     onPlay: () -> Unit,
     onShuffle: () -> Unit,
     onToggleSubscribed: () -> Unit,
+    overscrollEffect: OverscrollEffect?,
     modifier: Modifier = Modifier,
 ) {
     val screenWidth = LocalWindowInfo.current.containerDpSize.width
-    val overscrollFactory = LocalOverscrollFactory.current as? OffsetOverscrollFactory
     val screenWidthPx = LocalWindowInfo.current.containerSize.width
     val risePx = with(LocalDensity.current) { HeaderRise.toPx() }
     Box(
@@ -465,7 +468,7 @@ private fun HeaderBlock(
                 modifier = Modifier
                     .graphicsLayer {
                         val overscrollOffset =
-                            overscrollFactory?.activeEffect?.visualOffset?.y?.coerceAtLeast(0f)
+                            (overscrollEffect as? OffsetOverscrollEffect)?.visualOffset?.y?.coerceAtLeast(0f)
                                 ?: 0f
                         val scale =
                             (screenWidthPx + overscrollOffset + risePx) / (screenWidthPx + risePx)

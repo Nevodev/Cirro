@@ -41,7 +41,6 @@ class RubberBandState {
 class OffsetOverscrollEffect(
     private val rubberBandState: RubberBandState? = null,
     private val onRelease: ((Offset) -> Unit)? = null,
-    private val onUserInput: ((OffsetOverscrollEffect) -> Unit)? = null,
     private val animationScope: CoroutineScope,
     private val animationSpec: AnimationSpec<Float>,
     private val maxFraction: Float,
@@ -75,7 +74,7 @@ class OffsetOverscrollEffect(
                 .toOffset()
         }
 
-    override val isInProgress: Boolean = false
+    override val isInProgress: Boolean get() = offset != Offset.Zero
 
     override fun applyToScroll(
         delta: Offset,
@@ -88,7 +87,6 @@ class OffsetOverscrollEffect(
 
         val isUserInput = source == NestedScrollSource.UserInput
         if (isUserInput) {
-            onUserInput?.invoke(this)
             springJob?.cancel()
             springJob = null
         }
@@ -192,22 +190,9 @@ class OffsetOverscrollEffect(
             return singleRelativeLayoutWithLayer(placeable) {
                 shape = NoOpShape
 
-                val currentAxis = axis
-                val maxDistance = when (currentAxis) {
-                    Axis.Horizontal -> maxWidth
-                    Axis.Vertical -> maxHeight
-                    Axis.None -> 0f
-                }
-
-                val overscrollDistance = offset.toFloat()
-                if (currentAxis != Axis.None && maxDistance > 0f && overscrollDistance != 0f) {
-                    val visualOffset = computeOffset(overscrollDistance, maxDistance)
-                    val offsetPx = visualOffset.fastRoundToInt()
-                    when (currentAxis) {
-                        Axis.Horizontal -> translationX = offsetPx.toFloat()
-                        Axis.Vertical -> translationY = offsetPx.toFloat()
-                    }
-                }
+                val renderedOffset = visualOffset
+                translationX = renderedOffset.x
+                translationY = renderedOffset.y
             }
         }
     }
