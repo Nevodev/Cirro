@@ -2,7 +2,6 @@ package com.nevoit.cirro.lyrics.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
@@ -13,19 +12,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorProducer
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.unit.dp
-import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.lyrics.core.model.ISyncedLine
 import com.nevoit.cirro.lyrics.core.model.SyncedLyrics
 import com.nevoit.cirro.lyrics.core.model.karaoke.KaraokeAlignment
 import com.nevoit.cirro.lyrics.core.model.karaoke.KaraokeLine
 import com.nevoit.cirro.lyrics.core.model.karaoke.KaraokeSyllable
-import com.nevoit.cirro.lyrics.data.LyricsRepository
 import com.nevoit.cirro.lyrics.model.LyricBackground
 import com.nevoit.cirro.lyrics.model.LyricLine
 import com.nevoit.cirro.lyrics.model.LyricSyllable
@@ -36,25 +30,13 @@ import com.nevoit.cirro.lyrics.ui.composable.list.rememberLyricsLazyListState
 import com.nevoit.cirro.lyrics.ui.composable.lyrics.KaraokeLyricsView
 import com.nevoit.cirro.lyrics.ui.composable.lyrics.LyricsAnchor
 import com.nevoit.cirro.lyrics.ui.composable.lyrics.LyricsFade
-import com.nevoit.cirro.lyrics.ui.internal.layout.onMeasured
 import com.nevoit.cirro.playback.PlaybackConnection
-import com.nevoit.material.core.component.Text
-import com.nevoit.material.theme.MaterialTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
-import org.koin.compose.koinInject
 import kotlin.time.Duration.Companion.milliseconds
 
 /** 颜色过渡停下来多久才算「稳定」。见 [rememberSettledLyricsColor]。 */
 private const val ColorSettleMs = 120L
-
-/**
- * 「歌词已落定」上报的兜底时限（毫秒）。
- *
- * 正常路径上第一帧布局就会上报；真到要用它的时候，说明场景根本没建起来。宁可让封面先收、
- * 歌词晚一步补上，也不能让封面和进场动画一起卡在等信号上。
- */
-private const val ContentReadyFallbackMs = 900L
 
 /**
  * 歌词跟随的手感，调参就改这一行（换算见 [LyricsScrollChain.of]）。
@@ -71,11 +53,11 @@ private const val ContentReadyFallbackMs = 900L
 private val LyricsScrollSpring = LyricsScrollChain.of(durationMillis = 300f, bounce = 0.3f)
 
 /**
- * 歌词面板：从 [LyricsRepository] 取词，适配成渲染层模型，交给 `KaraokeLyricsView`。
+ * 歌词面板：把已获取的歌词适配成渲染层模型，交给 `KaraokeLyricsView`。
  *
  * 渲染实现整体搬自 `6xingyv/accompanist-lyrics-ui`（已落到 `lyrics/ui/composable`、
  * `lyrics/ui/internal`、`lyrics/ui/profile`），这里只负责把 Cirro 的东西接上去：
- * 取词、模型适配、颜色、位置时钟。
+ * 模型适配、颜色、位置时钟。获取状态由播放页显示，不能替真歌词上报就绪。
  *
  * @param songId 当前这首歌的网易云 id。换歌时列表状态整个重建。
  * @param connection 播放连接。位置订阅在面板内部完成——把 `positionMs` 当参数传进来会让
@@ -84,6 +66,7 @@ private val LyricsScrollSpring = LyricsScrollChain.of(durationMillis = 300f, bou
 @Composable
 fun LyricsPanel(
     songId: Long,
+    lyrics: Lyrics,
     connection: PlaybackConnection,
     seekPreviewPosition: State<Long?>,
     isSeeking: State<Boolean>,
@@ -92,21 +75,13 @@ fun LyricsPanel(
     panelAlpha: () -> Float = { 1f },
     panelScale: () -> Float = { 1f },
     /**
-     * 歌词内容（或占位符）**测量完成**时上报。每帧布局都会调，播放页自己保证幂等。
+     * 真歌词**测量完成**时上报一次，换歌或重新创建面板后重新上报。
      *
      * 播放页把它当**歌词进场的门**：过了才让 alpha/scale 起跑。不设这道门，进场动画会耗在
      * 「场景还没发布、无物可画」的空白期里，等真出画面时已经跑完了。
-     *
-     * @param renderable 这次落定的是**真歌词**吗。真歌词落定 ⟺ 场景已发布 ⟺ 位图缓存已经填上，
-     *   于是播放页知道**下一次**打开这首歌可以直接等歌词（三者同起）；占位符（没取到词 / 纯音乐）
-     *   那条路没有任何缓存可复用，不置位。
-     *
-     *   同一首歌**可能上报两次**：先占位符（`false`）后真歌词（`true`）。真歌词那次永远作数，
-     *   因为它标记的是「位图缓存真的填上了」，与先到的那次无关。
      */
-    onContentReady: (renderable: Boolean) -> Unit = {},
+    onContentReady: () -> Unit = {},
 ) {
-    val repository = koinInject<LyricsRepository>()
     val listState = key(songId) { rememberLyricsLazyListState() }
     val position = rememberLyricsPosition(connection)
     val seeking by isSeeking
@@ -114,73 +89,15 @@ fun LyricsPanel(
     // 上报是幂等的：布局每帧都回调，这里只放行第一次。`rememberUpdatedState` 兜住回调换实例。
     val latestReady = rememberUpdatedState(onContentReady)
 
-    // 🔴 两个 latch 都必须跟着 `songId` 走。面板在**换歌时不会离开组合**（播放页只在自己那次
-    // 退场动画跑完才摘子树），一个活在组合上的 latch 会把新歌那次上报当「重复」吃掉 ——
-    // 于是「歌词明明已经出来、位图缓存也填上了，播放页却还记着无缓存」，下次打开这首歌又退回
-    // 「封面先行」。latch 的语义本来就是「本次组合里已经报过」，作用域就该是一首歌：换歌=重来一次。
-    //
-    // 分成两条记，是为了让**真歌词永远作数**（`reported` = 已经有结论了，占位符或真歌词都算；
-    // `reportedRenderable` = 已经报过真歌词）。占位符先到是**常态**而不是例外，两条路都会走到：
-    //   - 打开歌词页时词还没取到（下面那个 `repository.lyrics(song)` 还在飞 —— 首开一首慢网络的歌
-    //     就是这个形态，不是切歌专属）；
-    //   - 开着歌词页换歌（`prefetch` 是异步读磁盘快照，面板先落到「正在获取歌词...」）。
-    // 只认第一次的话，这两条路都永远学不到「其实已经有缓存」—— 而那正是位图缓存填上的时刻。
-    // 下面那条 900ms 兜底的 `reportReady(false)` 同理：它只能占 `reported`，挡不住后面那次 true。
-    val reported = remember(songId) { booleanArrayOf(false) }
-    val reportedRenderable = remember(songId) { booleanArrayOf(false) }
-    // 键写成两个 latch 本身（数组按引用比）：换了新数组，回调还攥着旧的就全白改了。
-    val reportReady: (Boolean) -> Unit = remember(reported, reportedRenderable) {
-        { renderable: Boolean ->
-            if (renderable) {
-                if (!reportedRenderable[0]) {
-                    reportedRenderable[0] = true
-                    reported[0] = true
-                    latestReady.value(true)
-                }
-            } else if (!reported[0]) {
+    // 面板可能在换歌时继续留在组合中，不能让上一首的上报挡住新场景。
+    val reported = remember(songId, lyrics) { booleanArrayOf(false) }
+    val lyricsContentReady = remember(reported) {
+        {
+            if (!reported[0]) {
                 reported[0] = true
-                latestReady.value(false)
+                latestReady.value()
             }
         }
-    }
-
-    // 占位符与真歌词两条路共用这套上报，差别只在 `renderable`（见 `onContentReady` 的说明）。
-    val placeholderReady = remember(reportReady) { { reportReady(false) } }
-    val lyricsContentReady = remember(reportReady) { { reportReady(true) } }
-
-    // 兜底：万一场景一直没落定（取词/排版出了岔子），封面不能永远不收——那是比动画难看
-    // 严重得多的事故。正常路径上 `reportReady` 早就在第一帧布局后先到了，这里只是保险。
-    LaunchedEffect(songId) {
-        delay(ContentReadyFallbackMs.milliseconds)
-        reportReady(false)
-    }
-
-    // 占位符没有 `Plus` 合成层（只有一段文字），所以可以放心在它自己的图层上做进出场；
-    // 歌词那边不行——必须挂在 `KaraokeLyricsView` 那个叠加层上（见那边的注释）。
-    val placeholderTransform =
-        Modifier.graphicsLayer {
-            alpha = panelAlpha().coerceIn(0f, 1f)
-            val panelScaleValue = panelScale().coerceAtLeast(0f)
-            scaleX = panelScaleValue
-            scaleY = panelScaleValue
-        }
-
-    // 缓存命中是同步的（切歌时 PlaybackService 已经预取过），所以绝大多数情况下第一帧就有词。
-    var lyrics by remember(songId) { mutableStateOf(repository.cached(songId)) }
-
-    // 失败原因要看得见。「取不到」可能是没网、可能是没凭据、可能四级都没有 —— 只写
-    // 「暂无歌词」的话这三种在界面上长得一模一样，排不了障。
-    var failure by remember(songId) { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(songId) {
-        if (lyrics != null) return@LaunchedEffect
-        failure = null
-        // 队列里那条才是完整的 Song：lrclib 那级兜底要靠曲目信息模糊查，只有 id 是查不到的
-        val queue = connection.queue.value
-        val song = queue.entries.getOrNull(queue.currentIndex)?.song ?: Song(id = songId)
-        repository.lyrics(song)
-            .onSuccess { lyrics = it }
-            .onFailure { failure = it.message }
     }
 
     // 回调必须稳定，否则 `KaraokeLyricsView` 里那些按参数跳过重组的判断全失效。
@@ -197,43 +114,26 @@ fun LyricsPanel(
     val textColor = Color.White
 
     Box(modifier = modifier) {
-        val source = lyrics
-        val model = remember(source, songId) {
-            source?.takeIf { !it.instrumental }?.toSyncedLyrics(songId)
+        val model = remember(lyrics, songId) {
+            lyrics.toSyncedLyrics(songId)
         }
-        when {
-            source == null -> LyricsPlaceholder(
-                failure ?: "正在获取歌词...",
-                textColor,
-                modifier = placeholderTransform.onMeasured(placeholderReady),
-            )
-
-            model == null || model.lines.isEmpty() || source.instrumental ->
-                LyricsPlaceholder(
-                    "暂无歌词",
-                    textColor,
-                    modifier = placeholderTransform.onMeasured(placeholderReady),
-                )
-
-            else ->
-                KaraokeLyricsView(
-                    listState = listState,
-                    lyrics = model,
-                    currentPosition = currentPosition,
-                    isSeeking = seeking,
-                    onLineClicked = onLineClicked,
-                    onLinePressed = onLinePressed,
-                    textColor = textColor,
-                    // 锚点与淡出长度取参考库 sample 那一组（`PlayerLyrics` 的调用参数）。
-                    anchor = LyricsAnchor.Fraction(0.3f),
-                    bottomFade = LyricsFade.Fraction(0.2f),
-                    scrollChain = LyricsScrollSpring,
-                    panelAlpha = panelAlpha,
-                    panelScale = panelScale,
-                    contentReady = lyricsContentReady,
-                    modifier = Modifier.fillMaxSize(),
-                )
-        }
+        KaraokeLyricsView(
+            listState = listState,
+            lyrics = model,
+            currentPosition = currentPosition,
+            isSeeking = seeking,
+            onLineClicked = onLineClicked,
+            onLinePressed = onLinePressed,
+            textColor = textColor,
+            // 锚点与淡出长度取参考库 sample 那一组（`PlayerLyrics` 的调用参数）。
+            anchor = LyricsAnchor.Fraction(0.3f),
+            bottomFade = LyricsFade.Fraction(0.2f),
+            scrollChain = LyricsScrollSpring,
+            panelAlpha = panelAlpha,
+            panelScale = panelScale,
+            contentReady = lyricsContentReady,
+            modifier = Modifier.fillMaxSize(),
+        )
 
 //        // 来源标注。这次到底是拿的 Apple 官方逐字、还是兜底的网易 LRC，一眼可辨 ——
 //        // 取词链有四档，光看画面分不出来（第 2 档的 AMLL TTML 同样是逐字的）。
@@ -272,21 +172,6 @@ private fun rememberSettledLyricsColor(color: ColorProducer): Color {
         }
     }
     return settled
-}
-
-@Composable
-private fun LyricsPlaceholder(text: String, color: Color, modifier: Modifier = Modifier) {
-    Box(
-        modifier = Modifier.fillMaxSize().then(modifier),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.type.body,
-            color = color.copy(alpha = 0.45f),
-            modifier = Modifier.padding(horizontal = 24.dp),
-        )
-    }
 }
 
 /** 取词来源的短标签，给面板左下角那个标注用。 */

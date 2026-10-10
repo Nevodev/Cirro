@@ -81,6 +81,8 @@ import coil3.toBitmap
 import com.kyant.shapes.Capsule
 import com.kyant.shapes.RoundedRectangle
 import com.nevoit.cirro.R
+import com.nevoit.cirro.data.model.Song
+import com.nevoit.cirro.lyrics.data.LyricsRepository
 import com.nevoit.cirro.lyrics.ui.LyricsPanel
 import com.nevoit.cirro.lyrics.ui.internal.rendering.LocalLyricsRenderCache
 import com.nevoit.cirro.lyrics.ui.internal.rendering.LyricsRenderCache
@@ -149,6 +151,9 @@ private const val LyricsFadeInMs = 220
 
 /** 退场比出场快一点：收得利落些，也不至于让被压在下面的封面等太久。 */
 private const val LyricsFadeOutMs = 160
+
+/** 预热场景迟迟不能发布时，先释放封面；歌词仍须等真实布局就绪。 */
+private const val LyricsCoverReadyFallbackMs = 900L
 
 /**
  * 「封面已收回到位」的判定阈值 —— **未预热**时歌词进场等它。
@@ -485,18 +490,56 @@ private fun PlayerOverlay(
     // 所以不能拿一个"总有一边选中"的枚举初值来起头。
     var panel by remember { mutableStateOf<PlayerPanel?>(null) }
 
+    val queueVisible = panel == PlayerPanel.QUEUE
+    val behindLyricsProgress = remember(meshBackdrop) { Animatable(1f) }
+    LaunchedEffect(meshBackdrop, queueVisible) {
+        behindLyricsProgress.animateTo(
+            targetValue = if (queueVisible) 0f else 1f,
+            animationSpec = Springs.smooth(
+                durationMillis = 400,
+                extraBounce = 0.0,
+                visibilityThreshold = 0.0001f
+            ),
+        ) {
+            meshBackdrop.setBehindLyricsProgress(value)
+        }
+    }
+
     // 歌词面板的进出场：**缩放走 spring、透明度走 tween**，两个值都交给 `LyricsPanel`，
     // 由它转交给 `KaraokeLyricsView` 的 `Plus` 合成层 —— 动画必须挂在那层上，在外面再包一层
     // 会把叠加上色的对象换成空图层，发光就没了。这里只持有动画值和**组合生命周期**：
     // 退出动画跑完才把子树摘掉，否则没有退场可言。
     val lyricsVisible = panel == PlayerPanel.LYRICS
     var lyricsPresent by remember { mutableStateOf(false) }
-    val lyricsAlpha = remember { Animatable(0f) }
-    val lyricsScale = remember { Animatable(LyricsPanelScale) }
+    val lyricsRepository = koinInject<LyricsRepository>()
+    var lyricsResult by remember(song.id, lyricsVisible || lyricsPresent) {
+        mutableStateOf(lyricsRepository.cached(song.id)?.let { Result.success(it) })
+    }
+    val lyrics = lyricsResult?.getOrNull()
+    val hasLyrics = lyrics != null && !lyrics.instrumental && lyrics.lines.isNotEmpty()
+    LaunchedEffect(song.id, lyricsVisible) {
+        if (lyricsVisible && lyricsResult?.isSuccess != true) {
+            lyricsResult = null
+            // 标题栏只有精简元数据；lrclib 的匹配仍须使用队列中的完整歌曲。
+            val queue = connection.queue.value
+            val lyricsSong = queue.entries.getOrNull(queue.currentIndex)?.song
+                ?.takeIf { it.id == song.id } ?: Song(id = song.id)
+            lyricsResult = lyricsRepository.lyrics(lyricsSong)
+        }
+    }
+
+    // 换歌即重置，避免新歌的场景复用上一首已经结束的入场动画。
+    val lyricsAlpha = remember(song.id) { Animatable(0f) }
+    val lyricsScale = remember(song.id) { Animatable(LyricsPanelScale) }
     // 生产者保持引用恒定，免得每帧给下游一个新 lambda。
     // `Animatable.value` 是快照状态，在图层段读 → 只重绘不重组。
-    val lyricsAlphaProducer = remember { { lyricsAlpha.value } }
-    val lyricsScaleProducer = remember { { lyricsScale.value } }
+    val lyricsAlphaProducer = remember(lyricsAlpha) { { lyricsAlpha.value } }
+    val lyricsScaleProducer = remember(lyricsScale) { { lyricsScale.value } }
+    val lyricsStatusAlpha = animateFloatAsState(
+        targetValue = if (lyricsVisible) 1f else 0f,
+        animationSpec = tween(if (lyricsVisible) LyricsFadeInMs else LyricsFadeOutMs),
+        label = "LyricsStatusAlpha",
+    )
 
     // 歌词位图的单槽缓存：**挂在播放页的生命周期上**。
     // `PlayerLayer` 在 `present == false` 时整棵子树从组合里摘掉，这个 remember 跟着一起没 ——
@@ -517,18 +560,23 @@ private fun PlayerOverlay(
     // 「打开过」与「缓存命中」实际等价。
     var lyricsWarmed by remember(song.id) { mutableStateOf(false) }
 
-    // 歌词内容**测量完成**的 latch，进场的门。布局每帧都会上报，面板侧已经保证只送结论。
-    var lyricsReady by remember { mutableStateOf(false) }
-    // 参数是「这次落定的是真歌词吗」：真歌词落定意味着位图缓存已经填上，置位后**下一次**打开
-    // 就走「三者同起」；占位符（没取到词 / 纯音乐）没有任何缓存可复用，不置位。
-    //
-    // ⚠️ 同一首歌**会收到两次**（切歌瞬间预取还没落盘 → 先占位符 false，取到词后真歌词 true），
-    // 两次都作用在这两个状态上、天然幂等。真歌词那次必须能作数 —— 否则「歌词已经出来、
-    // 缓存也填上了，这里却还记着无缓存」。面板侧按 `songId` 记 latch，两条路各记一条。
-    val onLyricsReady: (Boolean) -> Unit = remember(song.id) {
-        { renderable: Boolean ->
+    // 同起的选择锁在本次打开时。获取中途发布场景只能预热下次，不能跳过这次的封面门槛。
+    val lyricsEnterTogether = remember(song.id, lyricsVisible) {
+        lyricsVisible && lyricsWarmed && hasLyrics
+    }
+    var lyricsReady by remember(song.id, lyrics) { mutableStateOf(false) }
+    var lyricsCompositionAllowed by remember(song.id) { mutableStateOf(false) }
+    var lyricsCoverWaitExpired by remember(song.id, lyricsVisible) { mutableStateOf(false) }
+    val onLyricsReady: () -> Unit = remember(song.id, lyrics) {
+        {
             lyricsReady = true
-            if (renderable) lyricsWarmed = true
+            lyricsWarmed = true
+        }
+    }
+    LaunchedEffect(song.id, lyricsVisible) {
+        if (lyricsEnterTogether) {
+            delay(LyricsCoverReadyFallbackMs.milliseconds)
+            if (!lyricsReady) lyricsCoverWaitExpired = true
         }
     }
 
@@ -562,7 +610,8 @@ private fun PlayerOverlay(
     // 要不要为了歌词把封面 / 标题行也推迟。只在「从展开态点开歌词 + 预热过 + 还没落定」时成立。
     // 原来那个 `lyricsVisible` 并进了 `holdCoverForLyrics`，但不能丢：待播列表面板下 `collapsed`
     // 同样为真、`lyricsReady` 是 false，少了这一项封面就永远收不了。
-    val waitForLyrics = collapsed && holdCoverForLyrics && lyricsWarmed && !lyricsReady
+    val waitForLyrics = collapsed && holdCoverForLyrics && lyricsEnterTogether &&
+            !lyricsReady && !lyricsCoverWaitExpired
 
     val collapseCover = animateFloatAsState(
         targetValue = if (collapsed && !waitForLyrics) 1f else 0f,
@@ -600,7 +649,7 @@ private fun PlayerOverlay(
         metaCell = collapsed
     }
 
-    LaunchedEffect(lyricsVisible) {
+    LaunchedEffect(song.id, lyricsVisible, hasLyrics) {
         if (!lyricsVisible) {
             coroutineScope {
                 launch { lyricsAlpha.animateTo(0f, tween(LyricsFadeOutMs)) }
@@ -609,19 +658,27 @@ private fun PlayerOverlay(
             // 摘子树。下一次打开是一次全新的组合，会重新上报一次落定（`lyricsReady` 一起归零）。
             // 若用户在退场途中又点开，这个协程会被取消，两件事都不会发生 —— 面板没离开过。
             lyricsPresent = false
+            lyricsCompositionAllowed = false
             // 归零放在**退场跑完之后**：这样「退场途中再点开」不会把 latch 清掉又卡住进场。
             lyricsReady = false
             return@LaunchedEffect
         }
-        // 未预热：封面先收，收完再放歌词出来。这道门不能省，否则歌词的淡入会整段耗在
-        // 「场景还没发布」的空白期里 —— 那正是最早那版翻车的形态。
-        // 预热过就跳过它：封面 / 标题行的 target 也挂在同一个 `lyricsReady` 上（见
-        // `waitForLyrics`），所以三件事在同一帧起跑，不需要在这里对齐。
-        if (!lyricsWarmed && collapseCover.value < CollapseSettled)
-            snapshotFlow { collapseCover.value }.first { it >= CollapseSettled }
-        // 歌词落定。已经 true 就不等 —— 占位符分支在第一帧布局就会上报，那条路零等待。
-        if (!lyricsReady) snapshotFlow { lyricsReady }.first { it }
         lyricsPresent = true
+        if (!hasLyrics) {
+            lyricsCompositionAllowed = false
+            lyricsAlpha.snapTo(0f)
+            lyricsScale.snapTo(LyricsPanelScale)
+            return@LaunchedEffect
+        }
+        // alpha 为 0 仍会组合和布局。首次场景的排版、光栅化与列表发布不能挤进封面收缩阶段。
+        if (!lyricsEnterTogether) {
+            snapshotFlow { collapseCover.value }.first { it >= CollapseSettled }
+        }
+        lyricsCompositionAllowed = true
+        snapshotFlow { lyricsReady }.first { it }
+        if (lyricsCoverWaitExpired) {
+            snapshotFlow { collapseCover.value }.first { it >= CollapseSettled }
+        }
         launch { lyricsAlpha.animateTo(1f, tween(LyricsFadeInMs)) }
         lyricsScale.animateTo(1f, LyricsScaleSpring)
     }
@@ -692,11 +749,12 @@ private fun PlayerOverlay(
                         // 只从这里进——歌词场景深处（`rememberLyricsScene`）读它。
                         // 挂在环境上而不是加参数：`KaraokeLyricsView` 是搬进来的公开 API，
                         // 塞 `internal` 类型进签名编不过，一路降级又会把上游 diff 弄脏。
-                        CompositionLocalProvider(
+                        if (hasLyrics && lyricsCompositionAllowed) CompositionLocalProvider(
                             LocalLyricsRenderCache provides lyricsRenderCache
                         ) {
                             LyricsPanel(
                                 songId = song.id,
+                                lyrics = lyrics,
                                 connection = connection,
                                 seekPreviewPosition = seekState.previewPosition,
                                 isSeeking = seekState.isDragging,
@@ -707,11 +765,26 @@ private fun PlayerOverlay(
                                 panelScale = lyricsScaleProducer,
                                 onContentReady = onLyricsReady,
                             )
+                        } else if (!hasLyrics) {
+                            val status = when {
+                                lyricsResult == null -> "正在获取歌词..."
+                                lyricsResult?.isFailure == true ->
+                                    lyricsResult?.exceptionOrNull()?.message ?: "暂无歌词"
+
+                                else -> "暂无歌词"
+                            }
+                            LyricsStatus(
+                                text = status,
+                                modifier = Modifier
+                                    .padding(12.dp)
+                                    .fillMaxSize()
+                                    .graphicsLayer { alpha = lyricsStatusAlpha.value },
+                            )
                         }
                     }
 
                     // 待播列表面板。出现动画还没做，所以不挂 alpha/scale，选中即整块出现。
-                    if (panel == PlayerPanel.QUEUE) {
+                    if (queueVisible) {
                         QueuePanel(
                             connection = connection,
                             modifier = Modifier
@@ -825,7 +898,7 @@ private fun PlayerOverlay(
                     PlayerPanelIcon(
                         iconRes = R.drawable.list_play,
                         label = "待播列表",
-                        selected = panel == PlayerPanel.QUEUE,
+                        selected = queueVisible,
                         tint = contentVariantColor,
                         onClick = {
                             togglePanel(PlayerPanel.QUEUE)
@@ -845,6 +918,18 @@ private fun PlayerOverlay(
  * 三态由调用方持有：选中 [LYRICS]、选中 [QUEUE]、或 `null`（都不选）。
  */
 private enum class PlayerPanel { LYRICS, QUEUE }
+
+@Composable
+private fun LyricsStatus(text: String, modifier: Modifier = Modifier) {
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        Text(
+            text = text,
+            style = MaterialTheme.type.body,
+            color = Color.White.copy(alpha = 0.45f),
+            modifier = Modifier.padding(horizontal = 24.dp),
+        )
+    }
+}
 
 /**
  * 底部功能栏里的一颗可选中图标。
