@@ -184,7 +184,7 @@ fun CollectionRoute(
         playback.state.map { it.song?.id }.distinctUntilChanged()
     }.collectAsState(initial = playback.state.value.song?.id)
     // 这一页的出身：随歌一起交给队列，打卡时回传 sourceId（每日推荐没有服务端集合，QueueSource 会留空）
-    val queueSource = QueueSource(kind, id.toString())
+    val queueSource = QueueSource(kind, id.toString(), title = viewModel.displayTitle)
 
     val palette = koinInject<CoverPalette>()
     val paletteKey = coverHint.ifEmpty { state.info.dataOrNull?.cover.orEmpty() }

@@ -238,7 +238,13 @@ internal fun QueuePanel(
             ) {
                 if (history.isNotEmpty()) {
                     stickyHeader(key = HistoryHeaderKey) {
-                        QueueHeader("播放历史", HistoryHeaderKey, listState, overscrollEffect, panelAlpha)
+                        QueueHeader(
+                            "播放历史",
+                            HistoryHeaderKey,
+                            listState,
+                            overscrollEffect,
+                            panelAlpha
+                        )
                     }
                     items(history, key = { it.uid }, contentType = { "song" }) { entry ->
                         QueueRow(
@@ -252,7 +258,11 @@ internal fun QueuePanel(
                     }
                 }
                 stickyHeader(key = ContinueHeaderKey) {
-                    QueueHeader("继续播放", ContinueHeaderKey, listState, overscrollEffect, panelAlpha)
+                    QueueHeader(
+                        "继续播放", ContinueHeaderKey, listState, overscrollEffect, panelAlpha,
+                        subtitle = queue.source?.title?.takeIf { it.isNotBlank() }
+                            ?.let { "来自 $it" },
+                    )
                 }
                 if (continuation.isEmpty()) {
                     item(key = "queue_continue_empty") {
@@ -287,8 +297,9 @@ private fun QueueHeader(
     listState: LazyListState,
     overscrollEffect: OverscrollEffect?,
     panelAlpha: () -> Float,
+    subtitle: String? = null,
 ) {
-    Box(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .headerEdgeFade(listState, headerKey, overscrollEffect, panelAlpha)
@@ -300,6 +311,10 @@ private fun QueueHeader(
             MaterialTheme.type.title4.copy(fontWeight = FontWeight.Medium),
             Color.White
         )
+        if (subtitle != null) {
+            VGap(2.dp)
+            QueueText(subtitle, MaterialTheme.type.subHeadline2, Color.White.copy(alpha = 0.4f))
+        }
     }
 }
 
@@ -401,7 +416,14 @@ private fun QueueRow(
         Box(
             modifier = Modifier
                 .matchParentSize()
-                .edgeFade(listState, rowKey, BlendMode.SrcOver, section, overscrollEffect, panelAlpha),
+                .edgeFade(
+                    listState,
+                    rowKey,
+                    BlendMode.SrcOver,
+                    section,
+                    overscrollEffect,
+                    panelAlpha
+                ),
             contentAlignment = Alignment.CenterStart,
         ) {
             AsyncImage(

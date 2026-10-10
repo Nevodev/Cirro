@@ -37,14 +37,15 @@ enum class PlayMode {
 }
 
 /**
- * 队列来源。既给打卡的 `sourceId`，也给以后"正在播自哪个歌单"这类展示。
+ * 队列来源。名称用于展示，集合 id 用于打卡的 `sourceId`。
  *
- * 单曲播放、或者上游本来就没有集合 id 时整条为 null。
+ * 单曲播放或上游没有来源信息时整条为 null；首页混排块可以只给名称。
  */
 @Serializable
 data class QueueSource(
     val kind: CollectionKind? = null,
     val id: String = "",
+    val title: String = "",
 ) {
     /** 送去打卡的 `sourceId`。每日推荐是现拼的列表、没有对应的服务端集合，只能留空。 */
     val scrobbleId: String get() = if (kind == CollectionKind.DAILY) "" else id
@@ -89,6 +90,8 @@ data class PlaybackQueue(
      * 它**不改循环**：随机 + 顺序就是"打乱之后放完就停"。
      */
     val shuffle: Boolean = false,
+    /** 整队起播时的来源，切歌、插播和重排都保留；每首歌的出身仍看 [QueueEntry.source]。 */
+    val source: QueueSource? = null,
 )
 
 /** 建队：歌单 / 专辑 / 每日推荐点一首、首页播一整块都走这里。随机模式下建队即打乱。 */
@@ -109,6 +112,7 @@ fun playQueueOf(
         currentIndex = index,
         mode = mode,
         shuffle = shuffle,
+        source = source,
     )
     return if (shuffle) queue.shuffledTail() else queue
 }

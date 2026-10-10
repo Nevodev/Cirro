@@ -297,8 +297,8 @@ class PlaybackConnection(
      * 列表里点某一首，听感上该接着往下听，所以不是"只播这一首"，而是"把这份列表变成队列"。
      * 队列里存的是元数据，直链仍由数据源层临播前才换（见 `songUri` 的说明）。
      *
-     * [source] 是这批歌的出身，用来打卡时回传 `sourceId`——详情页知道自己的歌单/专辑 id，
-     * 就把它传进来；上游没有集合 id 的（首页混排块、单曲）传 null。
+     * [source] 是这批歌的出身，名称随队列保留，集合 id 用于打卡时回传 `sourceId`。
+     * 详情页传歌单/专辑的名称和 id，首页混排块只传名称，没有来源信息时传 null。
      */
     fun playSongs(songs: List<Song>, startIndex: Int, source: QueueSource? = null) {
         if (songs.isEmpty()) return

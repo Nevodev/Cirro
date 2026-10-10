@@ -55,6 +55,7 @@ import coil3.request.transformations
 import com.kyant.shapes.RoundedRectangle
 import com.nevoit.cirro.R
 import com.nevoit.cirro.data.model.CollectionKind
+import com.nevoit.cirro.data.model.QueueSource
 import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.login.LoginActivity
@@ -149,7 +150,10 @@ private fun LoggedInHome(
     HomeContent(
         state = state,
         onRetry = viewModel::refresh,
-        onPlay = { songs, index -> playback.playSongs(songs, index) },
+        onPlay = { songs, index ->
+            val source = state.style.dataOrNull?.let { QueueSource(title = it.title) }
+            playback.playSongs(songs, index, source)
+        },
         onOpenCollection = onOpenCollection,
         modifier = modifier,
     )
