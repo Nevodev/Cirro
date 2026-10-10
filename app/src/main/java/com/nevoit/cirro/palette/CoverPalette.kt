@@ -47,9 +47,13 @@ private const val NeutralHue = 0.0
 private const val NeutralChroma = 0.0
 
 /**
- * 种子明度（HCT tone，0–100）的深浅分界线：低于它 dark=true，详情页**恒定**深色页
+ * **封面平均明度**（HCT tone，0–100）的深浅分界线：低于它 dark=true，详情页**恒定**深色页
  * （暗封面压白字怎么都不糊）；在线上 dark=false 即 auto——详情页跟系统颜色模式走。
  * 想更早/更晚切深色调这里。
+ *
+ * 🔴 判据是**整张封面的平均明度**（[averageTone]），不是被 [Score] 挑中的那一个种子的明度 ——
+ * 种子按「彩度 × 占比」打分、明度不参与，深色封面里一块高饱和亮色也可能被选成种子；
+ * 拿种子明度判深浅，那种封面会被误判成浅色页（亮封面挑到暗种子则反向）。
  */
 private const val DarkSeedTone = 40.0
 
@@ -58,7 +62,7 @@ private const val DarkSeedTone = 40.0
  *
  * 只做三件事：[seed] 是种子色（ARGB）——彩色封面来自官方 Score 的量化簇，灰阶封面没有彩色
  * 簇可挑，是合成的中性灰；[primary] 是种子进 HCT 后生成的 tonal 色带——色相锁死、彩度被钳制、
- * 明度任意档可取；[dark] 是种子的明暗判定（取色时算好，消费方直接用）。没有 secondary /
+ * 明度任意档可取；[dark] 是**封面整体明暗**的判定（取色时算好，消费方直接用）。没有 secondary /
  * tertiary，也不拼整套 ColorScheme：配色自己拿档位试。
  *
  * **档位语义**（M3 标准）：T40 ≈ 主色（浅色主题里配 T100 文字）、T90 ≈ 容器底、
@@ -67,8 +71,8 @@ private const val DarkSeedTone = 40.0
 class CoverSeed(
     val seed: Int,
     /**
-     * 种子明度（HCT tone）低于 [DarkSeedTone] 就是 true：详情页恒定深色页；
-     * false 即 auto——详情页跟系统颜色模式走。
+     * 封面平均明度（HCT tone）低于 [DarkSeedTone] 就是 true：详情页恒定深色页；
+     * false 即 auto——详情页跟系统颜色模式走。判据是整张封面的平均明度，与 [seed] 无关。
      */
     val dark: Boolean,
     private val primary: TonalPalette,
@@ -137,18 +141,19 @@ class CoverPalette(
 
             val clusters = QuantizerCelebi.quantize(pixels, MaxColors)
 
+            // 整张封面的平均明度（各簇 tone 按像素数加权）。算一次，两处共用：
+            // ① 灰阶封面没有彩色种子，用它合成中性灰当种子；② 深浅页判定也用它。
+            // 量化结果为空（退化位图）时它是 null，按取色失败处理。
+            val coverTone = averageTone(clusters) ?: return@withContext null
+
             // fallbackColorArgb 显式传 null：官方的兜底值是写死的 Google Blue（#4285F4），
             // 而 Score 会把 chroma < CUTOFF_CHROMA(5.0) 的簇整体滤掉——灰阶封面的簇全在此列，
             // 滤空后就返回那个蓝，于是每张黑白封面都和"图片加载失败"长得一样（都是同一个蓝）。
             // 拿掉兜底，空结果就成了「这张封面没有可用的彩色种子」这个信号，由我们兜成中性灰。
             val scored = Score.score(clusters, fallbackColorArgb = null).firstOrNull()
 
-            // 灰阶封面：没有彩色簇可挑，用各簇按像素数加权平均的明度合成一个中性灰当种子——
-            // 黑封面得到深色页、白封面得到浅色页，深浅判定跟着封面本身走而不是写死的兜底色。
-            // 量化结果为空（退化位图）时 averageTone 也是 null，一并按取色失败处理。
-            val seed = scored
-                ?: averageTone(clusters)?.let { Hct.from(NeutralHue, NeutralChroma, it).toInt() }
-                ?: return@withContext null
+            // 灰阶封面回落：黑封面得到深色页、白封面得到浅色页，深浅跟着封面本身走。
+            val seed = scored ?: Hct.from(NeutralHue, NeutralChroma, coverTone).toInt()
 
             if (scored == null) Log.d(Tag, "灰阶封面无彩色种子，回落中性灰 url=$url")
             Log.d(Tag, "取色成功 seed=0x" + seed.toUInt().toString(16) + " url=$url")
@@ -157,7 +162,10 @@ class CoverPalette(
             val hct = Hct.fromInt(seed)
             CoverSeed(
                 seed = seed,
-                dark = hct.tone < DarkSeedTone,
+                // 🔴 深浅看**整张封面**的平均明度，不是种子那一个簇的：Score 按「彩度 × 占比」
+                // 挑种子、明度不参与，深色封面里一块高饱和亮色也可能胜出当种子；若拿种子明度
+                // 判深浅，这种封面会被误判成浅色页。种子只负责色调（hue/chroma），不参与深浅。
+                dark = coverTone < DarkSeedTone,
                 primary = TonalPalette.fromHueAndChroma(
                     hue = hct.hue,
                     chroma = minOf(hct.chroma, SeedChromaCap),
@@ -170,11 +178,14 @@ class CoverPalette(
     }
 
     /**
-     * 灰阶封面兜底用的种子明度：各量化簇的 tone 按像素数加权平均。
+     * 整张封面的平均明度：各量化簇的 tone 按像素数加权平均。既当灰阶封面的回落种子明度，
+     * 又当深浅页（[CoverSeed.dark]）的判据。
      *
      * 簇的分布就是封面的明度分布，所以加权平均 ≈ 整张封面的平均明度。只平均 tone 而不是 ARGB
-     * 直接平均——sRGB 平均会往中间调塌，黑白封面就压不出深浅感了。没有可算的像素时返回 null，
-     * 调用方按取色失败处理。
+     * 直接平均——sRGB 平均会往中间调塌，黑白封面就压不出深浅感了。
+     *
+     * ⚠️ 遍历的是**簇**（size ≤ [MaxColors]），不是像素 —— 量化已经把它压到几十个，所以很便宜。
+     * 没有可算的像素时返回 null，调用方按取色失败处理。
      */
     private fun averageTone(clusters: Map<Int, Int>): Double? {
         var sum = 0.0

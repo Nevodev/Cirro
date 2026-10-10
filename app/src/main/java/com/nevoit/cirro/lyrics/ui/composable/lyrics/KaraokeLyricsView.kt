@@ -35,11 +35,13 @@ import com.nevoit.cirro.lyrics.core.model.SyncedLyrics
 import com.nevoit.cirro.lyrics.core.model.karaoke.KaraokeAlignment
 import com.nevoit.cirro.lyrics.core.model.karaoke.KaraokeLine
 import com.nevoit.cirro.lyrics.core.model.synced.SyncedLine
+import com.nevoit.cirro.lyrics.ui.LyricsFontFamily
 import com.nevoit.cirro.lyrics.ui.composable.list.LyricsLazyListState
 import com.nevoit.cirro.lyrics.ui.composable.list.LyricsListItem
 import com.nevoit.cirro.lyrics.ui.composable.list.LyricsScrollChain
 import com.nevoit.cirro.lyrics.ui.internal.effects.lyricsEdgeFade
 import com.nevoit.cirro.lyrics.ui.internal.effects.lyricsContentOffset
+import com.nevoit.cirro.lyrics.ui.internal.layout.LineHorizontalPaddingDp
 import com.nevoit.cirro.lyrics.ui.internal.layout.LineVerticalPaddingDp
 import com.nevoit.cirro.lyrics.ui.internal.layout.LyricsLazyColumn
 import com.nevoit.cirro.lyrics.ui.internal.layout.lyricsAutoScroll
@@ -66,6 +68,7 @@ fun KaraokeLyricsView(
     modifier: Modifier = Modifier,
     normalLineTextStyle: TextStyle =
         LocalTextStyle.current.copy(
+            fontFamily = LyricsFontFamily,
             fontSize = 28.sp,
             lineHeight = 38.sp,
             fontWeight = FontWeight.W800,
@@ -73,6 +76,7 @@ fun KaraokeLyricsView(
         ),
     accompanimentLineTextStyle: TextStyle =
         LocalTextStyle.current.copy(
+            fontFamily = LyricsFontFamily,
             fontSize = 18.sp,
             lineHeight = TextUnit.Unspecified,
             fontWeight = FontWeight.W800,
@@ -125,7 +129,9 @@ fun KaraokeLyricsView(
             is LyricsAnchor.Fixed -> anchor.offset.coerceAtMost(maxHeight)
             is LyricsAnchor.Fraction -> maxHeight * anchor.fraction
         }
-        val width = with(density) { (maxWidth - 32.dp).toPx() }.coerceAtLeast(1f)
+        val width =
+            with(density) { (maxWidth - LineHorizontalPaddingDp.dp * 2).toPx() }
+                .coerceAtLeast(1f)
         val scene = rememberLyricsScene(
             LyricsLayoutRequest(
                 lyrics, profiles, measurer, normalLineTextStyle, accompanimentLineTextStyle,
@@ -365,9 +371,11 @@ fun KaraokeLyricsView(
                                 ownerFocused = { index in timeline.focus.value.allIndices },
                                 leadingContentOffset = { listState.chain.leadingOffset(itemIndex) },
                                 verticalPadding = LineVerticalPaddingDp.dp,
+                                // Top-level rows take the inset here; the nested ones inherit the
+                                // enclosing column's padding and pass 0 of their own.
                                 modifier =
                                     if (line is KaraokeLine.AccompanimentKaraokeLine)
-                                        Modifier.padding(horizontal = 12.dp)
+                                        Modifier.padding(horizontal = LineHorizontalPaddingDp.dp)
                                     else Modifier,
                                 showTranslation = showTranslation,
                                 showPhonetic = showPhonetic,

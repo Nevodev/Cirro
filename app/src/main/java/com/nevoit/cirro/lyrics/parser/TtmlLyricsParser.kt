@@ -29,10 +29,13 @@ import java.io.StringReader
  * - 翻译/音译两种写法：行内 `x-translation` / `x-roman`，以及 head 里
  *   `iTunesMetadata/translations|transliterations/.../text[for=行 id]` 的侧车表。
  *
- * 与 AMLL 的两处**有意偏离**：
+ * 与 AMLL 的三处**有意偏离**：
  * 1. `<p>` 没有 `itunes:key` 时**不丢弃该行**（AMLL 会丢弃）—— 用行号造一个合成 id，
  *    宁可少一份侧车翻译也不整行消失；
- * 2. 只保留模型里定义过的扩展（`ruby` / `obscene`），`amll:empty-beat` 解析后丢掉。
+ * 2. 只保留模型里定义过的扩展（`ruby` / `obscene`），`amll:empty-beat` 解析后丢掉；
+ * 3. 背景人声的译文若**没带** `ttm:role="x-bg"`（Apple `type="subtitle"` 那种写法），
+ *    按「该行有背景人声 + 译文里唯一一组括号」的启发式从主行译文里拆回背景人声
+ *    （见 [extractBackgroundTranslation]）。
  *
  * 输出统一落到 [Lyrics]；行文本 [LyricLine.text] 与逐字拼接保持等价（尾随空格折进音节文本）。
  */
@@ -52,6 +55,14 @@ object TtmlLyricsParser {
 
     /** 多余空白折叠成单个空格（含换行 —— TTML 里标签间的换行是排版，不是歌词）。 */
     private val MULTI_SPACE = Regex("\\s+")
+
+    /**
+     * 译文里的一组括号（全角 `（）` 与半角 `()` 都认）。
+     *
+     * 用来把 Apple `type="subtitle"` 那种**没有角色标记**、直接以括号拼在主行译文里的
+     * 背景人声译文拆出来（见 [extractBackgroundTranslation]）。
+     */
+    private val PAREN_GROUP = Regex("[（(]([^（）()]*)[）)]")
 
     /** 钟表时间：`MM:SS.mmm` / `HH:MM:SS.mmm` / `SS.mmm`。 */
     private val TIME_PATTERN = Regex("""^(?:(?:(\d+):)?(\d+):)?(\d+(?:\.\d+)?)$""")
@@ -158,13 +169,26 @@ object TtmlLyricsParser {
             val sideBgTranslations = side?.bgTranslations ?: emptyList()
             val sideBgRomanizations = side?.bgRomanizations ?: emptyList()
 
+            // 行译文 / 背景人声译文：先把行内与侧车两个来源各自合起来。
+            var lineTranslations = content.translations + sideTranslations
+            var bgTranslations = content.background?.translations.orEmpty() + sideBgTranslations
+
+            // Apple `type="subtitle"` 的译文把背景人声的翻译**不加标记**地以括号拼在主行译文里
+            // （`…你终于登上了巅峰（登上了巅峰）`）—— 这里按「行确实有背景人声」把它拆回去。
+            // 已有显式 `ttm:role="x-bg"` 译文时不拆（那种本来就对）。
+            if (content.background != null && bgTranslations.isEmpty()) {
+                val (rest, extracted) = extractBackgroundTranslation(lineTranslations)
+                lineTranslations = rest
+                bgTranslations = extracted
+            }
+
             val background = content.background?.let { bg ->
                 LyricBackground(
                     text = bg.text,
                     startMs = bg.startMs,
                     endMs = bg.endMs,
                     syllables = toSyllables(bg.words),
-                    translations = (bg.translations + sideBgTranslations).map(::toTranslatedText),
+                    translations = bgTranslations.map(::toTranslatedText),
                     romanizations = (bg.romanizations + sideBgRomanizations).map(::toTranslatedText),
                 )
             }
@@ -174,7 +198,7 @@ object TtmlLyricsParser {
                 endMs = content.endMs,
                 text = content.text,
                 syllables = toSyllables(content.words),
-                translations = (content.translations + sideTranslations).map(::toTranslatedText),
+                translations = lineTranslations.map(::toTranslatedText),
                 romanizations = (content.romanizations + sideRomanizations).map(::toTranslatedText),
                 background = background,
                 isDuet = isDuet,
@@ -205,6 +229,53 @@ object TtmlLyricsParser {
 
     private fun toTranslatedText(content: SubContent) =
         LyricTranslatedText(content.text, content.language)
+
+    /**
+     * 把「背景人声的译文」从主行译文里拆出来。
+     *
+     * Apple 的 `type="subtitle"` 译文既没有逐字、也没有角色标记，背景人声的译文是**直接以括号
+     * 拼在主行译文里**的 —— 如 `因为真正伤人的是 你终于登上了巅峰（登上了巅峰）`，其中
+     * `（登上了巅峰）` 对应 body 里那条 `<span ttm:role="x-bg">`。不拆的话它会跟着主行译文
+     * 一起渲染在主行下面，看起来就是「背景人声的翻译跑到主行」。
+     *
+     * 只认**恰好一组**括号（全角 `（）` 或半角 `()`）**且括号外还有正文**的译文：括号内归背景人声，
+     * 括号外归主行。整串就是一句括号、或括号内为空时不动它（宁可少拆，不可把整行译文吃掉）。
+     *
+     * ⚠️ 这是**启发式**：Apple 没给任何结构化标记，靠的是「该行有背景人声 + 译文里唯一那组括号」
+     * 这个经验规律（实测所有含背景人声的样本都满足，且没有一条译文含两组以上括号）。原文自带
+     * 括号的行若恰好同时有背景人声，可能被误判 —— 调用点已用「已有显式 `x-bg` 译文就不拆」兜一层。
+     *
+     * @return `主行译文 to 背景人声译文`；没拆出任何东西时后者为空表。
+     */
+    private fun extractBackgroundTranslation(
+        translations: List<SubContent>,
+    ): Pair<List<SubContent>, List<SubContent>> {
+        if (translations.isEmpty()) return translations to emptyList()
+
+        val main = mutableListOf<SubContent>()
+        val background = mutableListOf<SubContent>()
+        translations.forEach { content ->
+            val groups = PAREN_GROUP.findAll(content.text).toList()
+            // 多于一组 = 哪组属于背景人声说不清，原样留给主行
+            if (groups.size != 1) {
+                main += content
+                return@forEach
+            }
+            val group = groups.first()
+            val remainder = normalizeText(
+                content.text.removeRange(group.range.first, group.range.last + 1).toString(),
+            )
+            val inner = group.groupValues[1].trim()
+            // 括号外没有正文（整串就是一句括号），或括号内为空 → 不拆
+            if (remainder.isEmpty() || inner.isEmpty()) {
+                main += content
+                return@forEach
+            }
+            main += SubContent(remainder, content.language, content.words)
+            background += SubContent(inner, content.language, emptyList())
+        }
+        return main to background
+    }
 
     // -----------------------------------------------------------------------
     // 行内容：与 AMLL 的 parseCommonContent / extractNodeState 一一对应

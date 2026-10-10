@@ -76,8 +76,6 @@ private val TopEdgeFade = 40.dp
 /** 列表**下**边缘的渐隐长度。 */
 private val BottomEdgeFade = 56.dp
 
-private val GrabberSize = 24.dp
-
 private val ButtonHeight = 48.dp
 
 private val ButtonGap = 8.dp
@@ -89,7 +87,7 @@ private val ButtonIconSize = 24.dp
  *
  * 结构就两块：**上面列表、下面按钮排**，中间空 12dp。
  *
- * - 列表：整体圆角裁切，行样式（含首尾圆角那套形状）跟详情页曲目行同款，右侧图标换成 grabber；
+ * - 列表：整体圆角裁切，行样式（含首尾圆角那套形状）跟详情页曲目行同款；
  *   行底和文字色都从调用方来（行底 = 上下一首按钮的底色，文字 = 播放页 meta 的 content / variant）。
  * - 按钮排：**随机**（两态）、**循环**（顺序 / 列表循环 / 单曲循环）、**无限**（还没有功能）。
  *   关闭态用上下一首按钮那套配色，打开态用播放键那套，一眼能看出哪颗是开着的。
@@ -250,13 +248,6 @@ private fun QueueRow(
                     color = Color.White.copy(.4f),
                 )
             }
-            HGap()
-            Icon(
-                painter = painterResource(R.drawable.grabber),
-                contentDescription = null,
-                tint = Color.White.copy(.5f),
-                modifier = Modifier.size(GrabberSize),
-            )
         }
     }
 }

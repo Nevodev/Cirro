@@ -29,6 +29,7 @@ import com.nevoit.cirro.lyrics.ui.internal.effects.LyricsRevealSpring
 import com.nevoit.cirro.lyrics.ui.internal.effects.BgvExitSpring
 import com.nevoit.cirro.lyrics.ui.internal.effects.lyricsContentOffset
 import com.nevoit.cirro.lyrics.ui.internal.layout.settledHeight
+import com.nevoit.cirro.lyrics.ui.internal.layout.LineHorizontalPaddingDp
 import com.nevoit.cirro.lyrics.ui.internal.layout.LineVerticalPaddingDp
 import com.nevoit.cirro.lyrics.ui.internal.playback.LyricsPlaybackState
 import com.nevoit.cirro.lyrics.ui.preparation.PreparedLine
@@ -90,7 +91,9 @@ internal fun PreparedLineText(
                 .padding(
                     vertical = verticalPadding,
                     horizontal =
-                        if (prepared.source is KaraokeLine.AccompanimentKaraokeLine) 0.dp else 12.dp,
+                        // Backing vocals are nested inside the owner's padding and must not add it again.
+                        if (prepared.source is KaraokeLine.AccompanimentKaraokeLine) 0.dp
+                        else LineHorizontalPaddingDp.dp,
                 ),
             horizontalAlignment = alignment,
         ) {

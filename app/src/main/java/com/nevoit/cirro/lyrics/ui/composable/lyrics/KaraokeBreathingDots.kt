@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.nevoit.cirro.lyrics.core.model.karaoke.KaraokeAlignment
 import com.nevoit.cirro.lyrics.ui.internal.effects.PreparedBreathingDots
+import com.nevoit.cirro.lyrics.ui.internal.layout.LineHorizontalPaddingDp
 
 data class KaraokeBreathingDotsDefaults(
     val number: Int = 3,
@@ -53,7 +54,7 @@ fun KaraokeBreathingDots(
     Canvas(
         modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp)
+            .padding(horizontal = LineHorizontalPaddingDp.dp)
             .padding(bottom = trailingSpacing.coerceAtLeast(0.dp))
             .height(lineHeight.coerceAtLeast(diameter))
     ) {
