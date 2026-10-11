@@ -52,7 +52,7 @@ internal fun PreparedLineText(
     val density = LocalDensity.current
     val activeColor = resources.color
     val raster = resources.raster(prepared)
-    val paints = remember(activeColor) { RowPaints(activeColor) }
+    val paints = resources.paints
     val alignment = if (prepared.rightAligned) Alignment.End else Alignment.Start
     val phoneticProgress =
         animateFloatAsState(

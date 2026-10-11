@@ -4,7 +4,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.*
 
-/** Color-dependent paints are cached; playback selects a shadow without allocating one. */
+/** Shared by a rendering host; entries must stay read-only so rows cannot affect each other's effects. */
 internal class RowPaints(color: Color) {
     val shadows =
         Array(65) { index ->

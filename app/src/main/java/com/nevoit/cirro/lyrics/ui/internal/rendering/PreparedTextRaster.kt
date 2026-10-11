@@ -260,8 +260,8 @@ internal fun prepareLineRaster(
     color: Color,
     density: Density,
     direction: LayoutDirection,
+    paints: RowPaints,
 ): PreparedLineRaster {
-    val paints = RowPaints(color)
     return PreparedLineRaster(
         line.rows.map { PreparedRowLayers(density, direction, it, color, paints) },
     )

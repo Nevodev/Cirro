@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -44,6 +45,7 @@ import com.nevoit.cirro.lyrics.ui.internal.effects.lyricsContentOffset
 import com.nevoit.cirro.lyrics.ui.internal.layout.LineHorizontalPaddingDp
 import com.nevoit.cirro.lyrics.ui.internal.layout.LineVerticalPaddingDp
 import com.nevoit.cirro.lyrics.ui.internal.layout.LyricsLazyColumn
+import com.nevoit.cirro.lyrics.ui.internal.layout.LyricsFocusHeightUpdates
 import com.nevoit.cirro.lyrics.ui.internal.layout.lyricsAutoScroll
 import com.nevoit.cirro.lyrics.ui.internal.layout.onMeasured
 import com.nevoit.cirro.lyrics.ui.internal.layout.settledHeight
@@ -188,6 +190,11 @@ fun KaraokeLyricsView(
             remember(scene.lyrics, timeline, mapping, density.density, breathingHeightPx) {
                 sourceIndices.map { index ->
                     val line = scene.lyrics.lines[index]
+                    val focusedHeight = line?.settledHeight(true, true, density.density, true) ?: 0f
+                    val unfocusedHeight = line?.settledHeight(true, true, density.density, false) ?: 0f
+                    val focusHeight = (focusedHeight - unfocusedHeight).toInt()
+                    val leadingHeight =
+                        line?.settledLeadingHeight(true, true, density.density, true)?.toInt() ?: 0
                     val breathingHeight = {
                         val currentFocus = timeline.focus.value
                         if ((index == 0 && currentFocus.activeIntro) ||
@@ -197,22 +204,14 @@ fun KaraokeLyricsView(
                     LyricsListItem(
                         key = "${lyrics.lines[index].start}-${lyrics.lines[index].end}-$index",
                         preserveAnchorOnHeightChange = false,
-                        focusHeightPx = line?.let { prepared ->
+                        focusHeightPx = line?.let {
                             {
-                                (prepared.settledHeight(
-                                    true, true, density.density,
-                                    index in timeline.focus.value.allIndices,
-                                ) - prepared.settledHeight(
-                                    true, true, density.density, false,
-                                )).toInt()
+                                if (index in timeline.focus.value.allIndices) focusHeight else 0
                             }
                         },
-                        focusLeadingHeightPx = line?.let { prepared ->
+                        focusLeadingHeightPx = line?.let {
                             {
-                                prepared.settledLeadingHeight(
-                                    true, true, density.density,
-                                    index in timeline.focus.value.allIndices,
-                                ).toInt()
+                                if (index in timeline.focus.value.allIndices) leadingHeight else 0
                             }
                         },
                         breathingHeightPx = breathingHeight,
@@ -226,17 +225,18 @@ fun KaraokeLyricsView(
                         },
                         // Start with the same focus occupancy as the geometry model.
                         estimatedHeightPx =
-                            (line
-                                ?.settledHeight(
-                                    true,
-                                    true,
-                                    density.density,
-                                    index in timeline.focus.value.allIndices,
-                                )
-                                ?.toInt() ?: 0) + breathingHeight(),
+                            (if (index in timeline.focus.value.allIndices) focusedHeight
+                            else unfocusedHeight).toInt() + breathingHeight(),
                     )
                 }
             }
+        DisposableEffect(listState, listItems, timeline, mapping) {
+            val updates = LyricsFocusHeightUpdates(listItems, { timeline.focus.value }, mapping::itemIndex)
+            listState.focusHeightUpdates = updates
+            onDispose {
+                if (listState.focusHeightUpdates === updates) listState.focusHeightUpdates = null
+            }
+        }
         val followModifier =
             lyricsAutoScroll(
                 listState,

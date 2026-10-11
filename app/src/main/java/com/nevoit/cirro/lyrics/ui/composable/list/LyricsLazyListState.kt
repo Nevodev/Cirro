@@ -1,6 +1,7 @@
 package com.nevoit.cirro.lyrics.ui.composable.list
 
 import com.nevoit.cirro.lyrics.ui.internal.layout.LyricsHeightIndex
+import com.nevoit.cirro.lyrics.ui.internal.layout.LyricsFocusHeightUpdates
 import com.nevoit.cirro.lyrics.ui.internal.layout.LyricsScrollChainState
 
 import androidx.compose.animation.core.AnimationSpec
@@ -125,6 +126,7 @@ class LyricsLazyListState(
     private var focusHeights = intArrayOf()
     private var focusLeadingHeights = intArrayOf()
     private var breathingHeights = intArrayOf()
+    internal var focusHeightUpdates: LyricsFocusHeightUpdates? = null
     private var keys: Map<Any, Int> = emptyMap()
     private var pendingIndex: Int? = initialFirstVisibleItemIndex
     private var pendingOffset = initialFirstVisibleItemScrollOffset
@@ -205,6 +207,7 @@ class LyricsLazyListState(
             focusHeights = IntArray(items.size) { items[it].focusHeightPx?.invoke() ?: 0 }
             focusLeadingHeights = IntArray(items.size) { items[it].focusLeadingHeightPx?.invoke() ?: 0 }
             breathingHeights = IntArray(items.size) { items[it].breathingHeightPx?.invoke() ?: 0 }
+            focusHeightUpdates?.takeIf { it.items === items }?.reset()
             configuredWidth = width
             configuredSpacing = spacing
             chain.reset(position)
@@ -244,23 +247,30 @@ class LyricsLazyListState(
     internal fun indexOf(key: Any): Int = keys[key] ?: -1
 
     internal fun updateFocusHeights() {
-        for (index in items.indices) {
-            val expected = items[index].focusHeightPx?.invoke() ?: 0
-            val breathing = items[index].breathingHeightPx?.invoke() ?: 0
-            val breathingDelta = breathing - breathingHeights[index]
-            val delta = expected - focusHeights[index] + breathingDelta
-            if (delta != 0) {
-                heights.update(index, (heights.height(index) + delta).coerceAtLeast(0))
-                // Commit target geometry now, preserving the drawn positions through one spring.
-                chain.applyContentShift(index, delta.toDouble())
-            }
-            focusHeights[index] = expected
-            chain.applyBreathingContentShift(index, breathingDelta.toDouble())
-            breathingHeights[index] = breathing
-            val leading = items[index].focusLeadingHeightPx?.invoke() ?: 0
-            chain.applyLeadingContentShift(index, (leading - focusLeadingHeights[index]).toDouble())
-            focusLeadingHeights[index] = leading
+        val changed = focusHeightUpdates?.takeIf { it.items === items }?.consumeChanges()
+        if (changed == null) {
+            for (index in items.indices) updateFocusHeight(index)
+        } else {
+            for (index in changed) updateFocusHeight(index)
         }
+    }
+
+    private fun updateFocusHeight(index: Int) {
+        val expected = items[index].focusHeightPx?.invoke() ?: 0
+        val breathing = items[index].breathingHeightPx?.invoke() ?: 0
+        val breathingDelta = breathing - breathingHeights[index]
+        val delta = expected - focusHeights[index] + breathingDelta
+        if (delta != 0) {
+            heights.update(index, (heights.height(index) + delta).coerceAtLeast(0))
+            // Commit target geometry now, preserving the drawn positions through one spring.
+            chain.applyContentShift(index, delta.toDouble())
+        }
+        focusHeights[index] = expected
+        chain.applyBreathingContentShift(index, breathingDelta.toDouble())
+        breathingHeights[index] = breathing
+        val leading = items[index].focusLeadingHeightPx?.invoke() ?: 0
+        chain.applyLeadingContentShift(index, (leading - focusLeadingHeights[index]).toDouble())
+        focusLeadingHeights[index] = leading
     }
 
     /**

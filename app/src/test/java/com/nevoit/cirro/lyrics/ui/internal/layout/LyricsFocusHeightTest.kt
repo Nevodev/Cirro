@@ -3,6 +3,7 @@ package com.nevoit.cirro.lyrics.ui.internal.layout
 import com.nevoit.cirro.lyrics.ui.composable.list.LyricsLazyListState
 import com.nevoit.cirro.lyrics.ui.composable.list.LyricsListItem
 import com.nevoit.cirro.lyrics.ui.composable.list.LyricsScrollChain
+import com.nevoit.cirro.lyrics.ui.internal.playback.FocusState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -21,6 +22,9 @@ class LyricsFocusHeightTest {
                 focusLeadingHeightPx = if (index == 1) ({ if (focused) 60 else 0 }) else null,
             )
         }
+        state.focusHeightUpdates = LyricsFocusHeightUpdates(
+            items, { FocusState(1, if (focused) listOf(1) else emptyList(), null, false) }, { it },
+        )
         state.configure(items, 400, 0, 0, 1000, 1000)
         state.chain.configure(items.size, LyricsScrollChain.of(300f, 0.3f), 0.0, 1000)
         state.chain.retain(0, items.size)
@@ -173,5 +177,127 @@ class LyricsFocusHeightTest {
         repeat(400) { state.chain.advance(0.005f) }
         assertEquals(80.0, state.heights.top(1), 0.0)
         assertFalse(state.chain.active)
+    }
+
+    @Test
+    fun focusChangesReadOnlyEnteringAndLeavingOwnersEvenOnLongSeeks() {
+        var focus = FocusState(1, listOf(1, 2), null, false)
+        val reads = IntArray(200)
+        val items = List(reads.size) { index ->
+            LyricsListItem(
+                key = index,
+                estimatedHeightPx = 80 + if (index in focus.allIndices) 100 else 0,
+                focusHeightPx = {
+                    reads[index]++
+                    if (index in focus.allIndices) 100 else 0
+                },
+                focusLeadingHeightPx = { if (index in focus.allIndices) 60 else 0 },
+            )
+        }
+        val state = LyricsLazyListState()
+        state.focusHeightUpdates = LyricsFocusHeightUpdates(items, { focus }, { it })
+        state.configure(items, 400, 0, 0, 1000, 1000)
+        reads.fill(0)
+
+        focus = FocusState(2, listOf(2, 3), null, false)
+        state.updateFocusHeights()
+        assertEquals(listOf(1, 3), reads.indices.filter { reads[it] != 0 })
+        assertEquals(80, state.heights.height(1))
+        assertEquals(180, state.heights.height(2))
+        assertEquals(180, state.heights.height(3))
+        repeat(10) { state.updateFocusHeights() }
+        assertEquals(2, reads.sum())
+
+        reads.fill(0)
+        focus = FocusState(150, listOf(150), null, false)
+        state.updateFocusHeights()
+        assertEquals(listOf(2, 3, 150), reads.indices.filter { reads[it] != 0 })
+        assertEquals(80, state.heights.height(2))
+        assertEquals(80, state.heights.height(3))
+        assertEquals(180, state.heights.height(150))
+        assertEquals(80.0 * 151 + 100, state.heights.top(151), 0.0)
+
+        reads.fill(0)
+        focus = FocusState(0, listOf(0), null, false)
+        state.updateFocusHeights()
+        assertEquals(listOf(0, 150), reads.indices.filter { reads[it] != 0 })
+        assertEquals(180, state.heights.height(0))
+        assertEquals(80, state.heights.height(150))
+    }
+
+    @Test
+    fun incrementalDotsAndLeadingBgvPreserveCompensationWhenSourceIndicesHaveGaps() {
+        var focus = FocusState(4, emptyList(), 4, false)
+        val sources = listOf(0, 4, 7)
+        val reads = IntArray(sources.size)
+        val items = sources.mapIndexed { index, source ->
+            LyricsListItem(
+                key = source,
+                estimatedHeightPx = if (source == 4) 120 else 80,
+                focusHeightPx = {
+                    reads[index]++
+                    if (source in focus.allIndices) 60 else 0
+                },
+                focusLeadingHeightPx = { if (source in focus.allIndices) 60 else 0 },
+                breathingHeightPx = {
+                    if ((source == 0 && focus.activeIntro) || focus.activeInterludeIndex == source) 40 else 0
+                },
+            )
+        }
+        val state = LyricsLazyListState()
+        state.focusHeightUpdates = LyricsFocusHeightUpdates(items, { focus }, sources::indexOf)
+        state.configure(items, 400, 0, 0, 1000, 1000)
+        state.chain.configure(items.size, LyricsScrollChain.of(300f, 0.3f), 0.0, 1000)
+        state.chain.retain(0, items.size)
+        reads.fill(0)
+
+        focus = FocusState(4, listOf(4), null, false)
+        state.updateFocusHeights()
+        assertEquals(listOf(1), reads.indices.filter { reads[it] != 0 })
+        assertEquals(140, state.heights.height(1))
+        assertEquals(-60f, state.chain.leadingOffset(1), 0f)
+        assertEquals(40f, state.chain.breathingOffset(1), 0f)
+        assertEquals(-20f, state.chain.offset(2), 0f)
+        state.updateFocusHeights()
+        assertEquals(1, reads.sum())
+        assertEquals(-20f, state.chain.offset(2), 0f)
+
+        repeat(400) { state.chain.advance(0.005f) }
+        reads.fill(0)
+        focus = FocusState(0, emptyList(), null, true)
+        state.updateFocusHeights()
+        assertEquals(listOf(0, 1), reads.indices.filter { reads[it] != 0 })
+        assertEquals(120, state.heights.height(0))
+        assertEquals(80, state.heights.height(1))
+        assertEquals(-40f, state.chain.breathingOffset(0), 0f)
+        assertEquals(60f, state.chain.leadingOffset(1), 0.001f)
+    }
+
+    @Test
+    fun replacingItemsReinitializesTheIncrementalBaseline() {
+        var focus = FocusState(0, listOf(0), null, false)
+        val state = LyricsLazyListState()
+        fun items() = List(2) { index ->
+            LyricsListItem(
+                key = index,
+                estimatedHeightPx = 80 + if (index in focus.allIndices) 100 else 0,
+                focusHeightPx = { if (index in focus.allIndices) 100 else 0 },
+            )
+        }
+        val first = items()
+        state.focusHeightUpdates = LyricsFocusHeightUpdates(first, { focus }, { it })
+        state.configure(first, 400, 0, 0, 1000, 1000)
+        focus = FocusState(1, listOf(1), null, false)
+        val replacement = items()
+        state.focusHeightUpdates = LyricsFocusHeightUpdates(replacement, { focus }, { it })
+        state.configure(replacement, 400, 0, 0, 1000, 1000)
+        state.updateFocusHeights()
+        assertEquals(80, state.heights.height(0))
+        assertEquals(180, state.heights.height(1))
+
+        focus = FocusState(0, listOf(0), null, false)
+        state.updateFocusHeights()
+        assertEquals(180, state.heights.height(0))
+        assertEquals(80, state.heights.height(1))
     }
 }

@@ -14,8 +14,9 @@ internal class LyricsRenderResources(
     density: Density,
     direction: LayoutDirection,
 ) {
+    val paints = RowPaints(color)
     private val rasters = prepared.allLines.associateWith {
-        prepareLineRaster(it, color, density, direction)
+        prepareLineRaster(it, color, density, direction, paints)
     }
     private val rows = prepared.allLines.flatMap { it.rows }.associateWith { RowRenderState(it) }
 
