@@ -121,6 +121,32 @@ fun playQueueOf(
 fun PlaybackQueue.withCurrent(index: Int): PlaybackQueue =
     if (index in entries.indices) copy(currentIndex = index) else this
 
+val PlaybackQueue.entriesFromCurrent: List<QueueEntry>
+    get() = if (currentIndex in entries.indices) {
+        entries.drop(currentIndex)
+    } else {
+        entries
+    }
+
+fun PlaybackQueue.canMoveEntry(fromUid: Long, toUid: Long): Boolean =
+    canMoveEntryAt(
+        entries.indexOfFirst { it.uid == fromUid },
+        entries.indexOfFirst { it.uid == toUid },
+    )
+
+fun PlaybackQueue.withMovedEntry(fromUid: Long, toUid: Long): PlaybackQueue {
+    val from = entries.indexOfFirst { it.uid == fromUid }
+    val to = entries.indexOfFirst { it.uid == toUid }
+    if (!canMoveEntryAt(from, to)) return this
+    val moved = entries.toMutableList().apply { add(to, removeAt(from)) }
+    return copy(entries = moved)
+}
+
+private fun PlaybackQueue.canMoveEntryAt(from: Int, to: Int): Boolean =
+    currentIndex in entries.indices &&
+        from in entries.indices && to in entries.indices && from != to &&
+        from > currentIndex && to > currentIndex
+
 /** 「下一个播放」的落点：紧接着当前这首。 */
 val PlaybackQueue.insertNextIndex: Int
     get() = (currentIndex + 1).coerceAtMost(entries.size)
@@ -143,7 +169,7 @@ fun PlaybackQueue.withInsert(song: Song, source: QueueSource?, at: Int): Playbac
     return copy(entries = list)
 }
 
-/** 切到随机：只重排当前位置**之后**的基准条目，插播条目和已播过的一律原地不动。 */
+/** 切到随机：只重排当前位置**之后**的基准条目，插播条目和当前之前的队列条目原地不动。 */
 fun PlaybackQueue.shuffledTail(): PlaybackQueue {
     val slots = baseSlotsAfterCurrent()
     if (slots.size < 2) return this

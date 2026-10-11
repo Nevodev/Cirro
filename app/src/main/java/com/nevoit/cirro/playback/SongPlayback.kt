@@ -1,6 +1,7 @@
 package com.nevoit.cirro.playback
 
 import android.net.Uri
+import android.os.Bundle
 import androidx.core.net.toUri
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -28,11 +29,19 @@ internal fun songUri(id: Long): Uri =
 internal fun Uri.songIdOrNull(): Long? =
     if (scheme == SongScheme && authority == SongHost) lastPathSegment?.toLongOrNull() else null
 
-internal fun Song.toMediaItem(): MediaItem = MediaItem.Builder()
+private const val QueueEntryUidKey = "com.nevoit.cirro.queue_entry_uid"
+
+internal val MediaItem.queueEntryUid: Long?
+    get() = mediaMetadata.extras?.let { extras ->
+        if (extras.containsKey(QueueEntryUidKey)) extras.getLong(QueueEntryUidKey) else null
+    }
+
+internal fun Song.toMediaItem(queueEntryUid: Long): MediaItem = MediaItem.Builder()
     .setMediaId(id.toString())
     .setUri(songUri(id))
     .setMediaMetadata(
         MediaMetadata.Builder()
+            .setExtras(Bundle().apply { putLong(QueueEntryUidKey, queueEntryUid) })
             .setTitle(name)
             .setArtist(artistText)
             .setAlbumTitle(album)

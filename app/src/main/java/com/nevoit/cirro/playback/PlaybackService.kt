@@ -48,8 +48,7 @@ class PlaybackService : MediaSessionService(), KoinComponent {
     private val qualityStore: AudioQualityStore by inject()
 
     /**
-     * 播放队列。这里只**读**——打卡要知道刚播完的那首来自哪个歌单/专辑，好回传 `sourceId`。
-     * 写的一方是 PlaybackConnection（它拿着 MediaController）。
+     * 队列顺序由 PlaybackConnection 写；这里读取来源，并从实际播放事件追加独立的历史。
      */
     private val queueStore: PlayQueueStore by inject()
 
@@ -95,6 +94,10 @@ class PlaybackService : MediaSessionService(), KoinComponent {
         // 且都带上这首歌的来源（歌单/专辑 id）。
         player.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                queueStore.finishPlaybackHistory(
+                    nextUid = mediaItem?.queueEntryUid,
+                    repeated = reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT,
+                )
                 loudness.selectTrack(mediaItem?.mediaId?.toLongOrNull(), qualityStore.current.wire)
 
                 // 上一首完整播完了，涨听歌排行。两种都算：
@@ -134,7 +137,18 @@ class PlaybackService : MediaSessionService(), KoinComponent {
                     playingDurationMs = session?.player?.duration ?: C.TIME_UNSET
                 }
                 // 队列的最后一首播完会停在 ENDED（不再触发 AUTO 切换），单独补上报
-                if (playbackState == Player.STATE_ENDED) reportPlayed()
+                if (playbackState == Player.STATE_ENDED) {
+                    queueStore.finishPlaybackHistory()
+                    reportPlayed()
+                }
+            }
+
+            override fun onEvents(player: Player, events: Player.Events) {
+                if (!player.isPlaying) return
+                val uid = player.currentMediaItem?.queueEntryUid ?: return
+                // 同一首歌可重复入队，索引也会因拖拽改变，必须按条目身份匹配实际出声的歌曲。
+                val entry = queueStore.queue.value.entries.firstOrNull { it.uid == uid } ?: return
+                queueStore.markPlaying(entry)
             }
         })
 
@@ -165,6 +179,7 @@ class PlaybackService : MediaSessionService(), KoinComponent {
     }
 
     override fun onDestroy() {
+        queueStore.finishPlaybackHistory()
         scrobbleScope.cancel()
         session?.run {
             player.release()

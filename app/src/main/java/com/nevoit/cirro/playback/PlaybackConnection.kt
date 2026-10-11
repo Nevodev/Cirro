@@ -15,6 +15,7 @@ import com.nevoit.cirro.data.NcmBridge
 import com.nevoit.cirro.data.PlayQueueStore
 import com.nevoit.cirro.data.model.PlayMode
 import com.nevoit.cirro.data.model.PlaybackQueue
+import com.nevoit.cirro.data.model.PlaybackHistoryEntry
 import com.nevoit.cirro.data.model.QueueEntry
 import com.nevoit.cirro.data.model.QueueSource
 import com.nevoit.cirro.data.model.Song
@@ -27,6 +28,7 @@ import com.nevoit.cirro.data.model.restoredTail
 import com.nevoit.cirro.data.model.shuffledTail
 import com.nevoit.cirro.data.model.withCurrent
 import com.nevoit.cirro.data.model.withInsert
+import com.nevoit.cirro.data.model.withMovedEntry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -132,6 +134,7 @@ class PlaybackConnection(
 
     /** 队列快照。给以后的队列界面，也给"当前这首从哪来"这类查询。 */
     val queue: StateFlow<PlaybackQueue> get() = queueStore.queue
+    val history: StateFlow<List<PlaybackHistoryEntry>> get() = queueStore.history
 
     private var controller: MediaController? = null
     private var lastSessionLogMs = 0L
@@ -332,6 +335,22 @@ class PlaybackConnection(
         insert(song, source) { it.appendInsertIndex }
     }
 
+    suspend fun moveQueueEntry(fromUid: Long, toUid: Long): Boolean =
+        withContext(Dispatchers.Main.immediate) {
+            val controller = controller ?: return@withContext false
+            val queue = liveQueue() ?: return@withContext false
+            if (controller.mediaItemCount != queue.entries.size) return@withContext false
+
+            // 切歌可能发生在拖拽回调之前，按最新快照重新校验当前歌曲是否仍固定。
+            val moved = queue.withMovedEntry(fromUid, toUid)
+            if (moved === queue) return@withContext false
+            val from = queue.entries.indexOfFirst { it.uid == fromUid }
+            val to = moved.entries.indexOfFirst { it.uid == fromUid }
+            controller.moveMediaItem(from, to)
+            queueStore.set(moved)
+            true
+        }
+
     /**
      * 手动「下一首」。**不受单曲循环约束**——目标下标自己算，不走 `seekToNextMediaItem()`。
      */
@@ -444,7 +463,7 @@ class PlaybackConnection(
         retryJob = null
         retryCount = 0
         controller.setMediaItems(
-            queue.entries.map { it.song.toMediaItem() },
+            queue.entries.map { it.song.toMediaItem(it.uid) },
             queue.currentIndex,
             0L,
         )
@@ -465,8 +484,9 @@ class PlaybackConnection(
             if (controller.mediaItemCount != queue.entries.size) return@launch
 
             val at = position(queue).coerceIn(0, queue.entries.size)
-            controller.addMediaItem(at, song.toMediaItem())
-            queueStore.set(queue.withInsert(song, source, at))
+            val inserted = queue.withInsert(song, source, at)
+            controller.addMediaItem(at, song.toMediaItem(inserted.entries[at].uid))
+            queueStore.set(inserted)
         }
     }
 

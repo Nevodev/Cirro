@@ -21,14 +21,18 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberOverscrollEffect
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -36,9 +40,11 @@ import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -54,6 +60,8 @@ import com.kyant.shapes.RoundedRectangle
 import com.nevoit.cirro.R
 import com.nevoit.cirro.data.model.PlayMode
 import com.nevoit.cirro.data.model.Song
+import com.nevoit.cirro.data.model.canMoveEntry
+import com.nevoit.cirro.data.model.entriesFromCurrent
 import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.Text
@@ -62,6 +70,8 @@ import com.nevoit.material.core.interaction.overscroll.OffsetOverscrollEffect
 import com.nevoit.material.core.interaction.rememberFlingBehavior
 import com.nevoit.material.core.modifier.drawBackground
 import com.nevoit.material.theme.MaterialTheme
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
 
 private val RowMinHeight = 56.dp
 
@@ -95,6 +105,7 @@ private val ButtonIconSize = 24.dp
 
 private const val HistoryHeaderKey = "queue_history_header"
 private const val ContinueHeaderKey = "queue_continue_header"
+private const val ContinueFooterKey = "queue_continue_footer"
 
 internal data class QueueSection(
     val headerKey: String,
@@ -130,18 +141,19 @@ internal fun QueuePanel(
     onContentReady: () -> Unit = {},
 ) {
     val queue by connection.queue.collectAsState()
+    val history by connection.history.collectAsState()
     val entries = queue.entries
-    val historySize = queue.currentIndex.coerceIn(0, entries.size)
-    val history = remember(entries, historySize) { entries.take(historySize) }
-    val continuation = remember(entries, historySize) { entries.drop(historySize) }
-    val historySection = remember(historySize) {
-        QueueSection(HistoryHeaderKey, ContinueHeaderKey, 1, historySize)
+    val continuation = remember(entries, queue.currentIndex) { queue.entriesFromCurrent }
+    val showLoopNotice =
+        continuation.isNotEmpty() && queue.mode == PlayMode.REPEAT_ALL && !queue.shuffle
+    val historySection = remember(history.size) {
+        QueueSection(HistoryHeaderKey, ContinueHeaderKey, 1, history.size)
     }
     val continueHeaderIndex = if (history.isEmpty()) 0 else history.size + 1
-    val continueSection = remember(continueHeaderIndex, continuation.size) {
+    val continueSection = remember(continueHeaderIndex, continuation.size, showLoopNotice) {
         QueueSection(
             ContinueHeaderKey, null, continueHeaderIndex + 1,
-            continueHeaderIndex + continuation.size.coerceAtLeast(1),
+            continueHeaderIndex + continuation.size + if (showLoopNotice) 1 else 0,
         )
     }
     val mode = queue.mode
@@ -155,6 +167,42 @@ internal fun QueuePanel(
     // 行要按"自己滚到了哪儿"算渐隐系数，所以列表状态得由面板持有、下发给每一行。
     // 当前歌紧跟“继续播放”标题；从标题开始，避免吸顶标题遮住当前行。
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = continueHeaderIndex)
+    val haptic = LocalHapticFeedback.current
+    val canMoveItem: (LazyListItemInfo, LazyListItemInfo) -> Boolean = remember(connection) {
+        { from, to ->
+            val fromUid = from.key as? Long
+            val toUid = to.key as? Long
+            fromUid != null && toUid != null && connection.queue.value.canMoveEntry(fromUid, toUid)
+        }
+    }
+    val reorderableState = rememberReorderableLazyListState(
+        lazyListState = listState,
+        canMoveItem = canMoveItem,
+    ) { from, to ->
+        val fromUid = from.key as? Long ?: return@rememberReorderableLazyListState
+        val toUid = to.key as? Long ?: return@rememberReorderableLazyListState
+        if (connection.moveQueueEntry(fromUid, toUid)) {
+            haptic.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
+        }
+    }
+    val onDragStarted = remember(haptic) {
+        { _: Offset ->
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
+    }
+    val currentUid = entries.getOrNull(queue.currentIndex)?.uid
+    var previousCurrentUid by remember { mutableStateOf(currentUid) }
+    LaunchedEffect(currentUid) {
+        val firstKey = listState.layoutInfo.visibleItemsInfo
+            .firstOrNull { it.index == listState.firstVisibleItemIndex }?.key
+        // 切歌后历史区增长；正在看当前行时保持标题位置，浏览其他部分时不抢滚动。
+        if (!reorderableState.isAnyItemDragging &&
+            (firstKey == ContinueHeaderKey || firstKey == previousCurrentUid)
+        ) {
+            listState.requestScrollToItem(continueHeaderIndex)
+        }
+        previousCurrentUid = currentUid
+    }
     val overscrollEffect = rememberOverscrollEffect()
     val latestReady = rememberUpdatedState(onContentReady)
     val readyReported = remember { booleanArrayOf(false) }
@@ -246,10 +294,14 @@ internal fun QueuePanel(
                             panelAlpha
                         )
                     }
-                    items(history, key = { it.uid }, contentType = { "song" }) { entry ->
+                    items(
+                        history,
+                        key = { "queue_history_${it.id}" },
+                        contentType = { "song" }) { record ->
+                        val rowKey = "queue_history_${record.id}"
                         QueueRow(
-                            song = entry.song,
-                            rowKey = entry.uid,
+                            song = record.entry.song,
+                            rowKey = rowKey,
                             listState = listState,
                             section = historySection,
                             overscrollEffect = overscrollEffect,
@@ -264,26 +316,46 @@ internal fun QueuePanel(
                             ?.let { "来自 $it" },
                     )
                 }
-                if (continuation.isEmpty()) {
-                    item(key = "queue_continue_empty") {
-                        QueueEmptySection(
-                            "暂无待播歌曲",
-                            listState,
-                            continueSection,
-                            overscrollEffect,
-                            panelAlpha,
+                items(continuation, key = { it.uid }, contentType = { "song" }) { entry ->
+                    val movable = entry.uid != currentUid
+                    val label = when {
+                        !movable && mode == PlayMode.REPEAT_ONE -> "单曲循环"
+                        !movable -> "当前歌曲"
+                        entry.inserted -> "手动添加"
+                        else -> null
+                    }
+                    ReorderableItem(
+                        reorderableState,
+                        key = entry.uid,
+                        enabled = movable
+                    ) { isDragging ->
+                        QueueRow(
+                            song = entry.song,
+                            rowKey = entry.uid,
+                            listState = listState,
+                            section = continueSection,
+                            overscrollEffect = overscrollEffect,
+                            panelAlpha = panelAlpha,
+                            edgeFadeEnabled = !isDragging,
+                            label = label,
+                            modifier = Modifier.longPressDraggableHandle(
+                                enabled = movable,
+                                onDragStarted = onDragStarted,
+                            ),
                         )
                     }
                 }
-                items(continuation, key = { it.uid }, contentType = { "song" }) { entry ->
-                    QueueRow(
-                        song = entry.song,
-                        rowKey = entry.uid,
-                        listState = listState,
-                        section = continueSection,
-                        overscrollEffect = overscrollEffect,
-                        panelAlpha = panelAlpha,
-                    )
+                if (showLoopNotice) {
+                    item(key = ContinueFooterKey, contentType = "queue-notice") {
+                        QueueNotice(
+                            text = "正在循环 ${entries.size} 首歌",
+                            listState = listState,
+                            section = continueSection,
+                            overscrollEffect = overscrollEffect,
+                            panelAlpha = panelAlpha,
+                            rowKey = ContinueFooterKey,
+                        )
+                    }
                 }
             }
         }
@@ -319,21 +391,29 @@ private fun QueueHeader(
 }
 
 @Composable
-private fun QueueEmptySection(
+private fun QueueNotice(
     text: String,
     listState: LazyListState,
     section: QueueSection,
     overscrollEffect: OverscrollEffect?,
     panelAlpha: () -> Float,
+    rowKey: Any,
 ) {
-    val rowKey = "queue_continue_empty"
-    Box(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = RowMinHeight)
             .edgeFade(listState, rowKey, BlendMode.Plus, section, overscrollEffect, panelAlpha),
-        contentAlignment = Alignment.CenterStart,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
     ) {
+        Icon(
+            painter = painterResource(R.drawable.repeat),
+            contentDescription = null,
+            tint = Color.White.copy(alpha = 0.4f),
+            modifier = Modifier.size(20.dp),
+        )
+        HGap(8.dp)
         QueueText(text, MaterialTheme.type.subHeadline2, Color.White.copy(alpha = 0.4f))
     }
 }
@@ -405,6 +485,8 @@ private fun QueueRow(
     section: QueueSection,
     overscrollEffect: OverscrollEffect?,
     panelAlpha: () -> Float,
+    edgeFadeEnabled: Boolean = true,
+    label: String? = null,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -422,7 +504,8 @@ private fun QueueRow(
                     BlendMode.SrcOver,
                     section,
                     overscrollEffect,
-                    panelAlpha
+                    panelAlpha,
+                    enabled = edgeFadeEnabled,
                 ),
             contentAlignment = Alignment.CenterStart,
         ) {
@@ -441,7 +524,10 @@ private fun QueueRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = RowMinHeight)
-                .edgeFade(listState, rowKey, BlendMode.Plus, section, overscrollEffect, panelAlpha),
+                .edgeFade(
+                    listState, rowKey, BlendMode.Plus, section, overscrollEffect, panelAlpha,
+                    enabled = edgeFadeEnabled,
+                ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             HGap(CoverAdvance)
@@ -461,6 +547,10 @@ private fun QueueRow(
                     style = MaterialTheme.type.subHeadline2,
                     color = Color.White.copy(.4f),
                 )
+            }
+            if (label != null) {
+                HGap(8.dp)
+                QueueText(label, MaterialTheme.type.subHeadline2, Color.White.copy(alpha = 0.4f))
             }
         }
     }
@@ -499,19 +589,20 @@ private fun Modifier.edgeFade(
     section: QueueSection,
     overscrollEffect: OverscrollEffect?,
     panelAlpha: () -> Float,
+    enabled: Boolean = true,
 ): Modifier = this
     .graphicsLayer {
         this.blendMode = blendMode
         alpha = panelAlpha().coerceIn(0f, 1f)
-        // `Auto` 只在"这行离两端都足够远、绘制段肯定不会铺遮罩"时才给（见 isNearEdge）。
+        // 关闭渐隐或离两端足够远时，绘制段不会铺遮罩，才可以使用 `Auto`（见 isNearEdge）。
         // ⚠️ 方向不能反：给了 `Auto`（没有独立缓冲）却铺了 `DstIn`，遮罩会直接作用在屏幕画布上，
         // 把底下的内容连背景一起擦掉。所以这个判据只允许**偏保守**（多建一层缓冲），不许偏激进。
         compositingStrategy =
             if (blendMode == BlendMode.SrcOver &&
-                !listState.isNearEdge(
+                (!enabled || !listState.isNearEdge(
                     rowKey, section, overscrollEffect.visualOffsetY,
                     TopEdgeFade.toPx(), BottomEdgeFade.toPx(),
-                )
+                ))
             ) {
                 CompositingStrategy.Auto
             } else {
@@ -519,6 +610,11 @@ private fun Modifier.edgeFade(
             }
     }
     .drawWithContent {
+        // 拖拽位移由外层图层施加，布局位置仍对应原槽位，不能继续按它裁剪或铺渐隐遮罩。
+        if (!enabled) {
+            drawContent()
+            return@drawWithContent
+        }
         val layoutInfo = listState.layoutInfo
         val info = layoutInfo.visibleItemsInfo.firstOrNull { it.key == rowKey }
             ?: return@drawWithContent
