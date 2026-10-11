@@ -20,6 +20,9 @@ data class Song(
     val cover: String = "",
     val durationMs: Long = 0,
     val fee: Int = 0,
+    val albumId: Long = 0L,
+    /** 与 [artists] 按下标对应；缺失 id 的艺术家以 0 占位，旧缓存可能整列缺失。 */
+    val artistIds: List<Long> = emptyList(),
 ) {
     val artistText: String get() = artists.joinToString(" & ")
 }

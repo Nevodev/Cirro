@@ -38,12 +38,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import coil3.compose.AsyncImage
+import com.materialkolor.hct.Hct
 import com.nevoit.cirro.data.AccountRepository
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.Session
@@ -57,6 +59,7 @@ import com.nevoit.cirro.playback.PlaybackConnection
 import com.nevoit.cirro.playback.PlayerLayer
 import com.nevoit.cirro.playback.PlayerUiController
 import com.nevoit.cirro.ui.BottomShade
+import com.nevoit.material.core.component.BottomPopupMenuHost
 import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.NavigationBar
@@ -102,6 +105,10 @@ enum class MainDestinations {
 private const val BarToneDark = 12
 
 private const val BarToneLight = 98
+
+private const val MenuActionToneDark = 20
+
+private const val MenuActionToneLight = 95
 
 private const val BarIndicatorToneDark = 20
 
@@ -204,6 +211,17 @@ fun BoxScope.Main() {
         animationSpec = tween(durationMillis = 400),
         label = "barContainer",
     )
+    val menuActionTone = if (barDark) MenuActionToneDark else MenuActionToneLight
+    val themePrimary = MaterialTheme.colors.primary
+    val menuActionFallback = remember(themePrimary, menuActionTone) {
+        val hct = Hct.fromInt(themePrimary.toArgb())
+        Color(Hct.from(hct.hue, hct.chroma, menuActionTone.toDouble()).toInt())
+    }
+    val menuActionContainerColor = animateColorAsState(
+        targetValue = barTone(MenuActionToneDark, MenuActionToneLight) ?: menuActionFallback,
+        animationSpec = tween(durationMillis = 400),
+        label = "menuActionContainer",
+    )
     val barIndicatorColor = animateColorAsState(
         targetValue = barTone(BarIndicatorToneDark, BarIndicatorToneLight)
             ?: MaterialTheme.colors.navigationBarIndicator,
@@ -245,7 +263,13 @@ fun BoxScope.Main() {
     val navigationPageShape = deviceCornerShape()
     RequestNotificationPermissionOnce()
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    BottomPopupMenuHost(
+        modifier = Modifier.fillMaxSize(),
+        containerColor = rememberColorProducer(barContainerColor),
+        contentColor = rememberColorProducer(miniContentColor),
+        contentVariantColor = rememberColorProducer(miniVariantColor),
+        actionContainerColor = rememberColorProducer(menuActionContainerColor),
+    ) {
         NavigationHost(
             navigator = navigator,
             onHostReady = { hostHandle = it },
@@ -282,6 +306,9 @@ fun BoxScope.Main() {
                     titleHint = destination.titleHint,
                     coverHint = destination.coverHint,
                     onBack = ::back,
+                    onOpenCollection = { kind, id, titleHint, coverHint ->
+                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint))
+                    },
                 )
             }
         }

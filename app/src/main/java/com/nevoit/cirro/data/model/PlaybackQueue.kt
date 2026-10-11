@@ -47,8 +47,8 @@ data class QueueSource(
     val id: String = "",
     val title: String = "",
 ) {
-    /** 送去打卡的 `sourceId`。每日推荐是现拼的列表、没有对应的服务端集合，只能留空。 */
-    val scrobbleId: String get() = if (kind == CollectionKind.DAILY) "" else id
+    /** 每日推荐和艺术家热门歌曲没有对应的服务端集合，不能把页面 id 用于打卡。 */
+    val scrobbleId: String get() = if (kind == CollectionKind.DAILY || kind == CollectionKind.ARTIST) "" else id
 }
 
 /**
@@ -156,6 +156,9 @@ private fun PlaybackQueue.canMoveEntryAt(from: Int, to: Int): Boolean =
 /** 「下一个播放」的落点：紧接着当前这首。 */
 val PlaybackQueue.insertNextIndex: Int
     get() = (currentIndex + 1).coerceAtMost(entries.size)
+
+val PlaybackQueue.hasPendingInserts: Boolean
+    get() = currentIndex in entries.indices && entries.getOrNull(currentIndex + 1)?.inserted == true
 
 /**
  * 「添加到插播队列」的落点：跳过当前之后**已有的**插播条目，排到它们后面。

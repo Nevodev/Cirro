@@ -10,6 +10,7 @@ import com.nevoit.cirro.data.IntelligenceRepository
 import com.nevoit.cirro.data.PlayQueueStore
 import com.nevoit.cirro.data.SessionStore
 import com.nevoit.cirro.data.SongLikeRepository
+import com.nevoit.cirro.ui.SongMenuViewModel
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.detail.CollectionViewModel
 import com.nevoit.cirro.home.HomeViewModel
@@ -92,6 +93,8 @@ val appModule = module {
     viewModelOf(::HomeViewModel)
 
     viewModelOf(::PlayerLikeViewModel)
+
+    viewModelOf(::SongMenuViewModel)
 
     // 统一详情页：一个页面架构服务三种来源，参数区分是哪一种
     viewModel { (kind: CollectionKind, id: Long, titleHint: String) ->

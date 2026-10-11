@@ -3,7 +3,7 @@ package com.nevoit.cirro.data.model
 import kotlinx.serialization.Serializable
 
 /**
- * 统一详情页的三种来源。
+ * 统一详情页的内容来源。
  *
  * 专辑（含 Single / EP）和歌单各走各的详情接口，每日推荐没有 id（它不是一份真歌单，
  * 是 [HomeRepository.dailySongs] 现算出来的列表），用 [id]==0 占位。
@@ -13,12 +13,13 @@ enum class CollectionKind {
     PLAYLIST,
     ALBUM,
     DAILY,
+    ARTIST,
 }
 
 /**
- * 统一详情页的头部信息：专辑、单曲专辑、歌单、每日推荐共用一份形状。
+ * 统一详情页的头部信息：专辑、歌单、每日推荐、艺术家热门歌曲共用一份形状。
  *
- * 字段是三种来源的**并集**，谁没有就留默认值：歌单给 [updateTimeMs]（更新时间），
+ * 字段是来源的**并集**，谁没有就留默认值：歌单给 [updateTimeMs]（更新时间），
  * 专辑给的是发行时间（语义不同，界面按 [kind] 换文案）；每日推荐没有作者和描述。
  * [subscribed] 是当前登录用户的收藏状态；每日推荐不可收藏，恒 false。
  *

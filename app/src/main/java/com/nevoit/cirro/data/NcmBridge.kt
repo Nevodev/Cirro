@@ -297,14 +297,32 @@ object NcmBridge {
             )
     }
 
+    fun artistDetail(id: Long): Result<CollectionDetail> = runCatching {
+        val body = decode(nativeArtistDetail(id.toString())).getOrThrow()
+        CollectionDetail(
+            info = CollectionInfo(
+                kind = CollectionKind.ARTIST,
+                id = id,
+                title = body.name,
+                author = "热门歌曲",
+                description = body.description,
+                cover = body.cover,
+                trackCount = body.trackCount,
+                subscribed = body.subscribed,
+            ),
+            songs = body.songs,
+        )
+    }
+
     /**
-     * 收藏 / 取消收藏（歌单、专辑同走这里）。成功返回新状态；
+     * 收藏 / 取消收藏（歌单、专辑、艺术家同走这里）。成功返回新状态；
      * 业务失败（收藏自己的歌单之类）走 [Result.failure]，消息给界面提示。
      */
     fun setCollectionSubscribed(kind: CollectionKind, id: Long, subscribe: Boolean): Result<Unit> =
         runCatching {
             val wireKind = when (kind) {
                 CollectionKind.ALBUM -> "album"
+                CollectionKind.ARTIST -> "artist"
                 else -> "playlist"
             }
             decode(
@@ -322,6 +340,25 @@ object NcmBridge {
     fun setSongLiked(id: Long, userId: Long, liked: Boolean): Result<Unit> = runCatching {
         require(id > 0 && userId > 0)
         decode(nativeSongLike(id.toString(), userId.toString(), liked)).getOrThrow()
+    }
+
+    fun ownedPlaylists(userId: Long): Result<List<Playlist>> = runCatching {
+        require(userId > 0)
+        val playlists = mutableListOf<Playlist>()
+        var offset = 0
+        do {
+            val page = decode(nativeOwnedPlaylists(userId.toString(), offset)).getOrThrow()
+            playlists += page.playlists
+            if (!page.more) break
+            check(page.nextOffset > offset) { "歌单分页没有前进" }
+            offset = page.nextOffset
+        } while (true)
+        playlists.distinctBy { it.id }
+    }
+
+    fun addSongToPlaylist(songId: Long, playlistId: Long): Result<Unit> = runCatching {
+        require(songId > 0 && playlistId > 0)
+        decode(nativeAddSongToPlaylist(playlistId.toString(), songId.toString())).getOrThrow()
     }
 
     /**
@@ -391,11 +428,17 @@ object NcmBridge {
 
     private external fun nativeAlbumDetail(id: String): String
 
+    private external fun nativeArtistDetail(id: String): String
+
     private external fun nativeCollectionSub(kind: String, id: String, t: String): String
 
     private external fun nativeLikedSongIds(uid: String): String
 
     private external fun nativeSongLike(id: String, uid: String, liked: Boolean): String
+
+    private external fun nativeOwnedPlaylists(uid: String, offset: Int): String
+
+    private external fun nativeAddSongToPlaylist(pid: String, songId: String): String
 }
 
 @Serializable
@@ -419,6 +462,8 @@ private data class BridgeResponse(
     val levels: List<QualityLevel> = emptyList(),
     val songs: List<Song> = emptyList(),
     val playlists: List<Playlist> = emptyList(),
+    val more: Boolean = false,
+    val nextOffset: Int = 0,
     val lists: List<Ranking> = emptyList(),
     val blocks: List<HomeBlock> = emptyList(),
     val recent: List<RecentSong> = emptyList(),

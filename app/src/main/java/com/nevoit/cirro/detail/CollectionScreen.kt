@@ -61,6 +61,7 @@ import com.nevoit.cirro.data.model.CollectionInfo
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.QueueSource
 import com.nevoit.cirro.data.model.Song
+import com.nevoit.cirro.data.model.hasPendingInserts
 import com.nevoit.cirro.home.Section
 import com.nevoit.cirro.home.dataOrNull
 import com.nevoit.cirro.palette.CoverPalette
@@ -70,8 +71,12 @@ import com.nevoit.cirro.playback.PlayingCoverIndicator
 import com.nevoit.cirro.playback.PlayingTrackNumber
 import com.nevoit.cirro.ui.BottomShade
 import com.nevoit.cirro.ui.ReflectionTransformation
+import com.nevoit.cirro.ui.SongMenuContent
+import com.nevoit.cirro.ui.SongMenuViewModel
 import com.nevoit.cirro.ui.TopShade
 import com.nevoit.material.core.animation.rememberPressAnimatable
+import com.nevoit.material.core.component.BottomPopupMenu
+import com.nevoit.material.core.component.BottomPopupMenuScope
 import com.nevoit.material.core.component.CircleIconButton
 import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
@@ -143,9 +148,9 @@ private enum class ItemPosition {
 }
 
 /**
- * 统一详情页（歌单 / 专辑 / 每日推荐）。
+ * 统一详情页（歌单 / 专辑 / 每日推荐 / 艺术家热门歌曲）。
  *
- * 界面不知道也不关心内容从哪来——[CollectionViewModel] 已经把三种来源折成同一份形状。
+ * 界面不知道也不关心内容从哪来——[CollectionViewModel] 已经把来源折成同一份形状。
  * 顶部那排圆钮浮在内容上：左返回、右更多和分享；底部 MiniPlayer 和导航栏常驻在
  * 导航宿主之外（见 Main），列表自己留够尾距。
  */
@@ -156,17 +161,24 @@ fun CollectionRoute(
     titleHint: String,
     coverHint: String,
     onBack: () -> Unit,
+    onOpenCollection: (CollectionKind, Long, String, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val viewModel: CollectionViewModel = koinViewModel {
         parametersOf(kind, id, titleHint)
     }
     val playback = koinInject<PlaybackConnection>()
+    val songMenu: SongMenuViewModel = koinViewModel()
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
 
     LaunchedEffect(viewModel) {
         viewModel.messages.collect { message ->
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        }
+    }
+    LaunchedEffect(songMenu) {
+        songMenu.messages.collect { message ->
             Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
         }
     }
@@ -189,6 +201,10 @@ fun CollectionRoute(
     val playingId by remember(playback) {
         playback.state.map { it.song?.id }.distinctUntilChanged()
     }.collectAsState(initial = playback.state.value.song?.id)
+    val queueActions by remember(playback) {
+        playback.queue.map { it.entries.isNotEmpty() to it.hasPendingInserts }
+            .distinctUntilChanged()
+    }.collectAsState(initial = false to false)
     // 这一页的出身：随歌一起交给队列，打卡时回传 sourceId（每日推荐没有服务端集合，QueueSource 会留空）
     val queueSource = QueueSource(kind, id.toString(), title = viewModel.displayTitle)
 
@@ -212,6 +228,49 @@ fun CollectionRoute(
         playingId = playingId,
         seed = seed,
         onPlay = { index -> if (songs.isNotEmpty()) playback.playSongs(songs, index, queueSource) },
+        songMenuContent = { song ->
+            SongMenuContent(
+                song = song,
+                canInsertQueue = queueActions.first,
+                hasInsertQueue = queueActions.second,
+                viewModel = songMenu,
+                onPlay = {
+                    playback.playSongs(
+                        songs,
+                        songs.indexOfFirst { it.id == song.id },
+                        queueSource
+                    )
+                },
+                onAddNext = { playback.addNext(song, queueSource) },
+                onAddToInsertQueue = { playback.addToInsertQueue(song, queueSource) },
+                onOpenAlbum = { metadata ->
+                    onOpenCollection(
+                        CollectionKind.ALBUM,
+                        metadata.albumId,
+                        metadata.album,
+                        metadata.cover
+                    )
+                },
+                onOpenArtist = { artistId, name ->
+                    onOpenCollection(
+                        CollectionKind.ARTIST,
+                        artistId,
+                        name,
+                        ""
+                    )
+                },
+                onShare = {
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(
+                            Intent.EXTRA_TEXT,
+                            "${song.name} - ${song.artistText}\nhttps://music.163.com/song?id=${song.id}"
+                        )
+                    }
+                    context.startActivity(Intent.createChooser(intent, "分享歌曲"))
+                },
+            )
+        },
         onShuffle = {
             // 随机播放 = 同一份队列，从随机的一个位置起步；顺序仍是接着往下听
             if (songs.isNotEmpty()) {
@@ -226,6 +285,7 @@ fun CollectionRoute(
                 CollectionKind.PLAYLIST -> "https://music.163.com/playlist?id=$id"
                 CollectionKind.ALBUM -> "https://music.163.com/album?id=$id"
                 CollectionKind.DAILY -> "https://music.163.com/"
+                CollectionKind.ARTIST -> "https://music.163.com/artist?id=$id"
             }
             val intent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"
@@ -246,6 +306,7 @@ private fun CollectionScreen(
     playingId: Long?,
     seed: CoverSeed?,
     onPlay: (Int) -> Unit,
+    songMenuContent: @Composable BottomPopupMenuScope.(Song) -> Unit,
     onShuffle: () -> Unit,
     onToggleSubscribed: () -> Unit,
     onRetry: () -> Unit,
@@ -405,6 +466,7 @@ private fun CollectionScreen(
                                 content = contentColor,
                                 contentVariant = contentVariantColor,
                                 onClick = { onPlay(index) },
+                                menuContent = { songMenuContent(song) },
                                 modifier = Modifier
                                     .animateItem(tween(200), Springs.crisp(), tween(200))
                                     .padding(horizontal = PagePadding),
@@ -675,7 +737,7 @@ private fun HeaderActions(
     }
 }
 
-/** 曲目一行：序号或封面 + 歌名/歌手 + 时长。整行就是播放入口。 */
+/** 曲目一行：序号或封面 + 歌名/歌手 + 更多操作。整行就是播放入口。 */
 @Composable
 private fun TrackRow(
     song: Song,
@@ -687,6 +749,7 @@ private fun TrackRow(
     content: Color,
     contentVariant: Color,
     onClick: () -> Unit,
+    menuContent: @Composable BottomPopupMenuScope.() -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val shape = when (position) {
@@ -703,7 +766,7 @@ private fun TrackRow(
             .clip(shape)
             .background(backgroundColor)
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp),
+            .padding(start = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (index == null) {
@@ -753,12 +816,24 @@ private fun TrackRow(
             }
         }
         HGap()
-        Icon(
-            painter = painterResource(R.drawable.ellipsis_vertical),
-            contentDescription = null,
-            modifier = Modifier.size(24.dp),
-            tint = contentVariant,
-        )
+        BottomPopupMenu(
+            menuContent = menuContent
+        ) { openMenu ->
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedRectangle(24.dp))
+                    .clickable(onClick = openMenu),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ellipsis_vertical),
+                    contentDescription = "更多",
+                    modifier = Modifier.size(24.dp),
+                    tint = contentVariant,
+                )
+            }
+        }
     }
 }
 
@@ -921,7 +996,7 @@ private fun metaLine(info: CollectionInfo?): String {
         }
 
         CollectionKind.PLAYLIST -> formatDate(info.updateTimeMs).orEmpty()
-        CollectionKind.DAILY -> ""
+        CollectionKind.DAILY, CollectionKind.ARTIST -> ""
     }
 }
 
@@ -966,6 +1041,7 @@ private fun footerText(info: CollectionInfo?, songCount: Int, totalMs: Long): St
         }
 
         CollectionKind.PLAYLIST -> countLine
+        CollectionKind.ARTIST -> countLine
         CollectionKind.DAILY -> ""
     }
 }

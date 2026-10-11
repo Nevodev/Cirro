@@ -180,6 +180,13 @@ fn flatten_song(node: &serde_json::Value, cover_fallback: Option<&str>) -> serde
         .map(|a| a.iter().filter_map(|x| x["name"].as_str()).collect())
         .unwrap_or_default();
 
+    let artist_ids: Vec<i64> = ["ar", "artists"]
+        .iter()
+        .find_map(|k| node.get(*k).and_then(|x| x.as_array()))
+        .map(|a| a.iter().filter(|x| x["name"].as_str().is_some())
+            .map(|x| pick_i64_loose(x, &["id"])).collect())
+        .unwrap_or_default();
+
     let album = ["al", "album"]
         .iter()
         .find_map(|k| node.get(*k).filter(|x| x.is_object()));
@@ -194,7 +201,9 @@ fn flatten_song(node: &serde_json::Value, cover_fallback: Option<&str>) -> serde
         "id": pick_i64(node, &["id"]),
         "name": pick_str(node, &["name"]),
         "artists": artists,
+        "artistIds": artist_ids,
         "album": album.and_then(|a| a["name"].as_str()).unwrap_or(""),
+        "albumId": album.map(|a| pick_i64_loose(a, &["id"])).unwrap_or(0),
         "cover": cover,
         "durationMs": pick_i64(node, &["dt", "duration"]),
         "fee": pick_i64(node, &["fee"]),
@@ -582,6 +591,114 @@ fn liked_playlist_id(body: &serde_json::Value, uid: i64) -> Option<i64> {
         .filter(|id| *id > 0)
 }
 
+fn playlist_request_success(body: &serde_json::Value) -> Result<(), String> {
+    let code = pick_i64_loose(body, &["code"]);
+    if code == 200 {
+        Ok(())
+    } else {
+        let message = pick_str(body, &["message", "msg"]);
+        Err(if message.is_empty() { format!("歌单请求失败（code={code}）") } else { message.to_string() })
+    }
+}
+
+fn owned_playlists(body: &serde_json::Value, uid: i64) -> Result<Vec<serde_json::Value>, String> {
+    playlist_request_success(body)?;
+    let playlists = body["playlist"].as_array().ok_or("歌单列表缺少 playlist")?;
+    Ok(playlists.iter().filter_map(|playlist| {
+        let id = pick_i64_loose(playlist, &["id"]);
+        let owner = pick_i64_loose(&playlist["creator"], &["userId"]);
+        // “我喜欢的音乐”由喜欢接口维护，避免添加曲目后红心缓存没有同步。
+        if id <= 0 || owner != uid || pick_i64_loose(playlist, &["specialType"]) == 5 {
+            return None;
+        }
+        Some(serde_json::json!({
+            "id": id,
+            "name": pick_str(playlist, &["name"]),
+            "cover": canon_pic(pick_str(playlist, &["coverImgUrl"])),
+            "trackCount": pick_i64_loose(playlist, &["trackCount"]),
+            "creator": pick_str(&playlist["creator"], &["nickname"]),
+        }))
+    }).collect())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeOwnedPlaylists<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    uid: JString<'local>,
+    offset: jint,
+) -> jstring {
+    let uid = jni_in(&mut env, &uid);
+    let query = Query::new().param("uid", &uid).param("limit", "100").param("offset", &offset.to_string());
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(client.user_playlist(&query)) {
+        Ok(response) => match owned_playlists(&response.body, uid.parse().unwrap_or(0)) {
+            Ok(playlists) => serde_json::json!({
+                "ok": true, "playlists": playlists,
+                "more": response.body["more"].as_bool().unwrap_or(false),
+                "nextOffset": offset as usize + response.body["playlist"].as_array().map_or(0, Vec::len),
+            }),
+            Err(message) => serde_json::json!({ "ok": false, "message": message }),
+        },
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeAddSongToPlaylist<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    pid: JString<'local>,
+    song_id: JString<'local>,
+) -> jstring {
+    let query = Query::new().param("pid", &jni_in(&mut env, &pid))
+        .param("tracks", &jni_in(&mut env, &song_id)).param("op", "add");
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(client.playlist_tracks(&query)) {
+        Ok(response) => match playlist_request_success(&response.body) {
+            Ok(()) => serde_json::json!({ "ok": true }),
+            Err(message) => serde_json::json!({ "ok": false, "message": message }),
+        },
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+#[cfg(test)]
+mod playlist_menu_tests {
+    use super::{owned_playlists, playlist_request_success};
+    use serde_json::json;
+
+    #[test]
+    fn only_owned_regular_playlists_are_writable_choices() {
+        let playlists = owned_playlists(&json!({"code": 200, "playlist": [
+            {"id": 17715824860i64, "name": "mine", "creator": {"userId": "42"}},
+            {"id": 2, "creator": {"userId": 99}},
+            {"id": 3, "specialType": 5, "creator": {"userId": 42}},
+            {"id": 4}, {"id": 0, "creator": {"userId": 42}}
+        ]}), 42).unwrap();
+        assert_eq!(playlists.len(), 1);
+        assert_eq!(playlists[0]["id"], 17715824860i64);
+        assert_eq!(playlists[0]["name"], "mine");
+    }
+
+    #[test]
+    fn empty_playlists_are_distinct_from_a_missing_list() {
+        assert!(owned_playlists(&json!({"code": 200, "playlist": []}), 42).unwrap().is_empty());
+        assert!(owned_playlists(&json!({"code": 200}), 42).is_err());
+    }
+
+    #[test]
+    fn a_rejected_write_cannot_be_reported_as_added() {
+        assert!(playlist_request_success(&json!({"code": "200"})).is_ok());
+        for code in [201, 302, 400, 502] {
+            assert_eq!(playlist_request_success(&json!({"code": code, "msg": "rejected"})), Err("rejected".into()));
+        }
+        assert!(playlist_request_success(&json!({})).is_err());
+    }
+}
+
 #[no_mangle]
 pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeLikedPlaylistId<'local>(
     mut env: JNIEnv<'local>,
@@ -901,6 +1018,77 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeAlbumDetail<'l
     jni_out(&mut env, value)
 }
 
+fn flatten_artist_detail(body: &serde_json::Value) -> Result<serde_json::Value, String> {
+    if pick_i64_loose(body, &["code"]) != 200 {
+        let message = pick_str(body, &["message", "msg"]);
+        return Err(if message.is_empty() { "加载艺术家失败".into() } else { message.into() });
+    }
+    let artist = &body["artist"];
+    let id = pick_i64_loose(artist, &["id"]);
+    if id <= 0 || !body["hotSongs"].is_array() {
+        return Err("艺术家详情缺少资料或热门歌曲".into());
+    }
+    let songs = flatten_song_array(&body["hotSongs"]);
+    Ok(serde_json::json!({
+        "ok": true, "id": id, "name": pick_str(artist, &["name"]),
+        "cover": canon_pic(pick_str(artist, &["picUrl", "img1v1Url"])),
+        "description": pick_str(artist, &["briefDesc"]),
+        "trackCount": songs.len(),
+        "subscribed": artist["followed"].as_bool().or_else(|| body["followed"].as_bool()).unwrap_or(false),
+        "songs": songs,
+    }))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeArtistDetail<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    id: JString<'local>,
+) -> jstring {
+    let id = jni_in(&mut env, &id);
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(client.artists(&Query::new().param("id", &id))) {
+        Ok(response) => match flatten_artist_detail(&response.body) {
+            Ok(value) => value,
+            Err(message) => serde_json::json!({ "ok": false, "message": message }),
+        },
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+#[cfg(test)]
+mod song_navigation_tests {
+    use super::{flatten_artist_detail, flatten_song};
+    use serde_json::json;
+
+    #[test]
+    fn navigation_ids_remain_aligned_with_artist_names_and_keep_64_bits() {
+        let song = flatten_song(&json!({"id": 1, "ar": [
+            {"id": "3402673449", "name": "first"}, {"id": 2}, {"name": "unknown"}
+        ], "al": {"id": 17715824860i64, "name": "album"}}), None);
+        assert_eq!(song["artists"], json!(["first", "unknown"]));
+        assert_eq!(song["artistIds"], json!([3402673449i64, 0]));
+        assert_eq!(song["albumId"], 17715824860i64);
+        let long_keys = flatten_song(&json!({"id": 1, "artists": [{"id": 3, "name": "name"}], "album": {"id": "4"}}), None);
+        assert_eq!(long_keys["artistIds"], json!([3]));
+        assert_eq!(long_keys["albumId"], 4);
+    }
+
+    #[test]
+    fn artist_page_requires_valid_metadata_and_a_song_list() {
+        let detail = flatten_artist_detail(&json!({"code": 200, "artist": {
+            "id": 42, "name": "artist", "picUrl": "https://p3.music.126.net/portrait", "followed": true
+        }, "hotSongs": [{"id": 5}]})).unwrap();
+        assert_eq!(detail["name"], "artist");
+        assert_eq!(detail["trackCount"], 1);
+        assert_eq!(detail["subscribed"], true);
+        assert_eq!(detail["songs"][0]["id"], 5);
+        assert!(flatten_artist_detail(&json!({"code": 200, "artist": {"id": 42}})).is_err());
+        assert!(flatten_artist_detail(&json!({"code": 302})).is_err());
+    }
+}
+
 fn song_like_success(body: &serde_json::Value) -> Result<(), String> {
     let code = body.get("code").and_then(|code| {
         code.as_i64().or_else(|| code.as_str().and_then(|code| code.parse().ok()))
@@ -1024,6 +1212,7 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeCollectionSub<
     let client = client_snapshot();
     let result = match kind.as_str() {
         "album" => RUNTIME.block_on(client.album_sub(&query)),
+        "artist" => RUNTIME.block_on(client.artist_sub(&query)),
         _ => RUNTIME.block_on(client.playlist_subscribe(&query)),
     };
     let value = match result {

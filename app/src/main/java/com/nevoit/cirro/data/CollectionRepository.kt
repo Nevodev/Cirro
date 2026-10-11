@@ -2,8 +2,10 @@ package com.nevoit.cirro.data
 
 import com.nevoit.cirro.data.model.CollectionInfo
 import com.nevoit.cirro.data.model.CollectionKind
+import com.nevoit.cirro.data.model.Playlist
 import com.nevoit.cirro.data.model.Song
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.format.TextStyle
@@ -31,6 +33,7 @@ class CollectionRepository(
 
     /** 专辑详情捎回来的歌，按专辑 id 分槽（专辑内容不变，缓存到换号为止）。 */
     private val albumSongs = ConcurrentHashMap<Long, List<Song>>()
+    private val artistSongs = ConcurrentHashMap<Long, List<Song>>()
 
     /** 详情头部信息。每日推荐的 id 恒为 0，缓存键天然只有一份。 */
     suspend fun info(kind: CollectionKind, id: Long): Result<CollectionInfo> =
@@ -42,6 +45,8 @@ class CollectionRepository(
                 CollectionKind.PLAYLIST -> NcmBridge.playlistDetail(id)
                 CollectionKind.ALBUM -> NcmBridge.albumDetail(id).map { it.info }
                 CollectionKind.DAILY -> dailyInfo()
+                CollectionKind.ARTIST -> NcmBridge.artistDetail(id)
+                    .onSuccess { artistSongs[id] = it.songs }.map { it.info }
             }
             result.onSuccess { infoCache[key] = it }
         }
@@ -57,6 +62,8 @@ class CollectionRepository(
                         ?: NcmBridge.albumDetail(id).onSuccess { albumSongs[id] = it.songs }
                             .map { it.songs }
                 CollectionKind.DAILY -> home.dailySongs()
+                CollectionKind.ARTIST -> artistSongs[id]?.let { Result.success(it) }
+                    ?: NcmBridge.artistDetail(id).onSuccess { artistSongs[id] = it.songs }.map { it.songs }
             }
         }
 
@@ -75,6 +82,22 @@ class CollectionRepository(
             infoCache[key]?.let { infoCache[key] = it.copy(subscribed = subscribe) }
         }
     }
+
+    suspend fun ownedPlaylists(userId: Long): Result<List<Playlist>> =
+        withContext(Dispatchers.IO) { NcmBridge.ownedPlaylists(userId) }
+
+    suspend fun songMetadata(songId: Long): Result<Song> = withContext(Dispatchers.IO) {
+        NcmBridge.songDetail(listOf(songId)).mapCatching { songs ->
+            songs.firstOrNull { it.id == songId } ?: error("未找到歌曲资料")
+        }
+    }
+
+    suspend fun addSongToPlaylist(songId: Long, playlistId: Long): Result<Unit> =
+        withContext(NonCancellable + Dispatchers.IO) {
+            NcmBridge.addSongToPlaylist(songId, playlistId).onSuccess {
+                infoCache.remove("${CollectionKind.PLAYLIST}:$playlistId")
+            }
+        }
 
     /**
      * 每日推荐的头部信息：现拼的——标题写死，作者位放日期，封面借首曲专辑图。
