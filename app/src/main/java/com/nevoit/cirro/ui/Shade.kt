@@ -2,15 +2,15 @@ package com.nevoit.cirro.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import com.nevoit.material.core.modifier.smoothGradient
 
@@ -28,18 +28,42 @@ fun BoxScope.BottomShade(
     color: Color,
     modifier: Modifier = Modifier,
 ) {
-    val inset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-
     Box(
         modifier = modifier
             .align(Alignment.BottomCenter)
             .fillMaxWidth()
-            .height(BottomShadeContentHeight + inset)
             .smoothGradient(
                 color = color,
                 start = 0f,
                 end = 0.7f,
                 intensity = 0.8f,
             )
+            .navigationBarsPadding()
+            .height(BottomShadeContentHeight)
+
+    )
+}
+
+@Composable
+fun BoxScope.TopShade(
+    color: Color,
+    alpha: () -> Float = { 1f },
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = Modifier
+            .graphicsLayer {
+                this.alpha = alpha()
+            }
+            .align(Alignment.TopCenter)
+            .fillMaxWidth()
+            .smoothGradient(
+                color = color,
+                start = 1f,
+                end = 0.5f,
+                intensity = 0.8f,
+            )
+            .statusBarsPadding()
+            .then(modifier)
     )
 }

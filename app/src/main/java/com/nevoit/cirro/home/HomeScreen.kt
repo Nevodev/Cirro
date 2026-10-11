@@ -297,7 +297,12 @@ private fun EntryCard(
             .clip(RoundedRectangle(20.dp))
             .background(MaterialTheme.colors.scrimNormal)
             .clickable {
-                if (failed) onRetry() else onOpen(entry.kind, entry.id, entry.title, entry.detail.dataOrNull?.covers?.firstOrNull().orEmpty())
+                if (failed) onRetry() else onOpen(
+                    entry.kind,
+                    entry.id,
+                    entry.title,
+                    entry.detail.dataOrNull?.covers?.firstOrNull().orEmpty()
+                )
             },
     ) {
         AsyncImage(
@@ -372,7 +377,14 @@ private fun PlaylistShelf(
                 PlaylistCard(
                     card = card,
                     showBadge = showBadge,
-                    onClick = { onOpen(kind, card.id, card.title, card.covers.firstOrNull().orEmpty()) },
+                    onClick = {
+                        onOpen(
+                            kind,
+                            card.id,
+                            card.title,
+                            card.covers.firstOrNull().orEmpty()
+                        )
+                    },
                 )
             }
         }
@@ -482,6 +494,7 @@ private fun LazyItemScope.PlaylistCard(
                 contentDescription = null,
                 onError = { covers.advance() },
                 contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
             )
             if (showBadge) {
                 Image(

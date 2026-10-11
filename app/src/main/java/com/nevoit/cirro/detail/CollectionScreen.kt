@@ -3,6 +3,7 @@ package com.nevoit.cirro.detail
 import android.content.Intent
 import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.OverscrollEffect
 import androidx.compose.foundation.background
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberOverscrollEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -68,6 +70,7 @@ import com.nevoit.cirro.playback.PlayingCoverIndicator
 import com.nevoit.cirro.playback.PlayingTrackNumber
 import com.nevoit.cirro.ui.BottomShade
 import com.nevoit.cirro.ui.ReflectionTransformation
+import com.nevoit.cirro.ui.TopShade
 import com.nevoit.material.core.animation.rememberPressAnimatable
 import com.nevoit.material.core.component.CircleIconButton
 import com.nevoit.material.core.component.HGap
@@ -77,6 +80,7 @@ import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
 import com.nevoit.material.core.interaction.overscroll.OffsetOverscrollEffect
 import com.nevoit.material.core.layout.VerticalStack
+import com.nevoit.material.core.layout.isScrolledPast
 import com.nevoit.material.core.modifier.smoothGradient
 import com.nevoit.material.core.utility.NavigationBarSpacer
 import com.nevoit.material.navigation.LocalPageTransitionState
@@ -123,7 +127,7 @@ private const val ItemBgToneDark = 40.0
 
 private const val ItemBgToneLight = 90.0
 
-private const val CircleToneDark = 30.0
+private const val CircleToneDark = 40.0
 
 private const val CircleToneLight = 90.0
 
@@ -307,12 +311,25 @@ private fun CollectionScreen(
     val description = state.info.dataOrNull?.description.orEmpty().trim()
     val overscrollEffect = rememberOverscrollEffect()
 
+    val screenWidth = LocalWindowInfo.current.containerDpSize.width
+    val listState = rememberLazyListState()
+    val showTopShade by listState.isScrolledPast(screenWidth * 0.75f)
+    val topShapeAlpha by animateFloatAsState(
+        targetValue = if (showTopShade) 1f else 0f,
+        animationSpec = tween(durationMillis = 200),
+        label = "topShadeAlpha",
+    )
+
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(backgroundColor)
     ) {
-        VerticalStack(modifier = Modifier.fillMaxSize(), overscrollEffect = overscrollEffect) {
+        VerticalStack(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            overscrollEffect = overscrollEffect
+        ) {
             item(key = "header") {
                 val info = state.info.dataOrNull
                 when {
@@ -428,6 +445,10 @@ private fun CollectionScreen(
             }
         }
 
+        TopShade(
+            color = backgroundColor,
+            modifier = Modifier.height(72.dp + 48.dp),
+            alpha = { topShapeAlpha })
         // 底部 shade 跟页面走：详情页用它自己的封面底色，MiniPlayer/底栏常驻层是透明的
         BottomShade(color = backgroundColor)
 
@@ -481,7 +502,9 @@ private fun HeaderBlock(
                 modifier = Modifier
                     .graphicsLayer {
                         val overscrollOffset =
-                            (overscrollEffect as? OffsetOverscrollEffect)?.visualOffset?.y?.coerceAtLeast(0f)
+                            (overscrollEffect as? OffsetOverscrollEffect)?.visualOffset?.y?.coerceAtLeast(
+                                0f
+                            )
                                 ?: 0f
                         val scale =
                             (screenWidthPx + overscrollOffset + risePx) / (screenWidthPx + risePx)
