@@ -28,7 +28,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableIntState
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -117,62 +116,97 @@ private val PlaylistCardCorner = 12.dp
 typealias OpenCollection = (kind: CollectionKind, id: Long, titleHint: String, coverHint: String) -> Unit
 
 @Composable
-fun HomeRoute(
+fun BoxScope.HomeRoute(
     session: Session,
     onOpenCollection: OpenCollection = { _, _, _, _ -> },
     modifier: Modifier = Modifier,
 ) {
-    when (session) {
-        is Session.LoggedIn -> LoggedInHome(onOpenCollection, modifier)
-        Session.LoggedOut -> LoggedOutHome(modifier)
-        Session.Unknown, Session.Offline -> PlainHome(modifier)
-    }
-}
-
-@Composable
-private fun LoggedInHome(
-    onOpenCollection: OpenCollection,
-    modifier: Modifier = Modifier,
-) {
-    val viewModel: HomeViewModel = koinViewModel()
+    // 初始化会立即请求首页数据并启动轮询，登录前不创建 ViewModel。
+    val viewModel = if (session is Session.LoggedIn) koinViewModel<HomeViewModel>() else null
     val playback = koinInject<PlaybackConnection>()
-    val state by viewModel.state.collectAsState()
+    val state = viewModel?.state?.collectAsState()?.value
 
     // 列表期把封面的主色预取好：用户点进详情页时背景色已经在缓存里，第一帧就有
     val palette = koinInject<CoverPalette>()
     val coverUrls = remember(state) {
         buildList {
-            state.entries.forEach { entry -> addAll(entry.detail.dataOrNull?.covers.orEmpty()) }
-            state.shelf.dataOrNull?.forEach { card -> addAll(card.covers) }
-            state.recent.dataOrNull?.forEach { card -> addAll(card.covers) }
+            state?.entries?.forEach { entry -> addAll(entry.detail.dataOrNull?.covers.orEmpty()) }
+            state?.shelf?.dataOrNull?.forEach { card -> addAll(card.covers) }
+            state?.recent?.dataOrNull?.forEach { card -> addAll(card.covers) }
         }.distinct()
     }
     LaunchedEffect(coverUrls) { coverUrls.forEach(palette::prefetch) }
+    val onRetry: () -> Unit = { viewModel?.refresh() }
 
-    HomeContent(
-        state = state,
-        onRetry = viewModel::refresh,
-        onPlay = { songs, index ->
-            val source = state.style.dataOrNull?.let { QueueSource(title = it.title) }
-            playback.playSongs(songs, index, source)
-        },
-        onOpenCollection = onOpenCollection,
-        modifier = modifier,
-    )
-}
-
-@Composable
-private fun LoggedOutHome(modifier: Modifier = Modifier) {
     VerticalStack(modifier = modifier.fillMaxSize()) {
-        item { HomeTitle() }
-        item { LoginCard(modifier = Modifier.padding(horizontal = 12.dp)) }
-    }
-}
+        item(key = "home_title") { HomeTitle() }
 
-@Composable
-private fun PlainHome(modifier: Modifier = Modifier) {
-    VerticalStack(modifier = modifier.fillMaxSize()) {
-        item { HomeTitle() }
+        if (session == Session.LoggedOut) {
+            item(key = "home_login") { LoginCard(modifier = Modifier.padding(horizontal = 12.dp)) }
+        }
+
+        if (state != null) {
+            item(key = "home_entries") {
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = ShelfPadding),
+                    horizontalArrangement = Arrangement.spacedBy(ShelfPadding),
+                    flingBehavior = rememberFlingBehavior(),
+                ) {
+                    items(state.entries) { entry ->
+                        EntryCard(entry = entry, onRetry = onRetry, onOpen = onOpenCollection)
+                    }
+                }
+            }
+
+            if (state.showRecent) {
+                item(key = "home_recent") {
+                    VGap(36.dp)
+                    SectionTitle(text = RecentShelfTitle)
+                    VGap(16.dp)
+                    PlaylistShelf(
+                        shelf = state.recent,
+                        kind = CollectionKind.ALBUM,
+                        onRetry = onRetry,
+                        onOpen = onOpenCollection,
+                        revealNewItems = true,
+                    )
+                }
+            }
+
+            item(key = "home_radar") {
+                VGap(36.dp)
+                SectionTitle(text = RadarShelfTitle)
+                VGap(16.dp)
+                PlaylistShelf(
+                    shelf = state.shelf,
+                    kind = CollectionKind.PLAYLIST,
+                    onRetry = onRetry,
+                    onOpen = onOpenCollection,
+                    showBadge = true
+                )
+            }
+
+            item(key = "home_style") {
+                VGap(36.dp)
+                SectionTitle(text = state.style.dataOrNull?.title ?: "歌曲推荐")
+                VGap(16.dp)
+                StyleShelf(
+                    picks = state.style,
+                    onPlay = { songs, index ->
+                        val source = state.style.dataOrNull?.let { QueueSource(title = it.title) }
+                        playback.playSongs(songs, index, source)
+                    },
+                    onRetry = onRetry
+                )
+            }
+
+            item(key = "home_footer") {
+                VGap(36.dp)
+                VGap(144.dp)
+                NavigationBarSpacer()
+            }
+        }
     }
 }
 
@@ -182,77 +216,6 @@ private fun HomeTitle() {
         title = "主页",
         modifier = Modifier.padding(horizontal = 12.dp),
     )
-}
-
-@Composable
-private fun HomeContent(
-    state: HomeUiState,
-    onRetry: () -> Unit,
-    onPlay: (List<Song>, Int) -> Unit,
-    onOpenCollection: OpenCollection,
-    modifier: Modifier = Modifier,
-) {
-    VerticalStack(modifier = modifier.fillMaxSize()) {
-        item { HomeTitle() }
-
-        item {
-            LazyRow(
-                modifier = Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(horizontal = ShelfPadding),
-                horizontalArrangement = Arrangement.spacedBy(ShelfPadding),
-                flingBehavior = rememberFlingBehavior(),
-            ) {
-                items(state.entries) { entry ->
-                    EntryCard(entry = entry, onRetry = onRetry, onOpen = onOpenCollection)
-                }
-            }
-        }
-
-        if (state.showRecent) {
-            item {
-                VGap(36.dp)
-                SectionTitle(text = RecentShelfTitle)
-                VGap(16.dp)
-                PlaylistShelf(
-                    shelf = state.recent,
-                    kind = CollectionKind.ALBUM,
-                    onRetry = onRetry,
-                    onOpen = onOpenCollection,
-                    revealNewItems = true,
-                )
-            }
-        }
-
-        item {
-            VGap(36.dp)
-            SectionTitle(text = RadarShelfTitle)
-            VGap(16.dp)
-            PlaylistShelf(
-                shelf = state.shelf,
-                kind = CollectionKind.PLAYLIST,
-                onRetry = onRetry,
-                onOpen = onOpenCollection,
-                showBadge = true
-            )
-        }
-
-        item {
-            VGap(36.dp)
-            SectionTitle(text = state.style.dataOrNull?.title ?: "歌曲推荐")
-            VGap(16.dp)
-            StyleShelf(
-                picks = state.style,
-                onPlay = onPlay,
-                onRetry = onRetry
-            )
-        }
-
-        item {
-            VGap(36.dp)
-            VGap(144.dp)
-            NavigationBarSpacer()
-        }
-    }
 }
 
 @Composable
