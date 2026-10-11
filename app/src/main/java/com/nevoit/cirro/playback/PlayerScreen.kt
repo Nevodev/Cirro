@@ -722,11 +722,11 @@ private fun PlayerOverlay(
         coroutineScope {
             if (!coldQueueToLyrics) {
                 launch {
-                    delay((-enterOffset).coerceAtLeast(0L))
+                    delay((-enterOffset).coerceAtLeast(0L).milliseconds)
                     if (target == PlayerPanel.QUEUE) exitLyrics() else exitQueue()
                 }
             }
-            delay(enterOffset.coerceAtLeast(0L))
+            delay(enterOffset.coerceAtLeast(0L).milliseconds)
             collapsed = true
             if (target == PlayerPanel.QUEUE) {
                 animatePlayerPanel(queueAlpha, queueScale, visible = true)
@@ -847,10 +847,6 @@ private fun PlayerOverlay(
                             modifier = Modifier
                                 .padding(start = 24.dp, top = 24.dp, end = 24.dp, bottom = 12.dp)
                                 .fillMaxSize(),
-                            buttonBackground = buttonColor,
-                            buttonIcon = buttonIconColor,
-                            activeButtonBackground = playButtonColor,
-                            activeButtonIcon = playButtonIconColor,
                             panelAlpha = queueAlphaProducer,
                             panelScale = queueScaleProducer,
                             onContentReady = onQueueReady,

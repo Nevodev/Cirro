@@ -36,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -66,6 +67,8 @@ import com.nevoit.material.navigation.CrossfadeNavContainer
 import com.nevoit.material.navigation.NavigationHost
 import com.nevoit.material.navigation.NavigationHostHandle
 import com.nevoit.material.navigation.rememberNavigator
+import com.nevoit.material.navigation.shape.clipShape
+import com.nevoit.material.navigation.shape.deviceCornerShape
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.local.ProvideContentColor
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -239,12 +242,27 @@ fun BoxScope.Main() {
         label = "miniPrimary",
     )
 
+    val navigationPageShape = deviceCornerShape()
     RequestNotificationPermissionOnce()
 
     Box(modifier = Modifier.fillMaxSize()) {
         NavigationHost(
             navigator = navigator,
             onHostReady = { hostHandle = it },
+            transitionModifier = { page, isTransitioning ->
+                page
+                    .graphicsLayer {
+                        compositingStrategy = if (isTransitioning) {
+                            CompositingStrategy.Offscreen
+                        } else {
+                            CompositingStrategy.Auto
+                        }
+                    }
+                    .clipShape(
+                        shape = navigationPageShape,
+                        enabled = isTransitioning,
+                    )
+            }
         ) {
             when (val destination = destination) {
                 MainDestination.Tabs -> Box(modifier = Modifier.fillMaxSize()) {

@@ -39,7 +39,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
@@ -136,10 +135,6 @@ internal data class QueueFadeViewport(
 @Composable
 internal fun QueuePanel(
     connection: PlaybackConnection,
-    buttonBackground: ColorProducer,
-    buttonIcon: ColorProducer,
-    activeButtonBackground: ColorProducer,
-    activeButtonIcon: ColorProducer,
     modifier: Modifier = Modifier,
     panelAlpha: () -> Float = { 1f },
     panelScale: () -> Float = { 1f },
@@ -150,7 +145,9 @@ internal fun QueuePanel(
     val infiniteState by connection.infiniteState.collectAsState()
     val context = LocalContext.current
     LaunchedEffect(connection, context) {
-        connection.infiniteMessages.collect { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+        connection.infiniteMessages.collect {
+            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+        }
     }
     val entries = queue.entries
     val continuation = remember(entries, queue.currentIndex) { queue.entriesFromCurrent }
@@ -233,47 +230,33 @@ internal fun QueuePanel(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(ButtonHeight),
+                .height(ButtonHeight)
+                .graphicsLayer {
+                    blendMode = BlendMode.Plus
+                    alpha = panelAlpha().coerceIn(0f, 1f)
+                },
             horizontalArrangement = Arrangement.spacedBy(ButtonGap),
         ) {
             PanelButton(
                 iconRes = R.drawable.shuffle,
                 label = "随机播放",
                 active = shuffle,
-                background = buttonBackground,
-                tint = buttonIcon,
-                activeBackground = activeButtonBackground,
-                activeTint = activeButtonIcon,
                 onClick = onToggleShuffle,
-                modifier = Modifier
-                    .weight(1f)
-                    .graphicsLayer { alpha = panelAlpha().coerceIn(0f, 1f) },
+                modifier = Modifier.weight(1f),
             )
             PanelButton(
                 iconRes = mode.buttonIconRes(),
                 label = mode.buttonLabel(),
                 active = mode != PlayMode.SEQUENTIAL,
-                background = buttonBackground,
-                tint = buttonIcon,
-                activeBackground = activeButtonBackground,
-                activeTint = activeButtonIcon,
                 onClick = onCycleLoop,
-                modifier = Modifier
-                    .weight(1f)
-                    .graphicsLayer { alpha = panelAlpha().coerceIn(0f, 1f) },
+                modifier = Modifier.weight(1f),
             )
             PanelButton(
                 iconRes = R.drawable.infinity,
                 label = "无限播放",
                 active = queue.infinite,
-                background = buttonBackground,
-                tint = buttonIcon,
-                activeBackground = activeButtonBackground,
-                activeTint = activeButtonIcon,
                 onClick = onInfinite,
-                modifier = Modifier
-                    .weight(1f)
-                    .graphicsLayer { alpha = panelAlpha().coerceIn(0f, 1f) },
+                modifier = Modifier.weight(1f),
             )
         }
         VGap()
@@ -839,21 +822,11 @@ private fun LazyListState.isNearEdge(
     return offset < viewport.top + reach || offset + info.size > viewport.bottom - reach
 }
 
-/**
- * 按钮排里的一颗按钮。
- *
- * [active] 只决定取哪一对颜色——关闭态是上下一首按钮那套（底 + 图标），打开态是播放键那套。
- * 两侧都是 producer，`if` 只是挑引用，值仍在绘制段/叶子节点里读。
- */
 @Composable
 private fun PanelButton(
     iconRes: Int,
     label: String,
     active: Boolean,
-    background: ColorProducer,
-    tint: ColorProducer,
-    activeBackground: ColorProducer,
-    activeTint: ColorProducer,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -861,13 +834,13 @@ private fun PanelButton(
         modifier = modifier
             .fillMaxHeight()
             .clip(Capsule())
-            .drawBackground(if (active) activeBackground else background)
+            .drawBackground(color = { Color.White.copy(alpha = if (active) 0.6f else 0.2f) })
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
             painter = painterResource(iconRes),
-            tint = if (active) activeTint else tint,
+            tint = if (active) Color.Black else Color.White,
             contentDescription = label,
             modifier = Modifier.size(ButtonIconSize),
         )
@@ -916,7 +889,7 @@ private fun queueCoverRequest(url: String): Any? {
 /**
  * 循环按钮的图标：**顺序和列表循环共用 `repeat`**（就是循环关掉的样子），单曲循环才换 `repeat_one`。
  *
- * 两态共用一个图标是有意的——关闭态用的是上下一首那套暗色，打开态换成播放键那套亮色，
+ * 两态共用一个图标是有意的——关闭态是白色图标，打开态在 Plus 按钮组中呈现镂空，
  * 「关没关」靠配色说，不靠图标说。
  */
 private fun PlayMode.buttonIconRes(): Int = when (this) {

@@ -188,8 +188,11 @@ fun CollectionRoute(
     // 这一页的出身：随歌一起交给队列，打卡时回传 sourceId（每日推荐没有服务端集合，QueueSource 会留空）
     val queueSource = QueueSource(kind, id.toString(), title = viewModel.displayTitle)
 
+    var coverHintFailed by remember(coverHint) { mutableStateOf(false) }
+    val coverUrl = coverHint.takeUnless { coverHintFailed }.orEmpty()
+        .ifEmpty { state.info.dataOrNull?.cover.orEmpty() }
     val palette = koinInject<CoverPalette>()
-    val paletteKey = coverHint.ifEmpty { state.info.dataOrNull?.cover.orEmpty() }
+    val paletteKey = coverUrl
     var seed by remember(paletteKey) { mutableStateOf(palette.cached(paletteKey)) }
     LaunchedEffect(paletteKey) {
         if (paletteKey.isEmpty()) return@LaunchedEffect
@@ -200,6 +203,8 @@ fun CollectionRoute(
     CollectionScreen(
         state = state,
         displayTitle = viewModel.displayTitle,
+        coverUrl = coverUrl,
+        onCoverError = { coverHintFailed = true },
         playingId = playingId,
         seed = seed,
         onPlay = { index -> if (songs.isNotEmpty()) playback.playSongs(songs, index, queueSource) },
@@ -232,6 +237,8 @@ fun CollectionRoute(
 private fun CollectionScreen(
     state: CollectionViewModel.UiState,
     displayTitle: String,
+    coverUrl: String,
+    onCoverError: () -> Unit,
     playingId: Long?,
     seed: CoverSeed?,
     onPlay: (Int) -> Unit,
@@ -317,6 +324,8 @@ private fun CollectionScreen(
                     else -> HeaderBlock(
                         info = info,
                         displayTitle = displayTitle,
+                        coverUrl = coverUrl,
+                        onCoverError = onCoverError,
                         backgroundColor = backgroundColor,
                         buttonColor = buttonColor,
                         buttonIconColor = buttonIconColor,
@@ -443,6 +452,8 @@ private fun CollectionScreen(
 private fun HeaderBlock(
     info: CollectionInfo?,
     displayTitle: String,
+    coverUrl: String,
+    onCoverError: () -> Unit,
     backgroundColor: Color,
     buttonColor: Color,
     buttonIconColor: Color,
@@ -461,11 +472,11 @@ private fun HeaderBlock(
             .fillMaxWidth()
             .height(screenWidth + HeaderRise)
     ) {
-        val coverUrl = info?.cover.orEmpty()
         if (coverUrl.isNotEmpty()) {
             AsyncImage(
                 model = headerCoverModel(coverUrl, screenWidth.value.toInt()),
                 contentDescription = null,
+                onError = { onCoverError() },
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .graphicsLayer {

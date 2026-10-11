@@ -22,11 +22,11 @@ class CornerRadii(
 
 @Composable
 fun deviceCornerShape(
-    padding: Dp,
-    topLeft: Boolean,
-    topRight: Boolean,
-    bottomRight: Boolean,
-    bottomLeft: Boolean,
+    padding: Dp = 0.dp,
+    topLeft: Boolean = true,
+    topRight: Boolean = true,
+    bottomRight: Boolean = true,
+    bottomLeft: Boolean = true,
 ): Shape {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
         return RectangleShape
