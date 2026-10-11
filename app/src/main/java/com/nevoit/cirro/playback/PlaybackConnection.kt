@@ -351,6 +351,64 @@ class PlaybackConnection(
             true
         }
 
+    fun playQueueEntry(uid: Long) {
+        scope.launch(Dispatchers.Main.immediate) {
+            val controller = controller ?: return@launch
+            val queue = liveQueue() ?: return@launch
+            if (controller.mediaItemCount != queue.entries.size) return@launch
+            val target = queue.entries.indexOfFirst { it.uid == uid }
+            if (target < 0 || controller.getMediaItemAt(target).queueEntryUid != uid) return@launch
+
+            // 只跳游标，跳过的条目仍留在完整队列里；历史由实际出声的播放事件记录。
+            playAt(controller, target, restartCurrent = false)
+        }
+    }
+
+    fun playHistoryEntry(entry: QueueEntry) {
+        scope.launch(Dispatchers.Main.immediate) {
+            val controller = controller ?: return@launch
+            val queue = liveQueue()
+            if (queue == null) {
+                startQueue(
+                    controller,
+                    playQueueOf(
+                        listOf(entry.song), 0, entry.source,
+                        mode = currentMode(), shuffle = currentShuffle(),
+                    ),
+                )
+                return@launch
+            }
+            if (controller.mediaItemCount != queue.entries.size) return@launch
+            val existing = queue.entries.indexOfFirst { it.uid == entry.uid }
+            val target = if (existing >= 0) {
+                if (controller.getMediaItemAt(existing).queueEntryUid != entry.uid) return@launch
+                existing
+            } else {
+                // 换过队列的历史歌曲已没有原条目，插入新条目才能保留当前队列及其来源。
+                val at = queue.insertNextIndex
+                val inserted = queue.withInsert(entry.song, entry.source, at)
+                controller.addMediaItem(at, entry.song.toMediaItem(inserted.entries[at].uid))
+                queueStore.set(inserted)
+                at
+            }
+            playAt(controller, target, restartCurrent = true)
+        }
+    }
+
+    private fun playAt(controller: MediaController, target: Int, restartCurrent: Boolean) {
+        retryJob?.cancel()
+        retryJob = null
+        retryCount = 0
+        _state.value = _state.value.copy(error = null)
+        if (restartCurrent || target != controller.currentMediaItemIndex ||
+            controller.playbackState == Player.STATE_ENDED
+        ) {
+            controller.seekTo(target, 0L)
+        }
+        if (controller.playbackState == Player.STATE_IDLE) controller.prepare()
+        controller.play()
+    }
+
     /**
      * 手动「下一首」。**不受单曲循环约束**——目标下标自己算，不走 `seekToNextMediaItem()`。
      */

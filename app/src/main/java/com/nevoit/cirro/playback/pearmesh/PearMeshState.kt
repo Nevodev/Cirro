@@ -199,7 +199,7 @@ class PearMeshState(
      * Supplies four power lanes. The original visual uses lanes 0..2 to scale the three
      * rotating artwork copies and leaves lane 3 unused.
      */
-    fun setAudioPower(power: FloatArray) {
+    fun setAudioPower(power: FloatArray, generation: Long = 0L) {
         require(power.size >= 4) { "Four audio power values are required" }
         val previous = audioFrame.get()
         val current = FloatArray(4) { power[it].coerceIn(0f, 1f) }
@@ -208,8 +208,9 @@ class PearMeshState(
             AudioPowerFrame(
                 previousPower = previous.currentPower,
                 currentPower = current,
-                previousUpdatedAtNanos = previous.currentUpdatedAtNanos,
+                previousUpdatedAtNanos = if (previous.generation == generation) previous.currentUpdatedAtNanos else 0L,
                 currentUpdatedAtNanos = updatedAt,
+                generation = generation,
             ),
         )
         val updateCount = audioUpdateCount.incrementAndGet()
@@ -269,6 +270,7 @@ data class AudioPowerFrame(
     val currentPower: FloatArray = FloatArray(4),
     val previousUpdatedAtNanos: Long = 0L,
     val currentUpdatedAtNanos: Long = 0L,
+    val generation: Long = 0L,
 )
 
 data class RendererState(

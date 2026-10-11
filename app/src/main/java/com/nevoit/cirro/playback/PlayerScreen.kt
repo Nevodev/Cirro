@@ -472,9 +472,9 @@ private fun PlayerOverlay(
             audioAnalysis.setListener(null)
             meshBackdrop.setAudioVisualizationEnabled(false)
         } else {
-            audioAnalysis.setListener { power ->
+            audioAnalysis.setListener { power, generation ->
+                meshBackdrop.setAudioPower(floatArrayOf(power, power, power, power), generation)
                 meshBackdrop.setAudioVisualizationEnabled(true)
-                meshBackdrop.setAudioPower(floatArrayOf(power, power, power, power))
             }
         }
         onDispose {

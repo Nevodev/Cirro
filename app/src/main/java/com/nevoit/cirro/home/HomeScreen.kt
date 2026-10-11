@@ -61,6 +61,8 @@ import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.login.LoginActivity
 import com.nevoit.cirro.palette.CoverPalette
 import com.nevoit.cirro.playback.PlaybackConnection
+import com.nevoit.cirro.playback.PlayingCoverIndicator
+import com.nevoit.cirro.playback.rememberIsCurrentSong
 import com.nevoit.cirro.ui.ReflectionTransformation
 import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
@@ -561,15 +563,20 @@ private fun SongRow(
             .clickable(onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        AsyncImage(
-            model = listCoverModel(song.cover),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
+        Box(
             modifier = Modifier
                 .aspectRatio(1f)
                 .fillMaxHeight()
                 .clip(RoundedRectangle(8.dp)),
-        )
+        ) {
+            AsyncImage(
+                model = listCoverModel(song.cover),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.matchParentSize(),
+            )
+            PlayingCoverIndicator(rememberIsCurrentSong(song.id), Modifier.matchParentSize())
+        }
         HGap(12.dp)
         Column(modifier = Modifier.weight(1f)) {
             Text(

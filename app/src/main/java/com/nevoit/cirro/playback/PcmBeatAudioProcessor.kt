@@ -58,6 +58,7 @@ class PcmBeatAudioProcessor(
         channelIndex = 0
         audioTimestampNanos = 0L
         analyzer?.reset()
+        output.resetSpectrum()
     }
 
     override fun onReset() {
@@ -66,6 +67,7 @@ class PcmBeatAudioProcessor(
         sampleCount = 0
         channelIndex = 0
         audioTimestampNanos = 0L
+        output.resetSpectrum()
     }
 
     private fun analyze(buffer: ByteBuffer) {
@@ -113,6 +115,7 @@ class PcmBeatAudioProcessor(
         output.publish(
             current.processFft(spectrum, sampleRate.toFloat(), now).coerceIn(0f, 1f),
             now,
+            spectrumFromFft(real, imaginary, sampleRate),
         )
         windowCount++
         val gapMs = if (lastWindowWallNanos == 0L) 0L else

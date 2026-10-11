@@ -64,6 +64,8 @@ import com.nevoit.cirro.home.dataOrNull
 import com.nevoit.cirro.palette.CoverPalette
 import com.nevoit.cirro.palette.CoverSeed
 import com.nevoit.cirro.playback.PlaybackConnection
+import com.nevoit.cirro.playback.PlayingCoverIndicator
+import com.nevoit.cirro.playback.PlayingTrackNumber
 import com.nevoit.cirro.ui.BottomShade
 import com.nevoit.cirro.ui.ReflectionTransformation
 import com.nevoit.material.core.animation.rememberPressAnimatable
@@ -671,25 +673,27 @@ private fun TrackRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (index == null) {
-            AsyncImage(
-                model = coverRequest(song.cover),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
+            Box(
                 modifier = Modifier
                     .size(40.dp)
                     .clip(RoundedRectangle(TrackCorner)),
-            )
-        } else {
-            Box(
-                modifier = Modifier.width(32.dp),
-                contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = index.toString(),
-                    style = MaterialTheme.type.body.copy(fontFeatureSettings = "tnum"),
-                    color = contentVariant,
+                AsyncImage(
+                    model = coverRequest(song.cover),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.matchParentSize(),
                 )
+                PlayingCoverIndicator(isPlaying, Modifier.matchParentSize())
             }
+        } else {
+            PlayingTrackNumber(
+                index = index,
+                isCurrent = isPlaying,
+                color = contentVariant,
+                style = MaterialTheme.type.body.copy(fontFeatureSettings = "tnum"),
+                modifier = Modifier.width(32.dp),
+            )
         }
         HGap()
         Column(

@@ -9,7 +9,6 @@ import android.opengl.GLUtils
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.graphics.createBitmap
-import com.nevoit.cirro.playback.pearmesh.AudioPowerFrame
 import com.nevoit.cirro.playback.pearmesh.MoruStyle
 import com.nevoit.cirro.playback.pearmesh.PearMeshState
 import com.nevoit.cirro.playback.pearmesh.RendererState
@@ -106,10 +105,7 @@ internal class PearMeshGlRenderer(
     private var pendingArtworkId = 0L
     private var artworkTransitionStart = Double.NEGATIVE_INFINITY
     private var artworkAspect = initialArtwork?.bitmap?.let { it.width.toFloat() / it.height } ?: 1f
-    private var lastImageScales = floatArrayOf(1f, 1f, 1f)
-    private var resumeImageScales = lastImageScales.copyOf()
-    private var resumeVisualStartNanos = 0L
-    private var wasPlaybackPlaying = true
+    private val audioPulseEnvelope = AudioPulseEnvelope()
     private var lastAudioRenderLogMs = 0L
 
 
@@ -132,28 +128,8 @@ internal class PearMeshGlRenderer(
         updateArtwork(state, artworkTime)
         val transitionMix = artworkTransitionMix(artworkTime)
         val currentLyricsMix = state.behindLyricsProgress
-        if (state.isPlaybackPlaying && !wasPlaybackPlaying) {
-            resumeImageScales = lastImageScales.copyOf()
-            resumeVisualStartNanos = System.nanoTime()
-        }
-        wasPlaybackPlaying = state.isPlaybackPlaying
-
-        val imageScales = if (!state.isPlaybackPlaying && state.pauseFlowEnabled) {
-            lastImageScales
-        } else {
-            val targetScales = imageScales(state, time)
-            if (resumeVisualStartNanos != 0L) {
-                val progress = ((System.nanoTime() - resumeVisualStartNanos).toFloat() /
-                        VISUAL_RESUME_SECONDS_NANOS).coerceIn(0f, 1f)
-                FloatArray(3) { index ->
-                    lerp(resumeImageScales[index], targetScales[index], progress)
-                }.also {
-                    if (progress >= 1f) resumeVisualStartNanos = 0L
-                }
-            } else {
-                targetScales
-            }.also { lastImageScales = it }
-        }
+        // 流动时钟可以暂停，但音频包络仍按渲染时间释放；清空 PCM 缓存不能清空已经显示的缩放。
+        val imageScales = imageScales(state, time)
         val flowSpeedMultiplier = if (state.flowSpeed == PearMeshState.FastFlowSpeed) 2.0 else 1.0
         val blurSigma = lerp(
             ORDINARY_BLUR_SIGMA,
@@ -571,32 +547,29 @@ internal class PearMeshGlRenderer(
     }
 
     private fun imageScales(state: RendererState, time: Double): FloatArray {
-        val demoPower = if (state.isDemoPulseEnabled) {
+        val pulsePlaying = state.isPlaybackPlaying || !state.pauseFlowEnabled
+        val demoPower = if (state.isDemoPulseEnabled && pulsePlaying) {
             val kick = max(0.0, sin(time * PI * 2.0 * 1.15)).pow(12.0)
             val body = max(0.0, sin(time * PI * 2.0 * 0.575 + 0.7)).pow(8.0)
             (kick * 0.86 + body * 0.14).toFloat()
         } else {
-            -1f
+            null
         }
         val nowNanos = System.nanoTime()
-        val audioFrame = state.audioFrame
-        val audioCurrent = state.audioVisualizationEnabled &&
-                audioFrame.currentUpdatedAtNanos != 0L &&
-                nowNanos - audioFrame.currentUpdatedAtNanos <= AUDIO_REPORT_TIMEOUT_NANOS
-        val lanePower = if (demoPower >= 0f) {
-            FloatArray(3) { demoPower }
-        } else if (audioCurrent) {
-            interpolatedAudioPower(audioFrame, nowNanos)
-        } else {
-            FloatArray(3)
-        }
+        val lanePower = audioPulseEnvelope.update(
+            frame = state.audioFrame,
+            enabled = state.audioVisualizationEnabled && pulsePlaying,
+            nowNanos = nowNanos,
+            demoPower = demoPower,
+            paused = !state.isPlaybackPlaying && demoPower == null,
+        )
         val logNow = SystemClock.uptimeMillis()
         if (logNow - lastAudioRenderLogMs >= 1000L) {
             lastAudioRenderLogMs = logNow
             Log.d(
                 "PearMeshAudio",
-                "renderer audioEnabled=${state.audioVisualizationEnabled} audioCurrent=$audioCurrent " +
-                        "updatedAt=${audioFrame.currentUpdatedAtNanos} lane=${
+                "renderer audioEnabled=${state.audioVisualizationEnabled} audioCurrent=${audioPulseEnvelope.hasCurrentAudio} " +
+                        "updatedAt=${state.audioFrame.currentUpdatedAtNanos} lane=${
                             lanePower.joinToString {
                                 "%.3f".format(
                                     it
@@ -608,23 +581,6 @@ internal class PearMeshGlRenderer(
         }
         return FloatArray(3) { index ->
             1f + IMAGE_PULSE_INTENSITY * lanePower[index] * lanePower[index]
-        }
-    }
-
-    private fun interpolatedAudioPower(frame: AudioPowerFrame, nowNanos: Long): FloatArray {
-        val reportNanos = frame.currentUpdatedAtNanos - frame.previousUpdatedAtNanos
-        if (frame.previousUpdatedAtNanos == 0L || reportNanos <= 0L) {
-            return FloatArray(3) { frame.currentPower[it].coerceIn(0f, 1f) }
-        }
-
-        // Delay the sample by one report interval so both interpolation endpoints exist.
-        val sampleNanos = nowNanos - reportNanos
-        val mix = ((sampleNanos - frame.previousUpdatedAtNanos).toDouble() / reportNanos)
-            .toFloat()
-            .coerceIn(0f, 1f)
-        return FloatArray(3) { index ->
-            lerp(frame.previousPower[index], frame.currentPower[index], mix)
-                .coerceIn(0f, 1f)
         }
     }
 
@@ -706,14 +662,12 @@ internal class PearMeshGlRenderer(
     }
 
     private companion object {
-        const val VISUAL_RESUME_SECONDS_NANOS = 180_000_000f
         const val BLUR_DOWNSAMPLE = 4f
         const val KAWASE_SIGMA_PER_OFFSET = 16f
         const val LYRICS_BLUR_SIGMA = 42.5f
         const val ORDINARY_BLUR_SIGMA = 100f
         const val ARTWORK_TRANSITION_SECONDS = 0.5
         const val IMAGE_PULSE_INTENSITY = 0.33f
-        const val AUDIO_REPORT_TIMEOUT_NANOS = 250_000_000L
         const val MATERIAL_ORDINARY = 0
         const val MATERIAL_LYRICS = 1
         const val MATERIAL_COMPOSITE = 2

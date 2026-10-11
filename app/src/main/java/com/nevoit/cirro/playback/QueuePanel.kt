@@ -2,6 +2,8 @@ package com.nevoit.cirro.playback
 
 import androidx.compose.foundation.OverscrollEffect
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -46,6 +48,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -66,6 +69,7 @@ import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
+import com.nevoit.material.core.interaction.AlphaIndication
 import com.nevoit.material.core.interaction.overscroll.OffsetOverscrollEffect
 import com.nevoit.material.core.interaction.rememberFlingBehavior
 import com.nevoit.material.core.modifier.drawBackground
@@ -299,6 +303,9 @@ internal fun QueuePanel(
                         key = { "queue_history_${it.id}" },
                         contentType = { "song" }) { record ->
                         val rowKey = "queue_history_${record.id}"
+                        val onClick = remember(connection, record.entry) {
+                            { connection.playHistoryEntry(record.entry) }
+                        }
                         QueueRow(
                             song = record.entry.song,
                             rowKey = rowKey,
@@ -306,6 +313,8 @@ internal fun QueuePanel(
                             section = historySection,
                             overscrollEffect = overscrollEffect,
                             panelAlpha = panelAlpha,
+                            onClick = onClick,
+                            isInserted = record.entry.inserted,
                         )
                     }
                 }
@@ -318,16 +327,18 @@ internal fun QueuePanel(
                 }
                 items(continuation, key = { it.uid }, contentType = { "song" }) { entry ->
                     val movable = entry.uid != currentUid
-                    val label = when {
-                        !movable && mode == PlayMode.REPEAT_ONE -> "单曲循环"
-                        !movable -> "当前歌曲"
-                        entry.inserted -> "手动添加"
-                        else -> null
+                    val onClick = remember(connection, entry.uid) {
+                        { connection.playQueueEntry(entry.uid) }
                     }
                     ReorderableItem(
                         reorderableState,
                         key = entry.uid,
-                        enabled = movable
+                        enabled = movable,
+                        animateItemModifier = if (reorderableState.isAnyItemDragging) {
+                            Modifier.animateItem()
+                        } else {
+                            Modifier
+                        },
                     ) { isDragging ->
                         QueueRow(
                             song = entry.song,
@@ -336,8 +347,10 @@ internal fun QueuePanel(
                             section = continueSection,
                             overscrollEffect = overscrollEffect,
                             panelAlpha = panelAlpha,
+                            onClick = onClick,
+                            isCurrent = !movable,
+                            isInserted = entry.inserted,
                             edgeFadeEnabled = !isDragging,
-                            label = label,
                             modifier = Modifier.longPressDraggableHandle(
                                 enabled = movable,
                                 onDragStarted = onDragStarted,
@@ -485,14 +498,27 @@ private fun QueueRow(
     section: QueueSection,
     overscrollEffect: OverscrollEffect?,
     panelAlpha: () -> Float,
+    onClick: () -> Unit,
+    isCurrent: Boolean = false,
+    isInserted: Boolean = false,
     edgeFadeEnabled: Boolean = true,
-    label: String? = null,
     modifier: Modifier = Modifier,
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val indication = remember { AlphaIndication() }
+
+    // 点击只发送交互，反馈放在两个混合层内；整行的透明缓冲会隔离 Plus 要叠加的背景。
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .heightIn(min = RowMinHeight),
+            .heightIn(min = RowMinHeight)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClickLabel = "播放这首歌",
+                role = Role.Button,
+                onClick = onClick,
+            ),
     ) {
         // 左半：封面。贴回屏幕照常 SrcOver，没落进渐隐带就连缓冲都不用建。
         Box(
@@ -506,17 +532,23 @@ private fun QueueRow(
                     overscrollEffect,
                     panelAlpha,
                     enabled = edgeFadeEnabled,
-                ),
+                )
+                .indication(interactionSource, indication),
             contentAlignment = Alignment.CenterStart,
         ) {
-            AsyncImage(
-                model = queueCoverRequest(song.cover),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
+            Box(
                 modifier = Modifier
                     .size(CoverSize)
                     .clip(RoundedRectangle(CoverCorner)),
-            )
+            ) {
+                AsyncImage(
+                    model = queueCoverRequest(song.cover),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.matchParentSize(),
+                )
+                PlayingCoverIndicator(isCurrent, Modifier.matchParentSize())
+            }
         }
 
         // 右半：文字 + 图标，以 `Plus` 贴回屏幕。行高也由它撑起来（左半是 matchParentSize，不参与）。
@@ -527,7 +559,8 @@ private fun QueueRow(
                 .edgeFade(
                     listState, rowKey, BlendMode.Plus, section, overscrollEffect, panelAlpha,
                     enabled = edgeFadeEnabled,
-                ),
+                )
+                .indication(interactionSource, indication),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             HGap(CoverAdvance)
@@ -548,9 +581,14 @@ private fun QueueRow(
                     color = Color.White.copy(.4f),
                 )
             }
-            if (label != null) {
+            if (isInserted) {
                 HGap(8.dp)
-                QueueText(label, MaterialTheme.type.subHeadline2, Color.White.copy(alpha = 0.4f))
+                Icon(
+                    painter = painterResource(R.drawable.resource_return),
+                    contentDescription = "手动添加",
+                    tint = Color.White.copy(alpha = 0.4f),
+                    modifier = Modifier.size(20.dp),
+                )
             }
         }
     }
