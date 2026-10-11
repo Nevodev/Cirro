@@ -19,6 +19,8 @@ sealed interface KaraokeLine : ISyncedLine {
     override val start: Int
     override val end: Int
     val phonetic: String?
+    /** False when the syllable only carries whole-line text and has no word timing. */
+    val hasSyllableTiming: Boolean
 
     /**
      * Calculates the progress of the current line based on the current time.
@@ -57,7 +59,8 @@ sealed interface KaraokeLine : ISyncedLine {
         override val start: Int,
         override val end: Int,
         override val phonetic: String? = null,
-        val accompanimentLines: List<AccompanimentKaraokeLine>? = null
+        val accompanimentLines: List<AccompanimentKaraokeLine>? = null,
+        override val hasSyllableTiming: Boolean = true,
     ) : KaraokeLine {
 
         init {
@@ -74,7 +77,8 @@ sealed interface KaraokeLine : ISyncedLine {
         override val alignment: KaraokeAlignment,
         override val start: Int,
         override val end: Int,
-        override val phonetic: String? = null
+        override val phonetic: String? = null,
+        override val hasSyllableTiming: Boolean = true,
     ) : KaraokeLine {
         init {
             require(end >= start)
@@ -90,7 +94,8 @@ fun KaraokeLine.copy(
     alignment: KaraokeAlignment = this.alignment,
     start: Int = this.start,
     end: Int = this.end,
-    phonetic: String? = this.phonetic
+    phonetic: String? = this.phonetic,
+    hasSyllableTiming: Boolean = this.hasSyllableTiming,
 ): KaraokeLine = when (this) {
     is KaraokeLine.MainKaraokeLine -> this.copy(
         syllables = syllables,
@@ -98,7 +103,8 @@ fun KaraokeLine.copy(
         alignment = alignment,
         start = start,
         end = end,
-        phonetic = phonetic
+        phonetic = phonetic,
+        hasSyllableTiming = hasSyllableTiming,
     )
 
     is KaraokeLine.AccompanimentKaraokeLine -> this.copy(
@@ -107,6 +113,7 @@ fun KaraokeLine.copy(
         alignment = alignment,
         start = start,
         end = end,
-        phonetic = phonetic
+        phonetic = phonetic,
+        hasSyllableTiming = hasSyllableTiming,
     )
 }

@@ -347,6 +347,7 @@ fun KaraokeLyricsView(
                             prepared?.settledHeight(true, true, density.density, true) ?: 0f,
                         ) { listState.chain.breathingOffset(itemIndex) },
                         isFocused = focused,
+                        inactiveAlpha = if ((line as? KaraokeLine)?.hasSyllableTiming == true) 0.4f else 0.3f,
                         isRightAligned =
                             prepared?.rightAligned
                                 ?: ((line as? SyncedLine)?.content?.isRtl() == true),

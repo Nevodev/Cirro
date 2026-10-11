@@ -198,8 +198,8 @@ private fun Long.toLyricsMillis(): Int = coerceIn(0L, Int.MAX_VALUE.toLong()).to
 
 /**
  * 逐行同步（网易 LRC 那条链）的行没有 syllable——整行就是一个时间区间。
- * 造一个覆盖整行的 syllable 交给渲染层，它内部的 profile 会按字形边界再切分组
- * （CJK 一个字一组），逐字效果照常成立。
+ * 渲染层仍需要一个承载整行文本的 syllable 来排版；必须同时标记没有逐字时间，
+ * 避免 profile 按字形拆分后凭空产生逐字扫亮。
  */
 private fun lineSyllables(line: LyricLine, start: Int, end: Int): List<KaraokeSyllable> =
     if (line.syllables.isEmpty()) listOf(KaraokeSyllable(line.text, start, end))
@@ -237,6 +237,7 @@ private fun LyricBackground.toAccompanimentLine(
         start = from,
         end = to,
         phonetic = romanizations.firstOrNull()?.text?.takeIf { it.isNotEmpty() },
+        hasSyllableTiming = this.syllables.isNotEmpty(),
     )
 }
 
@@ -265,6 +266,7 @@ private fun LyricLine.toKaraokeLine(): KaraokeLine {
             start = from,
             end = to,
             phonetic = phonetic,
+            hasSyllableTiming = this.syllables.isNotEmpty(),
         )
     } else {
         KaraokeLine.MainKaraokeLine(
@@ -275,6 +277,7 @@ private fun LyricLine.toKaraokeLine(): KaraokeLine {
             end = to,
             phonetic = phonetic,
             accompanimentLines = background?.let { listOf(it.toAccompanimentLine(alignment)) },
+            hasSyllableTiming = this.syllables.isNotEmpty(),
         )
     }
 }
@@ -285,7 +288,7 @@ private fun LyricLine.toKaraokeLine(): KaraokeLine {
  * 只做字段搬运，**不做任何时间推导**——结束时间在解析阶段就推好了（末行按下一行起点或
  * `MAX_TIMESTAMP_MS` 封顶），模型里不出现哨兵值，这里也不需要兜。
  */
-private fun Lyrics.toSyncedLyrics(songId: Long): SyncedLyrics =
+internal fun Lyrics.toSyncedLyrics(songId: Long): SyncedLyrics =
     SyncedLyrics(
         lines = lines.map { it.toKaraokeLine() },
         title = metadata.title.orEmpty(),

@@ -154,6 +154,7 @@ private fun prepareLine(
         return it
     }
     require(width.isFinite() && width > 0f) { "Prepared lyrics require a finite, positive width" }
+    val animated = animate && line.hasSyllableTiming
     val accompaniment = line is KaraokeLine.AccompanimentKaraokeLine
     val style =
         (if (accompaniment) accompanimentStyle else normalStyle).copy(
@@ -225,7 +226,7 @@ private fun prepareLine(
                                     )
                                 }
                             if (units.isNotEmpty())
-                                add(PreparedGroup(units, accompaniment || !animate, run.profile))
+                                add(PreparedGroup(units, accompaniment || !animated, run.profile))
                         }
                     }
                 },
@@ -368,7 +369,7 @@ private fun prepareLine(
                 start,
                 end,
                 sweepEnd,
-                animate,
+                animated,
                 mergedWindows,
                 IntArray(order.size) { starts[order[it]] },
                 IntArray(order.size) { ends[order[it]] },
