@@ -9,6 +9,7 @@ import com.nevoit.cirro.lyrics.ui.composable.list.LyricsScrollChain
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.exp
 import kotlin.math.pow
 import kotlin.math.sqrt
 
@@ -30,6 +31,7 @@ internal class LyricsScrollChainState {
     private var breathingOffsets by mutableStateOf(emptyArray<MutableFloatState>())
     private var stiffness = FloatArray(0)
     private var damping = FloatArray(0)
+    private var couplingGain = FloatArray(0)
     private var first = 0
     private var end = 0
     private var base = 0.0
@@ -41,6 +43,7 @@ internal class LyricsScrollChainState {
     private val delayedFirstWordExtraDurationMillis = 150f
     private var delayedFirstWordStiffness = FloatArray(0)
     private var delayedFirstWordDamping = FloatArray(0)
+    private var delayedFirstWordCouplingGain = FloatArray(0)
     var active by mutableStateOf(false)
         private set
 
@@ -62,8 +65,10 @@ internal class LyricsScrollChainState {
         breathingOffsets = Array(count) { mutableFloatStateOf(0f) }
         stiffness = FloatArray(count + 1)
         damping = FloatArray(count + 1)
+        couplingGain = FloatArray(count + 1)
         delayedFirstWordStiffness = FloatArray(count + 1)
         delayedFirstWordDamping = FloatArray(count + 1)
+        delayedFirstWordCouplingGain = FloatArray(count + 1)
         if (config != null)
             for (distance in stiffness.indices) {
                 val response =
@@ -81,6 +86,10 @@ internal class LyricsScrollChainState {
                 delayedFirstWordDamping[distance] =
                     (damping[distance] - criticalDamping * delayedFirstWordExtraBounce)
                         .coerceAtLeast(criticalDamping * 0.05f) * frequencyScale
+                couplingGain[distance] = impulseGain(stiffness[distance], damping[distance]) * config.coupling
+                delayedFirstWordCouplingGain[distance] = impulseGain(
+                    delayedFirstWordStiffness[distance], delayedFirstWordDamping[distance],
+                ) * config.coupling
             }
         first = 0
         end = 0
@@ -186,6 +195,46 @@ internal class LyricsScrollChainState {
 
     val retainedCount
         get() = end - first
+
+    fun retentionExtentPx(): Int {
+        if (!active || settings == null) return 0
+        var previousBound = 0.0
+        var maximum = 0.0
+        for (i in first until end) {
+            val distance =
+                if (glide) 0 else (i - focus).coerceIn(0, stiffness.lastIndex)
+            val extraBounce = !glide && followBounceFromIndex >= 0 && i >= followBounceFromIndex
+            val rowStiffness =
+                if (extraBounce) delayedFirstWordStiffness[distance] else stiffness[distance]
+            val gain =
+                if (extraBounce) delayedFirstWordCouplingGain[distance] else couplingGain[distance]
+            // Energy bounds the free response; the impulse's absolute integral bounds the
+            // neighbour's forcing, including future overshoot when displacement is currently zero.
+            val response = amplitude(positions[i] - base, velocities[i], rowStiffness) +
+                if (!glide && i > focus && i > first) gain * previousBound else 0.0
+            // moveTo/advance bound scroll displacement by the viewport; layout shifts can
+            // temporarily exceed it before the next physics step and must remain retained.
+            val bound = minOf(response, maxOf(limit.toDouble(), abs(positions[i] - base)))
+            previousBound = bound
+            maximum = maxOf(
+                maximum,
+                bound + amplitude(contentOffsets[i].toDouble(), contentVelocities[i], contentSpring.stiffness) +
+                    amplitude(leadingContentOffsets[i].toDouble(), leadingContentVelocities[i], contentSpring.stiffness) +
+                    amplitude(breathingContentOffsets[i].toDouble(), breathingContentVelocities[i], contentSpring.stiffness),
+            )
+        }
+        return ceil(maximum).toInt()
+    }
+
+    private fun amplitude(displacement: Double, velocity: Float, stiffness: Float): Double =
+        sqrt(displacement * displacement + velocity.toDouble() * velocity / stiffness)
+
+    private fun impulseGain(stiffness: Float, damping: Float): Float {
+        val dampedFrequencySquared = stiffness - damping * damping / 4f
+        if (dampedFrequencySquared <= 0f) return 1f
+        val decay = exp(-PI * damping / (2.0 * sqrt(dampedFrequencySquared.toDouble())))
+        return ((1.0 + decay) / (1.0 - decay)).toFloat()
+    }
 
     fun reset(position: Double) {
         base = position

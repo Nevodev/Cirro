@@ -30,9 +30,11 @@ data class LyricsListItem(
     val focusHeightPx: (() -> Int)? = null,
     val focusLeadingHeightPx: (() -> Int)? = null,
     val breathingHeightPx: (() -> Int)? = null,
+    val visualOverflowPx: Int = 0,
 ) {
     init {
         require(estimatedHeightPx >= 0)
+        require(visualOverflowPx >= 0)
     }
 }
 
@@ -123,6 +125,7 @@ class LyricsLazyListState(
     internal var items: List<LyricsListItem> = emptyList()
     private var configuredWidth = -1
     private var configuredSpacing = -1
+    private var visualOverflowPx = 0
     private var focusHeights = intArrayOf()
     private var focusLeadingHeights = intArrayOf()
     private var breathingHeights = intArrayOf()
@@ -202,6 +205,7 @@ class LyricsLazyListState(
             keys = newItems.withIndex().associate { it.value.key to it.index }
             require(keys.size == newItems.size) { "Lyrics list keys must be unique" }
             items = newItems
+            visualOverflowPx = items.maxOfOrNull { it.visualOverflowPx } ?: 0
             heights =
                 LyricsHeightIndex(IntArray(items.size) { items[it].estimatedHeightPx }, spacing)
             focusHeights = IntArray(items.size) { items[it].focusHeightPx?.invoke() ?: 0 }
@@ -245,6 +249,9 @@ class LyricsLazyListState(
     }
 
     internal fun indexOf(key: Any): Int = keys[key] ?: -1
+
+    internal fun retentionPadding(beyondBoundsPx: Int): Int =
+        beyondBoundsPx + visualOverflowPx + chain.retentionExtentPx()
 
     internal fun updateFocusHeights() {
         val changed = focusHeightUpdates?.takeIf { it.items === items }?.consumeChanges()

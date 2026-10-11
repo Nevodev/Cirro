@@ -59,6 +59,7 @@ import com.nevoit.cirro.lyrics.ui.profile.DefaultLyricsProfiles
 import com.nevoit.cirro.lyrics.ui.profile.LyricsProfile
 import com.nevoit.material.theme.local.LocalTextStyle
 import com.nevoit.material.theme.tokens.Springs
+import kotlin.math.ceil
 
 @Composable
 fun KaraokeLyricsView(
@@ -192,6 +193,7 @@ fun KaraokeLyricsView(
                     val line = scene.lyrics.lines[index]
                     val focusedHeight = line?.settledHeight(true, true, density.density, true) ?: 0f
                     val unfocusedHeight = line?.settledHeight(true, true, density.density, false) ?: 0f
+                    val minimumHeight = line?.settledHeight(false, false, density.density, false) ?: 0f
                     val focusHeight = (focusedHeight - unfocusedHeight).toInt()
                     val leadingHeight =
                         line?.settledLeadingHeight(true, true, density.density, true)?.toInt() ?: 0
@@ -215,6 +217,12 @@ fun KaraokeLyricsView(
                             }
                         },
                         breathingHeightPx = breathingHeight,
+                        // Exit drawing survives collapsed backing vocals and hidden captions.
+                        visualOverflowPx = ceil(focusedHeight - minimumHeight).toInt() + leadingHeight +
+                            if ((index == 0 && timeline.introEnd > 5000) ||
+                                (index > 0 && timeline.interludeEnds[index].toLong() -
+                                    timeline.interludeStarts[index] > 5000)
+                            ) breathingHeightPx else 0,
                         settledHeightPx = {
                             (line?.settledHeight(
                                 translationShown.value,

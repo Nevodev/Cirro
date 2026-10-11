@@ -140,6 +140,9 @@ fun LyricsLazyColumn(
                     while (state.chain.active) {
                         withFrameNanos { now ->
                             state.chain.advance((now - previous) / 1_000_000_000f)
+                            if (state.tryPlacementScroll?.invoke() != true) {
+                                state.remeasurement?.forceRemeasure()
+                            }
                             previous = now
                         }
                     }
@@ -197,9 +200,7 @@ fun LyricsLazyColumn(
                     val top = contentPadding.calculateTopPadding().roundToPx()
                     val bottom = contentPadding.calculateBottomPadding().roundToPx()
                     val spacing = itemSpacing.roundToPx()
-                    val buffer =
-                        beyondBounds.roundToPx() +
-                                if (scrollChain != null && state.chain.active) height else 0
+                    val beyondBoundsPx = beyondBounds.roundToPx()
                     val childWidth = (width - left - right).coerceAtLeast(0)
                     Snapshot.withoutReadObservation {
                         state.configure(items, childWidth, spacing, top, bottom, height)
@@ -207,6 +208,7 @@ fun LyricsLazyColumn(
                     }
                     // Update even uncomposed owners before reading prefix heights for later lyrics.
                     state.updateFocusHeights()
+                    val buffer = state.retentionPadding(beyondBoundsPx)
                     val position = Snapshot.withoutReadObservation { state.position }
                     val startIndex =
                         state.heights.itemAt((position - top - buffer).coerceAtLeast(0.0))
@@ -285,10 +287,11 @@ fun LyricsLazyColumn(
                     val chainWasActive = state.chain.active
                     state.tryPlacementScroll = {
                         val current = state.position
+                        val currentBuffer = state.retentionPadding(beyondBoundsPx)
                         val first =
-                            state.heights.itemAt((current - top - buffer).coerceAtLeast(0.0))
+                            state.heights.itemAt((current - top - currentBuffer).coerceAtLeast(0.0))
                         val covered =
-                            measuredEnd == items.size || top + endTop >= current + height + buffer
+                            measuredEnd == items.size || top + endTop >= current + height + currentBuffer
                         if (
                             state.items === items &&
                             first == startIndex &&
