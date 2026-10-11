@@ -1,6 +1,7 @@
 package com.nevoit.cirro.playback
 
 import android.graphics.Bitmap
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
@@ -112,6 +113,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import java.util.Locale
 import kotlin.random.Random
@@ -129,7 +131,7 @@ private val CoverSideCap = 360.dp
 /** 正文区的左右边距。歌曲信息、进度条、控制条都跟这条线对齐。 */
 private val ContentPadding = 24.dp
 
-/** 名字右边那两颗圆钮（收藏/更多）的尺寸。比顶排的浮钮小一号，跟文字排同高。 */
+/** 名字右边那两颗圆钮（喜欢/更多）的尺寸。比顶排的浮钮小一号，跟文字排同高。 */
 private val MetaButtonSize = 40.dp
 
 /** 收起（点歌词/待播列表）时封面缩到的小方块边长：落到标题行左侧让出的那一格。 */
@@ -762,13 +764,9 @@ private fun PlayerOverlay(
         val onPrevious = remember(connection) { { connection.skipToPrevious() } }
         val onNext = remember(connection) { { connection.skipToNext() } }
         val onSeek = remember(connection) { { ms: Long -> connection.seekTo(ms) } }
-        // 底部那排（歌词/待播列表）、名字右边那两颗（收藏、更多）都还没接线——待播列表是队列
-        // 面板的入口、投屏还没做。用 remember 固定空回调：按下有正常的反馈，但先什么都不做；
-        // 接线时只换这几个 lambda。歌词那块已经有面板了，这两个回调留着做埋点/自动滚动之类的钩子。
         val onLyrics = remember { {} }
         val onQueue = remember { {} }
         val onAirplay = remember { {} }
-        val onCollect = remember { {} }
         val onMore = remember { {} }
 
         // 面板切换的规则只有一条：**选中的再点一次就取消选中**（回到"都不选"），没选中的点了就
@@ -896,13 +894,10 @@ private fun PlayerOverlay(
                         },
                     )
                     HGap()
-                    CircleIconButton(
-                        iconRes = R.drawable.star,
-                        label = "收藏",
+                    PlayerLikeButton(
+                        songId = song.id,
                         background = buttonColor,
                         tint = buttonIconColor,
-                        onClick = onCollect,
-                        size = MetaButtonSize,
                     )
                     HGap()
                     CircleIconButton(
@@ -1171,6 +1166,26 @@ private fun PlayerCover(
             }
         }
     }
+}
+
+@Composable
+private fun PlayerLikeButton(songId: Long, background: ColorProducer, tint: ColorProducer) {
+    val viewModel: PlayerLikeViewModel = koinViewModel()
+    val state by viewModel.state.collectAsState()
+    val context = LocalContext.current
+    LaunchedEffect(viewModel, context) {
+        viewModel.messages.collect { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+    }
+    val liked = state.songId == songId && state.liked == true
+    CircleIconButton(
+        iconRes = if (liked) R.drawable.star_fill else R.drawable.star,
+        label = if (liked) "取消喜欢" else "喜欢",
+        background = background,
+        tint = tint,
+        onClick = remember(viewModel) { { viewModel.toggle() } },
+        enabled = state.songId == songId && !state.busy,
+        size = MetaButtonSize,
+    )
 }
 
 @Composable

@@ -1,5 +1,6 @@
 package com.nevoit.cirro.playback
 
+import android.widget.Toast
 import androidx.compose.foundation.OverscrollEffect
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.indication
@@ -146,18 +147,24 @@ internal fun QueuePanel(
 ) {
     val queue by connection.queue.collectAsState()
     val history by connection.history.collectAsState()
+    val infiniteState by connection.infiniteState.collectAsState()
+    val context = LocalContext.current
+    LaunchedEffect(connection, context) {
+        connection.infiniteMessages.collect { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+    }
     val entries = queue.entries
     val continuation = remember(entries, queue.currentIndex) { queue.entriesFromCurrent }
     val showLoopNotice =
         continuation.isNotEmpty() && queue.mode == PlayMode.REPEAT_ALL && !queue.shuffle
+    val showNotice = showLoopNotice || queue.infinite
     val historySection = remember(history.size) {
         QueueSection(HistoryHeaderKey, ContinueHeaderKey, 1, history.size)
     }
     val continueHeaderIndex = if (history.isEmpty()) 0 else history.size + 1
-    val continueSection = remember(continueHeaderIndex, continuation.size, showLoopNotice) {
+    val continueSection = remember(continueHeaderIndex, continuation.size, showNotice) {
         QueueSection(
             ContinueHeaderKey, null, continueHeaderIndex + 1,
-            continueHeaderIndex + continuation.size + if (showLoopNotice) 1 else 0,
+            continueHeaderIndex + continuation.size + if (showNotice) 1 else 0,
         )
     }
     val mode = queue.mode
@@ -166,7 +173,9 @@ internal fun QueuePanel(
     // 回调按状态 remember：不固定的话每次重组都是新 lambda，LazyColumn 那一堆行的跳过全失效。
     val onToggleShuffle = remember(connection, shuffle) { { connection.setShuffle(!shuffle) } }
     val onCycleLoop = remember(connection, mode) { { connection.setLoopMode(mode.nextLoop()) } }
-    val onInfinite = remember { {} }
+    val onInfinite = remember(connection, queue.infinite) {
+        { connection.setInfinite(!queue.infinite) }
+    }
 
     // 行要按"自己滚到了哪儿"算渐隐系数，所以列表状态得由面板持有、下发给每一行。
     // 当前歌紧跟“继续播放”标题；从标题开始，避免吸顶标题遮住当前行。
@@ -253,11 +262,10 @@ internal fun QueuePanel(
                     .weight(1f)
                     .graphicsLayer { alpha = panelAlpha().coerceIn(0f, 1f) },
             )
-            // 无限播放还没做，先摆着：按下有反馈，什么都不做。
             PanelButton(
                 iconRes = R.drawable.infinity,
                 label = "无限播放",
-                active = false,
+                active = queue.infinite,
                 background = buttonBackground,
                 tint = buttonIcon,
                 activeBackground = activeButtonBackground,
@@ -358,10 +366,14 @@ internal fun QueuePanel(
                         )
                     }
                 }
-                if (showLoopNotice) {
+                if (showNotice) {
                     item(key = ContinueFooterKey, contentType = "queue-notice") {
                         QueueNotice(
-                            text = "正在循环 ${entries.size} 首歌",
+                            text = if (queue.infinite) {
+                                if (infiniteState.loading) "正在获取推荐歌曲"
+                                else "将自动继续播放推荐歌曲"
+                            } else "正在循环 ${entries.size} 首歌",
+                            iconRes = if (queue.infinite) R.drawable.infinity else R.drawable.repeat,
                             listState = listState,
                             section = continueSection,
                             overscrollEffect = overscrollEffect,
@@ -411,6 +423,7 @@ private fun QueueNotice(
     overscrollEffect: OverscrollEffect?,
     panelAlpha: () -> Float,
     rowKey: Any,
+    iconRes: Int = R.drawable.repeat,
 ) {
     Row(
         modifier = Modifier
@@ -421,7 +434,7 @@ private fun QueueNotice(
         horizontalArrangement = Arrangement.Center
     ) {
         Icon(
-            painter = painterResource(R.drawable.repeat),
+            painter = painterResource(iconRes),
             contentDescription = null,
             tint = Color.White.copy(alpha = 0.4f),
             modifier = Modifier.size(20.dp),

@@ -1,12 +1,15 @@
 package com.nevoit.cirro.di
 
+import android.util.Log
 import com.nevoit.cirro.data.AccountRepository
 import com.nevoit.cirro.data.AudioQualityStore
 import com.nevoit.cirro.data.CollectionRepository
 import com.nevoit.cirro.data.EncryptedSecretStore
 import com.nevoit.cirro.data.HomeRepository
+import com.nevoit.cirro.data.IntelligenceRepository
 import com.nevoit.cirro.data.PlayQueueStore
 import com.nevoit.cirro.data.SessionStore
+import com.nevoit.cirro.data.SongLikeRepository
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.detail.CollectionViewModel
 import com.nevoit.cirro.home.HomeViewModel
@@ -18,6 +21,7 @@ import com.nevoit.cirro.lyrics.data.LyricsStore
 import com.nevoit.cirro.palette.CoverPalette
 import com.nevoit.cirro.playback.AudioAnalysisStore
 import com.nevoit.cirro.playback.PlaybackConnection
+import com.nevoit.cirro.playback.PlayerLikeViewModel
 import com.nevoit.cirro.playback.PlayerUiController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -52,7 +56,8 @@ val appModule = module {
 
     single { AccountRepository(get(), get(ApplicationScope)) }
 
-    single { PlaybackConnection(androidContext(), get(ApplicationScope), get()) }
+    single { IntelligenceRepository() }
+    single { PlaybackConnection(androidContext(), get(ApplicationScope), get(), get(), get()) }
     single { AudioAnalysisStore() }
 
     // 播放页的展开进度。迷你条和播放页分属两层，要由同一个值驱动，所以由 App 持有。
@@ -62,6 +67,12 @@ val appModule = module {
     single { HomeRepository(androidContext(), get(ApplicationScope), get()) }
 
     single { CollectionRepository(get()) }
+
+    single {
+        SongLikeRepository(get(ApplicationScope), get<AccountRepository>().session, onFailure = {
+            Log.w("SongLike", "读取喜欢状态失败，将静默重试: ${it.message}")
+        })
+    }
 
     single { CoverPalette(androidContext(), get(ApplicationScope)) }
 
@@ -79,6 +90,8 @@ val appModule = module {
     viewModelOf(::QrLoginViewModel)
 
     viewModelOf(::HomeViewModel)
+
+    viewModelOf(::PlayerLikeViewModel)
 
     // 统一详情页：一个页面架构服务三种来源，参数区分是哪一种
     viewModel { (kind: CollectionKind, id: Long, titleHint: String) ->

@@ -11,31 +11,43 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import com.nevoit.cirro.data.AccountRepository
+import com.nevoit.cirro.data.IntelligenceRepository
+import com.nevoit.cirro.data.IntelligenceSeed
 import com.nevoit.cirro.data.NcmBridge
 import com.nevoit.cirro.data.PlayQueueStore
+import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.PlayMode
 import com.nevoit.cirro.data.model.PlaybackQueue
 import com.nevoit.cirro.data.model.PlaybackHistoryEntry
 import com.nevoit.cirro.data.model.QueueEntry
 import com.nevoit.cirro.data.model.QueueSource
+import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.data.model.appendInsertIndex
 import com.nevoit.cirro.data.model.insertNextIndex
 import com.nevoit.cirro.data.model.manualNextIndex
 import com.nevoit.cirro.data.model.manualPreviousIndex
+import com.nevoit.cirro.data.model.pendingRecommendationRemovalRanges
 import com.nevoit.cirro.data.model.playQueueOf
 import com.nevoit.cirro.data.model.restoredTail
 import com.nevoit.cirro.data.model.shuffledTail
 import com.nevoit.cirro.data.model.withCurrent
+import com.nevoit.cirro.data.model.withInfinite
 import com.nevoit.cirro.data.model.withInsert
 import com.nevoit.cirro.data.model.withMovedEntry
+import com.nevoit.cirro.data.model.withRecommendations
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -125,6 +137,8 @@ class PlaybackConnection(
     context: Context,
     private val scope: CoroutineScope,
     private val queueStore: PlayQueueStore,
+    private val account: AccountRepository,
+    private val intelligence: IntelligenceRepository,
 ) {
 
     private val appContext = context.applicationContext
@@ -135,6 +149,16 @@ class PlaybackConnection(
     /** 队列快照。给以后的队列界面，也给"当前这首从哪来"这类查询。 */
     val queue: StateFlow<PlaybackQueue> get() = queueStore.queue
     val history: StateFlow<List<PlaybackHistoryEntry>> get() = queueStore.history
+
+    private val _infiniteState = MutableStateFlow(InfinitePlaybackState())
+    val infiniteState = _infiniteState.asStateFlow()
+    private val _infiniteMessages = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val infiniteMessages = _infiniteMessages.asSharedFlow()
+    private var infiniteJob: Job? = null
+    private var infiniteGeneration = 0
+    private var infiniteSeed: IntelligenceSeed? = null
+    private var infiniteCursor: Long? = null
+    private var advanceAfterRecommendations = false
 
     private var controller: MediaController? = null
     private var lastSessionLogMs = 0L
@@ -152,6 +176,9 @@ class PlaybackConnection(
 
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
+            if (events.contains(Player.EVENT_PLAY_WHEN_READY_CHANGED) && !player.playWhenReady) {
+                advanceAfterRecommendations = false
+            }
             // 换曲也是一次位置不连续——整个时间轴换了一条，位置从新曲的 0 开始。
             if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) {
                 positionDiscontinuity++
@@ -170,6 +197,7 @@ class PlaybackConnection(
             updatePlayIntent(player)
             publish(player)
             syncCurrentIndex(player)
+            maybeContinuePlayback()
         }
 
         override fun onPositionDiscontinuity(
@@ -209,7 +237,7 @@ class PlaybackConnection(
      * `playWhenReady` 永远亮着，乐观状态会把按钮一直画成"正在播放"，点了也没反应。
      */
     private fun updatePlayIntent(player: Player) {
-        if (player.playWhenReady && !player.isPlaying) {
+        if (player.playWhenReady && !player.isPlaying && player.playbackState != Player.STATE_ENDED) {
             if (playIntentPending) return
             playIntentPending = true
             playIntentJob = scope.launch(Dispatchers.Main) {
@@ -269,6 +297,17 @@ class PlaybackConnection(
                 delay(PositionTickMs.milliseconds)
             }
         }
+
+        scope.launch(Dispatchers.Main) {
+            var owner = (account.session.value as? Session.LoggedIn)?.profile?.userId
+            account.session.map { (it as? Session.LoggedIn)?.profile?.userId }
+                .distinctUntilChanged().collect { userId ->
+                    if (owner != userId && queue.value.infinite) {
+                        disableInfinitePlayback()
+                    }
+                    owner = userId
+                }
+        }
     }
 
     /** 播一首歌，[id] 是网易云的歌曲 id。队列里就它一条。 */
@@ -290,7 +329,8 @@ class PlaybackConnection(
                 return@launch
             }
 
-            startQueue(controller, playQueueOf(listOf(song), 0, source = null, mode = currentMode()))
+            startQueue(controller, playQueueOf(listOf(song), 0, source = null, mode = currentMode(),
+                infinite = queue.value.infinite))
         }
     }
 
@@ -315,7 +355,8 @@ class PlaybackConnection(
                 return@launch
             }
 
-            startQueue(controller, playQueueOf(songs, startIndex, source, mode = currentMode()))
+            startQueue(controller, playQueueOf(songs, startIndex, source, mode = currentMode(),
+                infinite = queue.value.infinite))
         }
     }
 
@@ -396,6 +437,7 @@ class PlaybackConnection(
     }
 
     private fun playAt(controller: MediaController, target: Int, restartCurrent: Boolean) {
+        advanceAfterRecommendations = false
         retryJob?.cancel()
         retryJob = null
         retryCount = 0
@@ -415,13 +457,22 @@ class PlaybackConnection(
     fun skipToNext() {
         val controller = controller ?: return
         val queue = liveQueue() ?: return
-        val target = queue.manualNextIndex(controller.currentMediaItemIndex) ?: return
+        val target = queue.manualNextIndex(controller.currentMediaItemIndex)
+        if (target == null) {
+            if (queue.infinite) {
+                advanceAfterRecommendations = true
+                maybeContinuePlayback(force = true)
+            }
+            return
+        }
+        advanceAfterRecommendations = false
         controller.seekTo(target, 0L)
         if (!controller.playWhenReady) controller.play()
     }
 
     /** 手动「上一首」，同样不受单曲循环约束。 */
     fun skipToPrevious() {
+        advanceAfterRecommendations = false
         val controller = controller ?: return
         val queue = liveQueue() ?: return
         val target = queue.manualPreviousIndex(controller.currentMediaItemIndex) ?: return
@@ -446,6 +497,121 @@ class PlaybackConnection(
         applyMode(loop = currentMode(), shuffle = enabled)
     }
 
+    fun setInfinite(enabled: Boolean) {
+        scope.launch(Dispatchers.Main.immediate) {
+            if (!enabled) {
+                disableInfinitePlayback()
+                return@launch
+            }
+            val uid = (account.session.value as? Session.LoggedIn)?.profile?.userId
+            if (uid == null || uid <= 0) {
+                _infiniteMessages.tryEmit("无限播放需要登录网易云音乐")
+                return@launch
+            }
+            val current = liveQueue() ?: return@launch
+            invalidateInfinitePlayback()
+            queueStore.set(current.withInfinite(true))
+            controller?.repeatMode = Player.REPEAT_MODE_OFF
+            maybeContinuePlayback()
+        }
+    }
+
+    private fun disableInfinitePlayback() {
+        invalidateInfinitePlayback()
+        val current = liveQueue() ?: queue.value
+        val disabled = current.withInfinite(false)
+        val removals = current.pendingRecommendationRemovalRanges()
+        val player = controller
+        if (removals.isNotEmpty() && player != null) {
+            if (player.mediaItemCount != current.entries.size ||
+                !player.isCommandAvailable(Player.COMMAND_CHANGE_MEDIA_ITEMS)) {
+                queueStore.set(current.copy(infinite = false))
+                return
+            }
+        }
+        // 当前及之前的索引不变；先发布最终队列，删除回调不会再预取推荐。
+        queueStore.set(disabled)
+        // 逐首删除会反复重建 MediaController 时间轴并派发远端更新。
+        removals.forEach { range -> player?.removeMediaItems(range.first, range.last + 1) }
+    }
+
+    private fun invalidateInfinitePlayback() {
+        infiniteGeneration++
+        infiniteJob?.cancel()
+        infiniteJob = null
+        infiniteSeed = null
+        infiniteCursor = null
+        advanceAfterRecommendations = false
+        _infiniteState.value = InfinitePlaybackState()
+    }
+
+    private fun maybeContinuePlayback(force: Boolean = false) {
+        val player = controller ?: return
+        val initial = liveQueue() ?: return
+        if (!initial.infinite || infiniteJob?.isActive == true) return
+        if (!force && initial.entries.lastIndex - initial.currentIndex > 3) return
+        if (player.mediaItemCount != initial.entries.size) return
+        val userId = (account.session.value as? Session.LoggedIn)?.profile?.userId ?: return
+        if (userId <= 0) return
+        val request = infiniteGeneration
+        val firstUid = initial.entries.first().uid
+        val current = initial.entries[initial.currentIndex]
+        _infiniteState.value = InfinitePlaybackState(loading = true)
+        infiniteJob = scope.launch(Dispatchers.Main) {
+            try {
+                retryInfinitePlayback(
+                    isCurrent = { isCurrentInfiniteRequest(request, firstUid, userId) },
+                    onFailure = { Log.w("CirroPlayback", "无限播放加载失败，将静默重试", it) },
+                ) {
+                    val seed = infiniteSeed ?: intelligence.seed(
+                        current.song.id,
+                        initial.source?.takeIf { it.kind == CollectionKind.PLAYLIST } ?: current.source,
+                        userId,
+                    ).getOrThrow()
+                    if (!isCurrentInfiniteRequest(request, firstUid, userId)) return@retryInfinitePlayback
+                    infiniteSeed = seed
+                    val cursor = infiniteCursor ?: initial.entries.last().song.id
+                    val songs = intelligence.songs(seed, cursor).getOrThrow()
+                    if (!isCurrentInfiniteRequest(request, firstUid, userId)) return@retryInfinitePlayback
+                    songs.lastOrNull()?.let { infiniteCursor = it.id }
+                    val live = liveQueue() ?: return@retryInfinitePlayback
+                    val extended = live.withRecommendations(
+                        songs, QueueSource(CollectionKind.PLAYLIST, seed.playlistId.toString(), "心动模式"),
+                    )
+                    if (extended === live) error("暂时没有新的推荐歌曲")
+                    if (player.mediaItemCount != live.entries.size) return@retryInfinitePlayback
+                    val ended = player.playbackState == Player.STATE_ENDED
+                    val resume = ended && player.playWhenReady
+                    val added = extended.entries.drop(live.entries.size)
+                    // 先发布来源，服务的切歌回调才能为新曲取到正确的打卡和歌词元数据。
+                    check(player.isCommandAvailable(Player.COMMAND_CHANGE_MEDIA_ITEMS))
+                    queueStore.set(extended)
+                    try {
+                        player.addMediaItems(added.map { it.song.toMediaItem(it.uid) })
+                    } catch (error: Exception) {
+                        queueStore.set(live.withCurrent(player.currentMediaItemIndex))
+                        throw error
+                    }
+                    _infiniteState.value = InfinitePlaybackState()
+                    if (advanceAfterRecommendations || resume) {
+                        val target = if (ended) live.entries.size else player.currentMediaItemIndex + 1
+                        playAt(player, target, restartCurrent = false)
+                    }
+                }
+            } finally {
+                if (request == infiniteGeneration) {
+                    infiniteJob = null
+                    _infiniteState.value = _infiniteState.value.copy(loading = false)
+                }
+            }
+        }
+    }
+
+    private fun isCurrentInfiniteRequest(request: Int, firstUid: Long, userId: Long): Boolean =
+        request == infiniteGeneration && queue.value.infinite &&
+            queue.value.entries.firstOrNull()?.uid == firstUid &&
+            (account.session.value as? Session.LoggedIn)?.profile?.userId == userId
+
     /**
      * 两根轴一起落到模型和播放器上。
      *
@@ -454,10 +620,12 @@ class PlaybackConnection(
      */
     private fun applyMode(loop: PlayMode, shuffle: Boolean) {
         scope.launch(Dispatchers.Main) {
+            if (loop != PlayMode.SEQUENTIAL && queue.value.infinite) disableInfinitePlayback()
             val controller = controller
             val queue = liveQueue()
             if (controller == null || queue == null) {
-                queueStore.set(queueStore.queue.value.copy(mode = loop, shuffle = shuffle))
+                queueStore.set(queueStore.queue.value.copy(mode = loop, shuffle = shuffle,
+                    infinite = queueStore.queue.value.infinite && loop == PlayMode.SEQUENTIAL))
                 return@launch
             }
 
@@ -465,7 +633,7 @@ class PlaybackConnection(
                 shuffle == queue.shuffle -> queue
                 shuffle -> queue.shuffledTail()
                 else -> queue.restoredTail()
-            }.copy(mode = loop, shuffle = shuffle)
+            }.copy(mode = loop, shuffle = shuffle, infinite = queue.infinite && loop == PlayMode.SEQUENTIAL)
 
             reorderPlayer(queue.entries, reordered.entries)
             controller.repeatMode = reordered.repeatMode()
@@ -482,6 +650,7 @@ class PlaybackConnection(
     fun togglePlayPause() {
         val controller = controller ?: return
         if (controller.playWhenReady) {
+            advanceAfterRecommendations = false
             // 手动暂停要连重试一起取消，否则退避到点它又自己放起来。
             retryJob?.cancel()
             retryJob = null
@@ -499,6 +668,7 @@ class PlaybackConnection(
      * 自己夹反而会夹错。
      */
     fun seekTo(positionMs: Long) {
+        advanceAfterRecommendations = false
         controller?.seekTo(positionMs.coerceAtLeast(0L))
     }
 
@@ -516,10 +686,12 @@ class PlaybackConnection(
 
     /** 整队换掉：先把顺序算好（随机模式下建队即打乱），再一次性交给播放器。 */
     private fun startQueue(controller: MediaController, queue: PlaybackQueue) {
+        invalidateInfinitePlayback()
         // 新点播一次：之前那首攒下的重试额度和退避任务都不该跟过来。
         retryJob?.cancel()
         retryJob = null
         retryCount = 0
+        queueStore.set(queue)
         controller.setMediaItems(
             queue.entries.map { it.song.toMediaItem(it.uid) },
             queue.currentIndex,
@@ -528,7 +700,7 @@ class PlaybackConnection(
         controller.repeatMode = queue.repeatMode()
         controller.prepare()
         controller.play()
-        queueStore.set(queue)
+        maybeContinuePlayback()
     }
 
     private fun insert(

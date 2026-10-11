@@ -101,7 +101,7 @@ pub extern "C" fn ncm_selftest() -> i32 {
 // ---------------------------------------------------------------------------
 
 use jni::objects::{JObject, JString};
-use jni::sys::{jint, jstring};
+use jni::sys::{jboolean, jint, jstring};
 use jni::JNIEnv;
 
 /// 快照当前客户端。请求期间持锁会和 set_cookie 死等，所以先 clone 再 await。
@@ -526,6 +526,120 @@ fn flatten_song_array(v: &serde_json::Value) -> Vec<serde_json::Value> {
         .unwrap_or_default()
 }
 
+fn intelligence_songs(body: &serde_json::Value) -> Result<Vec<serde_json::Value>, String> {
+    if pick_i64_loose(body, &["code"]) != 200 {
+        return Err(pick_str(body, &["message", "msg"]).to_string());
+    }
+    body["data"].as_array()
+        .ok_or_else(|| "心动模式返回缺少歌曲列表".to_string())?
+        .iter()
+        .map(|item| {
+            let song = &item["songInfo"];
+            let outer_id = pick_i64(item, &["id"]);
+            let id = if outer_id > 0 { outer_id } else { pick_i64(song, &["id"]) };
+            if !song.is_object() || id <= 0 {
+                return Err("心动模式返回的歌曲无效".to_string());
+            }
+            let mut flattened = flatten_song(song, None);
+            flattened["id"] = serde_json::json!(id);
+            Ok(flattened)
+        })
+        .collect()
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeIntelligenceSongs<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    id: JString<'local>,
+    pid: JString<'local>,
+    sid: JString<'local>,
+) -> jstring {
+    let id = jni_in(&mut env, &id);
+    let pid = jni_in(&mut env, &pid);
+    let sid = jni_in(&mut env, &sid);
+    let query = Query::new().param("id", &id).param("pid", &pid)
+        .param("sid", &sid).param("count", "20");
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(client.playmode_intelligence_list(&query)) {
+        Ok(response) => match intelligence_songs(&response.body) {
+            Ok(songs) => serde_json::json!({ "ok": true, "songs": songs }),
+            Err(message) => serde_json::json!({ "ok": false, "message": message }),
+        },
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+fn liked_playlist_id(body: &serde_json::Value, uid: i64) -> Option<i64> {
+    if pick_i64_loose(body, &["code"]) != 200 { return None; }
+    body["playlist"].as_array()?.iter()
+        .find(|playlist| {
+            let owner = pick_i64_loose(&playlist["creator"], &["userId"]);
+            pick_i64(playlist, &["specialType"]) == 5 && (owner == 0 || owner == uid)
+        })
+        .map(|playlist| pick_i64_loose(playlist, &["id"]))
+        .filter(|id| *id > 0)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeLikedPlaylistId<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    uid: JString<'local>,
+) -> jstring {
+    let uid = jni_in(&mut env, &uid);
+    let query = Query::new().param("uid", &uid).param("limit", "1000");
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(client.user_playlist(&query)) {
+        Ok(response) => match liked_playlist_id(&response.body, uid.parse().unwrap_or(0)) {
+            Some(id) => serde_json::json!({ "ok": true, "id": id }),
+            None => serde_json::json!({ "ok": false, "message": "未能获取我喜欢的音乐歌单" }),
+        },
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+#[cfg(test)]
+mod intelligence_tests {
+    use super::{intelligence_songs, liked_playlist_id};
+    use serde_json::json;
+
+    #[test]
+    fn nested_song_info_uses_the_existing_song_contract() {
+        let body = json!({ "code": 200, "data": [{ "songInfo": {
+            "id": 3402673449i64, "name": "song", "ar": [{"name": "artist"}],
+            "al": {"name": "album", "picUrl": "https://p3.music.126.net/cover"}, "dt": 10000
+        }}] });
+        let songs = intelligence_songs(&body).unwrap();
+        assert_eq!(songs[0]["id"], 3402673449i64);
+        assert_eq!(songs[0]["artists"], json!(["artist"]));
+        assert_eq!(songs[0]["cover"], "https://p1.music.126.net/cover");
+        assert_eq!(songs[0]["durationMs"], 10000);
+        assert!(intelligence_songs(&json!({"code": 200, "data": []})).unwrap().is_empty());
+        assert!(intelligence_songs(&json!({"code": 400, "data": []})).is_err());
+        assert!(intelligence_songs(&json!({"code": 200})).is_err());
+        assert!(intelligence_songs(&json!({"code": 200, "data": [{}]})).is_err());
+        let outer_id = json!({"code": 200, "data": [{"id": 3402673449i64, "songInfo": {"name": "song"}}]});
+        assert_eq!(intelligence_songs(&outer_id).unwrap()[0]["id"], 3402673449i64);
+    }
+
+    #[test]
+    fn liked_playlist_is_selected_by_type_and_owner_not_position() {
+        let body = json!({"code": 200, "playlist": [
+            {"id": 1, "specialType": 0, "creator": {"userId": 42}},
+            {"id": 2, "specialType": 5, "creator": {"userId": 43}},
+            {"id": "17715824860", "specialType": 5, "creator": {"userId": 42}}
+        ]});
+        assert_eq!(liked_playlist_id(&body, 42), Some(17715824860));
+        assert_eq!(liked_playlist_id(&body, 44), None);
+        assert_eq!(liked_playlist_id(&json!({"code": 200, "playlist": [
+            {"id": 42, "specialType": 5, "creator": {"nickname": "me"}}
+        ]}), 42), Some(42));
+    }
+}
+
 /// 每日推荐歌曲（需登录，约 30 首）。返回 `{"ok":true,"songs":[...]}`。
 #[no_mangle]
 pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeRecommendSongs<'local>(
@@ -783,6 +897,98 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeAlbumDetail<'l
             })
         }
         (Err(e), _) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+fn song_like_success(body: &serde_json::Value) -> Result<(), String> {
+    let code = body.get("code").and_then(|code| {
+        code.as_i64().or_else(|| code.as_str().and_then(|code| code.parse().ok()))
+    });
+    // 请求库为二维码等接口把 302 / 400 / 502 也当作 Ok；红心必须以业务码 200 为准。
+    if code == Some(200) {
+        Ok(())
+    } else {
+        let message = pick_str(body, &["message", "msg"]);
+        let message = if message.is_empty() { "喜欢歌曲请求失败" } else { message };
+        Err(format!("{message}（code={}）", code.map(|code| code.to_string()).unwrap_or_else(|| "missing".to_string())))
+    }
+}
+
+fn liked_song_ids(body: &serde_json::Value) -> Result<Vec<i64>, String> {
+    song_like_success(body)?;
+    body.get("ids")
+        .and_then(|ids| ids.as_array())
+        .ok_or_else(|| "喜欢歌曲列表缺少 ids".to_string())?
+        .iter()
+        .map(|id| id.as_i64().filter(|id| *id > 0).ok_or_else(|| "喜欢歌曲 id 无效".to_string()))
+        .collect()
+}
+
+#[cfg(test)]
+mod song_like_tests {
+    use super::{liked_song_ids, song_like_success};
+    use serde_json::json;
+
+    #[test]
+    fn empty_likes_are_distinct_from_an_invalid_response() {
+        assert_eq!(liked_song_ids(&json!({ "code": 200, "ids": [] })), Ok(vec![]));
+        assert_eq!(liked_song_ids(&json!({ "code": 200, "ids": [123, 456] })), Ok(vec![123, 456]));
+        assert!(liked_song_ids(&json!({ "code": 200 })).is_err());
+        assert!(liked_song_ids(&json!({ "code": 200, "ids": [123, "invalid"] })).is_err());
+    }
+
+    #[test]
+    fn special_request_codes_cannot_confirm_a_heart() {
+        assert!(song_like_success(&json!({ "code": 200 })).is_ok());
+        assert!(song_like_success(&json!({ "code": "200" })).is_ok());
+        for code in [201, 302, 400, 502] {
+            assert_eq!(song_like_success(&json!({ "code": code, "msg": "rejected" })), Err(format!("rejected（code={code}）")));
+        }
+        assert!(song_like_success(&json!({})).is_err());
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeLikedSongIds<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    uid: JString<'local>,
+) -> jstring {
+    let uid = jni_in(&mut env, &uid);
+    let query = Query::new().param("uid", &uid);
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(client.likelist(&query)) {
+        Ok(response) => match liked_song_ids(&response.body) {
+            Ok(ids) => serde_json::json!({ "ok": true, "likedSongIds": ids }),
+            Err(message) => serde_json::json!({ "ok": false, "message": message }),
+        },
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeSongLike<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    id: JString<'local>,
+    uid: JString<'local>,
+    like: jboolean,
+) -> jstring {
+    let id = jni_in(&mut env, &id);
+    let uid = jni_in(&mut env, &uid);
+    let query = Query::new()
+        .param("id", &id)
+        .param("uid", &uid)
+        .param("like", if like != 0 { "true" } else { "false" });
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(client.song_like(&query)) {
+        Ok(response) => match song_like_success(&response.body) {
+            Ok(()) => serde_json::json!({ "ok": true }),
+            Err(message) => serde_json::json!({ "ok": false, "message": message }),
+        },
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
     };
     jni_out(&mut env, value)
 }

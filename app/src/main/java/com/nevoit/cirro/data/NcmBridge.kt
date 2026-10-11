@@ -204,6 +204,19 @@ object NcmBridge {
         decode(nativeRecentSongs()).getOrThrow().recent
     }
 
+    fun intelligenceSongs(id: Long, playlistId: Long, startId: Long): Result<List<Song>> = runCatching {
+        require(id > 0 && playlistId > 0 && startId > 0)
+        decode(nativeIntelligenceSongs(id.toString(), playlistId.toString(), startId.toString()))
+            .getOrThrow().songs
+    }
+
+    fun likedPlaylistId(userId: Long): Result<Long> = runCatching {
+        require(userId > 0)
+        decode(nativeLikedPlaylistId(userId.toString())).getOrThrow().id.also {
+            check(it > 0) { "未能获取我喜欢的音乐歌单" }
+        }
+    }
+
     /**
      * 专辑类型（Single / EP / 专辑…，静态元数据，查一次终身有效）。
      *
@@ -299,6 +312,18 @@ object NcmBridge {
             ).getOrThrow()
         }
 
+    fun likedSongIds(userId: Long): Result<Set<Long>> = runCatching {
+        require(userId > 0)
+        decode(nativeLikedSongIds(userId.toString())).getOrThrow().likedSongIds
+            ?.toSet() ?: error("喜欢歌曲列表缺少 ids")
+    }
+
+    /** 歌曲红心，与歌单 / 专辑的收藏接口独立。 */
+    fun setSongLiked(id: Long, userId: Long, liked: Boolean): Result<Unit> = runCatching {
+        require(id > 0 && userId > 0)
+        decode(nativeSongLike(id.toString(), userId.toString(), liked)).getOrThrow()
+    }
+
     /**
      * 直链空时给界面的一句话。
      *
@@ -348,6 +373,10 @@ object NcmBridge {
 
     private external fun nativeRecentSongs(): String
 
+    private external fun nativeIntelligenceSongs(id: String, pid: String, sid: String): String
+
+    private external fun nativeLikedPlaylistId(uid: String): String
+
     private external fun nativeAlbumType(id: String): String
 
     private external fun nativePersonalFm(): String
@@ -363,6 +392,10 @@ object NcmBridge {
     private external fun nativeAlbumDetail(id: String): String
 
     private external fun nativeCollectionSub(kind: String, id: String, t: String): String
+
+    private external fun nativeLikedSongIds(uid: String): String
+
+    private external fun nativeSongLike(id: String, uid: String, liked: Boolean): String
 }
 
 @Serializable
@@ -390,6 +423,7 @@ private data class BridgeResponse(
     val blocks: List<HomeBlock> = emptyList(),
     val recent: List<RecentSong> = emptyList(),
     val reported: Boolean = false,
+    val likedSongIds: List<Long>? = null,
     // ---- 统一详情页 ----
     val id: Long = 0,
     val name: String = "",

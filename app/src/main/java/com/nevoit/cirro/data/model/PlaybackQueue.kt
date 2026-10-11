@@ -68,6 +68,8 @@ data class QueueEntry(
     val source: QueueSource? = null,
     val inserted: Boolean = false,
     val seq: Int = 0,
+    /** 手动添加也可能来自同一歌单，清理自动推荐不能只根据 [source] 判断。 */
+    val recommended: Boolean = false,
 )
 
 /**
@@ -92,6 +94,8 @@ data class PlaybackQueue(
     val shuffle: Boolean = false,
     /** 整队起播时的来源，切歌、插播和重排都保留；每首歌的出身仍看 [QueueEntry.source]。 */
     val source: QueueSource? = null,
+    /** 无限播放和循环互斥，随机仍独立；关闭时移除当前歌曲之后的自动推荐。 */
+    val infinite: Boolean = false,
 )
 
 /** 建队：歌单 / 专辑 / 每日推荐点一首、首页播一整块都走这里。随机模式下建队即打乱。 */
@@ -101,8 +105,9 @@ fun playQueueOf(
     source: QueueSource?,
     mode: PlayMode = PlayMode.SEQUENTIAL,
     shuffle: Boolean = false,
+    infinite: Boolean = false,
 ): PlaybackQueue {
-    if (songs.isEmpty()) return PlaybackQueue(mode = mode, shuffle = shuffle)
+    if (songs.isEmpty()) return PlaybackQueue(mode = mode, shuffle = shuffle, infinite = infinite)
     val index = startIndex.coerceIn(0, songs.lastIndex)
     val entries = songs.mapIndexed { i, song ->
         QueueEntry(uid = nextEntryUid(), song = song, source = source, seq = i)
@@ -113,6 +118,7 @@ fun playQueueOf(
         mode = mode,
         shuffle = shuffle,
         source = source,
+        infinite = infinite,
     )
     return if (shuffle) queue.shuffledTail() else queue
 }
@@ -167,6 +173,36 @@ fun PlaybackQueue.withInsert(song: Song, source: QueueSource?, at: Int): Playbac
     val entry = QueueEntry(uid = nextEntryUid(), song = song, source = source, inserted = true)
     val list = entries.toMutableList().apply { add(at.coerceIn(0, size), entry) }
     return copy(entries = list)
+}
+
+/** 推荐只追加到尾部；保留当前游标、用户插播和整队来源，排除已经入队的歌及批次内重复。 */
+fun PlaybackQueue.withRecommendations(songs: List<Song>, source: QueueSource): PlaybackQueue {
+    val seen = entries.mapTo(mutableSetOf()) { it.song.id }
+    val nextSeq = (entries.maxOfOrNull { it.seq } ?: -1) + 1
+    val added = songs.filter { it.id > 0 && seen.add(it.id) }.mapIndexed { index, song ->
+        QueueEntry(nextEntryUid(), song, source, seq = nextSeq + index, recommended = true)
+    }
+    return if (added.isEmpty()) this else copy(entries = entries + added)
+}
+
+fun PlaybackQueue.withInfinite(enabled: Boolean): PlaybackQueue =
+    if (enabled) copy(infinite = true, mode = PlayMode.SEQUENTIAL)
+    else copy(infinite = false, entries = entries.filterIndexed { index, entry ->
+        index <= currentIndex || !entry.recommended
+    })
+
+/** 连续推荐合并删除，范围按尾部优先排列，前面的索引不会因删除而失效。 */
+fun PlaybackQueue.pendingRecommendationRemovalRanges(): List<IntRange> = buildList {
+    var index = entries.lastIndex
+    while (index > currentIndex) {
+        if (!entries[index].recommended) {
+            index--
+            continue
+        }
+        val endExclusive = index + 1
+        while (index > currentIndex && entries[index].recommended) index--
+        add(index + 1 until endExclusive)
+    }
 }
 
 /** 切到随机：只重排当前位置**之后**的基准条目，插播条目和当前之前的队列条目原地不动。 */
