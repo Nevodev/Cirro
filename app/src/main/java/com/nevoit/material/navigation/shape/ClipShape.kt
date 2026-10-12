@@ -29,6 +29,9 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.toIntSize
+import com.kyant.shapes.Capsule
+import com.kyant.shapes.RoundedRectangle
+import com.kyant.shapes.RoundedRectangularShape
 import kotlin.math.min
 
 fun Modifier.clipShape(
@@ -118,8 +121,9 @@ private class ClipShapeNode(
             return
         }
 
-        if ((shape is G3RoundedRectangle || shape is G3Capsule) && cache) {
+        if ((shape is RoundedRectangle || shape is Capsule) && cache) {
             val cornerMask = getG3CornerMask(shape)
+
             if (cornerMask == null) {
                 drawContent()
                 return
@@ -188,7 +192,7 @@ private class ClipShapeNode(
         return bitmap
     }
 
-    private fun ContentDrawScope.getG3CornerMask(shape: G3RoundedRectangularShape): ImageBitmap? {
+    private fun ContentDrawScope.getG3CornerMask(shape: RoundedRectangularShape): ImageBitmap? {
         val intSize = size.toIntSize()
         if (intSize.width <= 0 || intSize.height <= 0) return null
 

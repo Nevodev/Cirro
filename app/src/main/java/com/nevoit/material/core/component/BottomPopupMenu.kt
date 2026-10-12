@@ -14,8 +14,8 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -84,7 +84,7 @@ internal class BottomPopupMenuRequest(
     val owner: Any,
     val originInWindow: Offset,
     val padding: Dp,
-    val shape: Shape,
+    val shape: androidx.compose.runtime.State<Shape>,
     val content: @Composable BottomPopupMenuScope.() -> Unit,
 )
 
@@ -119,7 +119,7 @@ fun BottomPopupMenu(
     menuContent: @Composable BottomPopupMenuScope.() -> Unit,
     modifier: Modifier = Modifier,
     padding: Dp = BottomPopupMenuDefaults.Padding,
-    shape: Shape = deviceCornerShape(padding = padding),
+    shape: Shape = deviceCornerShape(padding = padding, minRadius = 24.dp),
     enabled: Boolean = true,
     content: @Composable (openMenu: () -> Unit) -> Unit,
 ) {
@@ -128,18 +128,22 @@ fun BottomPopupMenu(
     val owner = remember { Any() }
     val origin = remember { mutableStateOf<Offset?>(null) }
     val latestMenu = rememberUpdatedState(menuContent)
+    val latestShape = rememberUpdatedState(shape)
     val callerLocals = currentCompositionLocalContext
-    val openMenu = remember(host, owner, padding, shape, enabled, callerLocals) {
+
+    val openMenu = remember(host, owner, padding, enabled, callerLocals) {
         {
             val center = origin.value
             if (enabled && center != null) {
-                host.show(BottomPopupMenuRequest(owner, center, padding, shape) {
-                    CompositionLocalProvider(callerLocals) {
-                        ProvideContentColor(MaterialTheme.colors.content) {
-                            latestMenu.value(this@BottomPopupMenuRequest)
+                host.show(
+                    BottomPopupMenuRequest(owner, center, padding, latestShape) {
+                        CompositionLocalProvider(callerLocals) {
+                            ProvideContentColor(MaterialTheme.colors.content) {
+                                latestMenu.value(this@BottomPopupMenuRequest)
+                            }
                         }
                     }
-                })
+                )
             }
         }
     }
@@ -210,7 +214,7 @@ private fun BottomPopupMenuLayer(
     var menuSize by remember { mutableStateOf(IntSize.Zero) }
     var viewportSize by remember { mutableStateOf(IntSize.Zero) }
     var viewportPosition by remember { mutableStateOf(Offset.Zero) }
-    val shape = request.shape
+
     val menuScope = remember(onDismiss, contentColor, contentVariantColor, actionContainerColor) {
         BottomPopupMenuScope(onDismiss, contentColor, contentVariantColor, actionContainerColor)
     }
@@ -306,7 +310,7 @@ private fun BottomPopupMenuLayer(
                             translationX = translation.x
                             translationY = translation.y
                             alpha = opacity.value.coerceIn(0f, 1f)
-                            this.shape = shape
+                            this.shape = request.shape.value
                             clip = true
                         }
                         .semantics {
@@ -361,6 +365,6 @@ internal fun bottomPopupMenuTranslation(
     // The viewport excludes system bars and menu padding. Transformed menu bounds would feed
     // the animation back into its own coordinate calculation.
     val menuCenter = viewportPositionInWindow +
-        Offset(viewportSize.width / 2f, viewportSize.height - menuSize.height / 2f)
+            Offset(viewportSize.width / 2f, viewportSize.height - menuSize.height / 2f)
     return (originInWindow - menuCenter) * (1f - progress)
 }

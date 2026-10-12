@@ -3,82 +3,126 @@ package com.nevoit.material.navigation.shape
 import android.os.Build
 import android.view.RoundedCorner
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.ui.graphics.RectangleShape
-import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.coerceAtLeast
 import androidx.compose.ui.unit.dp
+import com.kyant.shapes.UnevenRoundedRectangle
 
-class CornerRadii(
-    val topStart: Dp,
-    val topEnd: Dp,
-    val bottomStart: Dp,
-    val bottomEnd: Dp,
+internal data class DeviceCornerRadii(
+    val topLeft: Int = 0,
+    val topRight: Int = 0,
+    val bottomRight: Int = 0,
+    val bottomLeft: Int = 0,
 )
 
-@Composable
-fun deviceCornerShape(
-    padding: Dp = 0.dp,
-    topLeft: Boolean = true,
-    topRight: Boolean = true,
-    bottomRight: Boolean = true,
-    bottomLeft: Boolean = true,
-): Shape {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-        return RectangleShape
-    }
-    val view = LocalView.current
-    val density = LocalDensity.current
-    val configuration = LocalConfiguration.current
+internal class DeviceCornerState {
+    var radii by mutableStateOf(DeviceCornerRadii())
+        private set
 
-    return remember(view, configuration, padding, topLeft, topRight, bottomRight, bottomLeft) {
-        fun cornerRadius(position: Int, enabled: Boolean): Dp {
-            if (!enabled) return 0.dp
+    fun update(insets: android.view.WindowInsets) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
 
-            // Null when the panel is square, or when the platform does not report this corner at all —
-            // there is no distinction worth drawing between those two cases.
-            val inset = view.rootWindowInsets ?: return 0.dp
-            val radius =
-                with(density) { inset.getRoundedCorner(position)?.radius?.toFloat()?.toDp() }
-                    ?: return 0.dp
-            return (radius - padding).coerceAtLeast(0.dp)
+        val topLeft =
+            insets.getRoundedCorner(RoundedCorner.POSITION_TOP_LEFT)?.radius ?: 0
+        val topRight =
+            insets.getRoundedCorner(RoundedCorner.POSITION_TOP_RIGHT)?.radius ?: 0
+        val bottomRight =
+            insets.getRoundedCorner(RoundedCorner.POSITION_BOTTOM_RIGHT)?.radius ?: 0
+        val bottomLeft =
+            insets.getRoundedCorner(RoundedCorner.POSITION_BOTTOM_LEFT)?.radius ?: 0
+
+        val previous = radii
+        if (
+            previous.topLeft == topLeft &&
+            previous.topRight == topRight &&
+            previous.bottomRight == bottomRight &&
+            previous.bottomLeft == bottomLeft
+        ) {
+            return
         }
 
-        G3UnevenRoundedRectangle(
-            topStart = cornerRadius(RoundedCorner.POSITION_TOP_LEFT, topLeft),
-            topEnd = cornerRadius(RoundedCorner.POSITION_TOP_RIGHT, topRight),
-            bottomEnd = cornerRadius(RoundedCorner.POSITION_BOTTOM_RIGHT, bottomRight),
-            bottomStart = cornerRadius(RoundedCorner.POSITION_BOTTOM_LEFT, bottomLeft),
+        radii = DeviceCornerRadii(
+            topLeft = topLeft,
+            topRight = topRight,
+            bottomRight = bottomRight,
+            bottomLeft = bottomLeft,
         )
     }
 }
 
-@Composable
-fun deviceCornerRadii(): CornerRadii {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-        return CornerRadii(0.dp, 0.dp, 0.dp, 0.dp)
+internal val LocalDeviceCorners =
+    staticCompositionLocalOf<DeviceCornerState> {
+        error("DeviceCornerState has not been provided")
     }
-    val view = LocalView.current
-    val density = LocalDensity.current
 
-    return remember(LocalView.current, LocalConfiguration.current) {
-        fun cornerRadius(position: Int): Dp {
-            val inset = view.rootWindowInsets ?: return 0.dp
-            val radius =
-                with(density) { inset.getRoundedCorner(position)?.radius?.toFloat()?.toDp() }
-                    ?: return 0.dp
-            return radius
+private val NoDeviceCornerRadii = DeviceCornerRadii()
+
+@Composable
+internal fun deviceCornerShape(
+    padding: Dp = 0.dp,
+    topLeft: Dp? = null,
+    topRight: Dp? = null,
+    bottomRight: Dp? = null,
+    bottomLeft: Dp? = null,
+    minRadius: Dp = 0.dp,
+): UnevenRoundedRectangle {
+    val needsDeviceCorners =
+        topLeft == null ||
+                topRight == null ||
+                bottomRight == null ||
+                bottomLeft == null
+
+    val radii =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && needsDeviceCorners) {
+            LocalDeviceCorners.current.radii
+        } else {
+            NoDeviceCornerRadii
         }
 
-        CornerRadii(
-            topStart = cornerRadius(RoundedCorner.POSITION_TOP_LEFT),
-            topEnd = cornerRadius(RoundedCorner.POSITION_TOP_RIGHT),
-            bottomEnd = cornerRadius(RoundedCorner.POSITION_BOTTOM_RIGHT),
-            bottomStart = cornerRadius(RoundedCorner.POSITION_BOTTOM_LEFT),
+    val density = LocalDensity.current
+    val layoutDirection = LocalLayoutDirection.current
+
+    return remember(
+        radii,
+        density,
+        layoutDirection,
+        padding,
+        topLeft,
+        topRight,
+        bottomRight,
+        bottomLeft,
+        minRadius,
+    ) {
+        val minimum = minRadius.coerceAtLeast(0.dp)
+
+        fun radius(devicePx: Int, override: Dp?): Dp {
+            if (override != null) return override
+            if (devicePx <= 0) return minimum
+
+            return with(density) {
+                (devicePx.toDp() - padding).coerceAtLeast(minimum)
+            }
+        }
+
+        val tl = radius(radii.topLeft, topLeft)
+        val tr = radius(radii.topRight, topRight)
+        val br = radius(radii.bottomRight, bottomRight)
+        val bl = radius(radii.bottomLeft, bottomLeft)
+        val isLtr = layoutDirection == LayoutDirection.Ltr
+
+        UnevenRoundedRectangle(
+            topStart = if (isLtr) tl else tr,
+            topEnd = if (isLtr) tr else tl,
+            bottomStart = if (isLtr) bl else br,
+            bottomEnd = if (isLtr) br else bl,
         )
     }
 }
