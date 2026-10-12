@@ -44,7 +44,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel as androidxViewModel
  * Share of the entrance travel a page must complete before it *looks* settled — the default
  * threshold of [PageTransitionState.awaitNearlySettled].
  */
-private const val DefaultRevealProgress = 0.95f
+private const val DefaultRevealProgress = 0.995f
 
 /**
  * The entrance/exit state of the page currently rendering, handed to that page through
