@@ -46,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
@@ -63,7 +64,10 @@ import com.nevoit.cirro.playback.PlaybackConnection
 import com.nevoit.cirro.playback.PlayingCoverIndicator
 import com.nevoit.cirro.playback.rememberIsCurrentSong
 import com.nevoit.cirro.ui.ReflectionTransformation
+import com.nevoit.cirro.ui.CollectionCard
+import com.nevoit.cirro.ui.rememberCoverRequest
 import com.nevoit.material.core.component.HGap
+import com.nevoit.material.core.component.CircleIconButton
 import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.PageHeader
 import com.nevoit.material.core.component.Text
@@ -98,7 +102,7 @@ private val ShelfPadding = 12.dp
  * 接口也给了个标题，但那是「obviouslynev的雷达歌单」——带动加载中先空一块、数据回来再蹦出
  * 一串用户名，不如固定四个字稳。
  */
-private const val RadarShelfTitle = "雷达歌单"
+private const val RadarShelfTitle = "雷达播放列表"
 
 /**
  * 「最近播放」的区标题，**写死**。
@@ -221,6 +225,7 @@ private fun HomeTitle() {
 @Composable
 fun SectionTitle(
     text: String,
+    horizontalPadding: Dp = ShelfPadding * 2
 ) {
     Text(
         text = text,
@@ -230,7 +235,7 @@ fun SectionTitle(
         minLines = 1,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.padding(horizontal = ShelfPadding * 2),
+        modifier = Modifier.padding(horizontal = horizontalPadding),
     )
 }
 
@@ -440,12 +445,15 @@ private fun LazyItemScope.PlaylistCard(
 ) {
     val covers = rememberCovers(card.covers)
 
-    Column(
+    CollectionCard(
+        title = card.title,
+        // 雷达歌单没有可用副标题，留空才能保持卡片带的原有高度。
+        subtitle = card.subtitle,
+        onClick = onClick,
         modifier = modifier
             .animateItem(placementSpec = Springs.crisp())
             .width(PlaylistCardSize)
-            .clip(RoundedRectangle(PlaylistCardCorner))
-            .clickable(onClick = onClick)
+            .clip(RoundedRectangle(PlaylistCardCorner)),
     ) {
         Box(
             modifier = Modifier
@@ -453,7 +461,7 @@ private fun LazyItemScope.PlaylistCard(
                 .clip(RoundedRectangle(PlaylistCardCorner))
         ) {
             AsyncImage(
-                model = listCoverModel(covers.current),
+                model = rememberCoverRequest(covers.current),
                 contentDescription = null,
                 onError = { covers.advance() },
                 contentScale = ContentScale.Crop,
@@ -469,30 +477,6 @@ private fun LazyItemScope.PlaylistCard(
                         .size(20.dp)
                 )
             }
-        }
-        VGap(8.dp)
-        Text(
-            text = card.title,
-            style = MaterialTheme.type.subHeadline,
-            color = MaterialTheme.colors.content,
-            minLines = 1,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 4.dp),
-        )
-        // 小字是**可选**的：只有能给出一行有意义的副标题时才占这一行。
-        // 雷达歌单那排就不给——那儿除了歌单名没有别的可说，硬凑一行只会让卡片变高、变空。
-        val subtitle = card.subtitle
-        if (subtitle != null) {
-            Text(
-                text = subtitle,
-                style = MaterialTheme.type.footnote,
-                color = MaterialTheme.colors.contentVariant,
-                minLines = 1,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = 4.dp),
-            )
         }
     }
 }
@@ -546,7 +530,7 @@ private fun SongRow(
                 .clip(RoundedRectangle(8.dp)),
         ) {
             AsyncImage(
-                model = listCoverModel(song.cover),
+                model = rememberCoverRequest(song.cover),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.matchParentSize(),
@@ -571,20 +555,13 @@ private fun SongRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Box(
-            modifier = Modifier
-                .size(48.dp)
-                .clip(CircleShape)
-                .clickable(onClick = onClick),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                painter = painterResource(R.drawable.play_fill),
-                contentDescription = "播放",
-                modifier = Modifier.size(28.dp),
-                tint = MaterialTheme.colors.content,
-            )
-        }
+        CircleIconButton(
+            iconRes = R.drawable.play_fill,
+            label = "播放",
+            background = Color.Transparent,
+            tint = MaterialTheme.colors.content,
+            onClick = onClick,
+        )
     }
 }
 
@@ -613,27 +590,6 @@ private fun coverModel(url: String?): Any? {
                         riseDp = CardRise.value,
                     )
                 )
-                .crossfade(true)
-                .build()
-        }
-    }
-}
-
-/**
- * 列表里那些小封面的请求：只挂一个淡入，其余交给 Coil。
- *
- * 跟 [coverModel] 的区别就在这儿 —— 大卡要倒影、要按卡片像素尺寸出图；这里的图和布局盒子
- * 一一对应，让 Coil 按量到的大小自己解码就行，指了尺寸反而多一层。
- *
- * 地址为 null 或空时返回 null，Coil 什么都不画，露出底色。
- */
-@Composable
-private fun listCoverModel(url: String?): Any? {
-    val context = LocalContext.current
-    return remember(url, context) {
-        url?.takeIf { it.isNotEmpty() }?.let {
-            ImageRequest.Builder(context)
-                .data(it)
                 .crossfade(true)
                 .build()
         }

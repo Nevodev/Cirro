@@ -1,0 +1,183 @@
+package com.nevoit.cirro.library
+
+import android.content.Intent
+import android.widget.Toast
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.nevoit.cirro.data.LibraryRepository
+import com.nevoit.cirro.data.model.CollectionKind
+import com.nevoit.cirro.data.model.QueueSource
+import com.nevoit.cirro.data.model.Session
+import com.nevoit.cirro.data.model.Song
+import com.nevoit.cirro.data.model.forSession
+import com.nevoit.cirro.data.model.hasPendingInserts
+import com.nevoit.cirro.home.OpenCollection
+import com.nevoit.cirro.home.LoginCard
+import com.nevoit.cirro.playback.PlaybackConnection
+import com.nevoit.cirro.playback.rememberIsCurrentSong
+import com.nevoit.cirro.ui.SongMenuContent
+import com.nevoit.cirro.ui.SongMenuViewModel
+import com.nevoit.cirro.ui.BottomShade
+import com.nevoit.cirro.ui.TrackRow
+import com.nevoit.cirro.ui.resolvePosition
+import com.nevoit.material.core.component.BottomPopupMenuScope
+import com.nevoit.material.core.component.PageHeader
+import com.nevoit.material.core.component.VGap
+import com.nevoit.material.core.interaction.rememberFlingBehavior
+import com.nevoit.material.theme.MaterialTheme
+import com.nevoit.material.theme.tokens.Springs
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.koinInject
+import kotlin.random.Random
+
+@Composable
+fun BoxScope.LibrarySongsRoute(
+    session: Session,
+    onBack: () -> Unit,
+    onOpenCollection: OpenCollection,
+) {
+    val repository = koinInject<LibraryRepository>()
+    val library by repository.content.collectAsStateWithLifecycle()
+    val content = library?.forSession(session)
+    val loading by repository.loading.collectAsStateWithLifecycle()
+    val error by repository.error.collectAsStateWithLifecycle()
+    val viewModel = koinViewModel<LibraryViewModel>()
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refresh() }
+    val songs = content?.songs.orEmpty()
+    var songsLoading by remember(content?.userId) { mutableStateOf(false) }
+    var songsError by remember(content?.userId) { mutableStateOf<String?>(null) }
+    val refreshVersion by viewModel.refreshVersion.collectAsStateWithLifecycle()
+    val albumIds = content?.albumIds.orEmpty()
+    LaunchedEffect(content?.userId, albumIds, session, refreshVersion) {
+        if (content != null && session is Session.LoggedIn) {
+            songsLoading = true
+            try {
+                repository.songs().onSuccess { songsError = null }
+                    .onFailure { songsError = "歌曲未能加载，点按重试" }
+            } finally {
+                songsLoading = false
+            }
+        }
+    }
+    val playback = koinInject<PlaybackConnection>()
+    val queueActions by remember(playback) {
+        playback.queue.map { it.entries.isNotEmpty() to it.hasPendingInserts }
+            .distinctUntilChanged()
+    }.collectAsState(initial = false to false)
+    val menu = koinViewModel<SongMenuViewModel>()
+    val context = LocalContext.current
+    LaunchedEffect(menu) {
+        menu.messages.collect { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+    }
+    val source = remember { QueueSource(title = "歌曲") }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().background(MaterialTheme.colors.pageBackground),
+        flingBehavior = rememberFlingBehavior(),
+    ) {
+        item(key = "title") {
+            PageHeader(title = "歌曲", modifier = Modifier.padding(horizontal = 12.dp))
+        }
+        if (error != null) item(key = "library_error") {
+            LibraryStatus(error.orEmpty(), viewModel::refresh)
+        }
+        if (session == Session.LoggedOut) {
+            item(key = "login") { LoginCard(Modifier.padding(horizontal = 12.dp)) }
+        } else if (content == null) {
+            item(key = "loading") {
+                LibraryStatus(if (session == Session.Offline) "恢复登录后加载资料库" else "正在加载资料库…")
+            }
+        } else {
+            item(key = "play") {
+                Column(Modifier.padding(horizontal = 12.dp)) {
+                    LibraryPlaybackButtons(
+                        enabled = songs.isNotEmpty(),
+                        onPlay = { if (songs.isNotEmpty()) playback.playSongs(songs, 0, source) },
+                        onShuffle = {
+                            if (songs.isNotEmpty()) playback.playSongs(songs, Random.nextInt(songs.size), source)
+                        },
+                    )
+                    VGap(24.dp)
+                }
+            }
+            if (songsError != null) item(key = "error") {
+                LibraryStatus(songsError.orEmpty(), viewModel::refresh)
+            }
+            if (songs.isEmpty()) item(key = "empty") {
+                LibraryStatus(if (songsLoading || loading) "正在加载歌曲…" else "暂无歌曲")
+            }
+            itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
+                val play = { playback.playSongs(songs, index, source) }
+                TrackRow(
+                    song = song,
+                    backgroundColor = MaterialTheme.colors.cardBackground,
+                    showArtist = true,
+                    index = null,
+                    position = resolvePosition(songs.size, index),
+                    isPlaying = rememberIsCurrentSong(song.id),
+                    content = MaterialTheme.colors.content,
+                    contentVariant = MaterialTheme.colors.contentVariant,
+                    onClick = play,
+                    menuContent = {
+                        LibrarySongMenuContent(song, source, playback, menu, queueActions, onOpenCollection, play)
+                    },
+                    modifier = Modifier.animateItem(tween(200), Springs.crisp(), tween(200))
+                        .padding(horizontal = 12.dp),
+                )
+                if (index < songs.lastIndex) VGap(4.dp)
+            }
+        }
+        item(key = "footer") { LibraryFooter() }
+    }
+    BottomShade(color = MaterialTheme.colors.pageBackground)
+    LibraryBackButton(onBack)
+}
+
+@Composable
+private fun BottomPopupMenuScope.LibrarySongMenuContent(
+    song: Song,
+    source: QueueSource,
+    playback: PlaybackConnection,
+    menu: SongMenuViewModel,
+    queueActions: Pair<Boolean, Boolean>,
+    onOpenCollection: OpenCollection,
+    onPlay: () -> Unit,
+) {
+    val context = LocalContext.current
+    SongMenuContent(
+        song, queueActions.first, queueActions.second, menu,
+        onPlay = onPlay,
+        onAddNext = { playback.addNext(song, source) },
+        onAddToInsertQueue = { playback.addToInsertQueue(song, source) },
+        onShare = {
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, "${song.name} - ${song.artistText}\nhttps://music.163.com/song?id=${song.id}")
+            }
+            context.startActivity(Intent.createChooser(intent, "分享歌曲"))
+        },
+        onOpenAlbum = { onOpenCollection(CollectionKind.ALBUM, it.albumId, it.album, it.cover) },
+        onOpenArtist = { id, name -> onOpenCollection(CollectionKind.ARTIST, id, name, "") },
+    )
+}

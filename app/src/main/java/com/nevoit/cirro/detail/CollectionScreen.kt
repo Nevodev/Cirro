@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -30,6 +29,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -55,25 +55,31 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import coil3.request.transformations
 import com.kyant.shapes.RoundedRectangle
-import com.kyant.shapes.UnevenRoundedRectangle
 import com.nevoit.cirro.R
+import com.nevoit.cirro.data.AccountRepository
+import com.nevoit.cirro.data.LibraryRepository
 import com.nevoit.cirro.data.model.CollectionInfo
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.QueueSource
+import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.data.model.Song
+import com.nevoit.cirro.data.model.forSession
 import com.nevoit.cirro.data.model.hasPendingInserts
+import com.nevoit.cirro.data.model.likedPlaylistInfo
+import com.nevoit.cirro.data.model.tracksForAlbum
 import com.nevoit.cirro.home.Section
 import com.nevoit.cirro.home.dataOrNull
 import com.nevoit.cirro.palette.CoverPalette
 import com.nevoit.cirro.palette.CoverSeed
 import com.nevoit.cirro.playback.PlaybackConnection
-import com.nevoit.cirro.playback.PlayingCoverIndicator
-import com.nevoit.cirro.playback.PlayingTrackNumber
 import com.nevoit.cirro.ui.BottomShade
 import com.nevoit.cirro.ui.ReflectionTransformation
 import com.nevoit.cirro.ui.SongMenuContent
 import com.nevoit.cirro.ui.SongMenuViewModel
 import com.nevoit.cirro.ui.TopShade
+import com.nevoit.cirro.ui.TrackRow
+import com.nevoit.cirro.ui.resolvePosition
+import com.nevoit.cirro.ui.rememberCoverRequest
 import com.nevoit.material.core.animation.rememberPressAnimatable
 import com.nevoit.material.core.component.BottomPopupMenu
 import com.nevoit.material.core.component.BottomPopupMenuScope
@@ -94,6 +100,7 @@ import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.tokens.Springs
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import org.koin.core.parameter.parametersOf
@@ -140,13 +147,6 @@ private const val CircleIconToneDark = 90.0
 
 private const val CircleIconToneLight = 30.0
 
-private enum class ItemPosition {
-    Single,
-    First,
-    Middle,
-    Last,
-}
-
 /**
  * 统一详情页（歌单 / 专辑 / 每日推荐 / 艺术家热门歌曲）。
  *
@@ -163,13 +163,61 @@ fun CollectionRoute(
     onBack: () -> Unit,
     onOpenCollection: (CollectionKind, Long, String, String) -> Unit,
     modifier: Modifier = Modifier,
+    libraryAlbum: Boolean = false,
+    likedPlaylist: Boolean = false,
 ) {
     val viewModel: CollectionViewModel = koinViewModel {
         parametersOf(kind, id, titleHint)
     }
     val playback = koinInject<PlaybackConnection>()
     val songMenu: SongMenuViewModel = koinViewModel()
-    val state by viewModel.state.collectAsState()
+    val remoteState by viewModel.state.collectAsState()
+    val libraryRepository = koinInject<LibraryRepository>()
+    val library by libraryRepository.snapshot.collectAsState()
+    val libraryError by libraryRepository.error.collectAsState()
+    val session by koinInject<AccountRepository>().session.collectAsState()
+    val scope = rememberCoroutineScope()
+    var tracksRevealed by remember(viewModel) { mutableStateOf(false) }
+    val state = remember(remoteState, library, libraryError, session, libraryAlbum, likedPlaylist, id, tracksRevealed) {
+        val liked = library?.forSession(session)?.takeIf { likedPlaylist && it.likedPlaylistId == id }
+        if (liked != null) {
+            remoteState.copy(
+                info = Section.Ready(liked.likedPlaylistInfo(
+                    (session as? Session.LoggedIn)?.profile?.nickname.orEmpty(),
+                    remoteState.info.dataOrNull,
+                )),
+                songs = when {
+                    !liked.likesLoaded -> remoteState.songs
+                    tracksRevealed -> Section.Ready(liked.likedSongs)
+                    else -> Section.Loading
+                },
+            )
+        } else if (libraryAlbum && remoteState.songs is Section.Ready) {
+            val uid = (session as? Session.LoggedIn)?.profile?.userId
+            val snapshot = library?.takeIf { it.userId == uid }
+            when {
+                snapshot?.albums?.any { it.info.id == id } == true -> remoteState
+                snapshot?.likesLoaded == true -> remoteState.copy(
+                    songs = Section.Ready(
+                        snapshot.tracksForAlbum(
+                            id,
+                            remoteState.songs.dataOrNull.orEmpty()
+                        )
+                    ),
+                )
+
+                libraryError != null -> remoteState.copy(songs = Section.Failed(libraryError.orEmpty()))
+                else -> remoteState.copy(songs = Section.Loading)
+            }
+        } else remoteState
+    }
+    val albumTrackNumbers = remember(libraryAlbum, kind, remoteState.songs) {
+        if (libraryAlbum && kind == CollectionKind.ALBUM) {
+            remoteState.songs.dataOrNull.orEmpty()
+                .mapIndexed { index, song -> song.id to index + 1 }
+                .toMap()
+        } else emptyMap()
+    }
     val context = LocalContext.current
 
     LaunchedEffect(viewModel) {
@@ -193,6 +241,7 @@ fun CollectionRoute(
     LaunchedEffect(viewModel, pageTransition) {
         pageTransition?.awaitNearlySettled()
         viewModel.revealTracks()
+        tracksRevealed = true
     }
 
     val songs = state.songs.dataOrNull.orEmpty()
@@ -222,6 +271,8 @@ fun CollectionRoute(
 
     CollectionScreen(
         state = state,
+        likedPlaylist = likedPlaylist,
+        albumTrackNumbers = albumTrackNumbers,
         displayTitle = viewModel.displayTitle,
         coverUrl = coverUrl,
         onCoverError = { coverHintFailed = true },
@@ -278,7 +329,10 @@ fun CollectionRoute(
             }
         },
         onToggleSubscribed = viewModel::toggleSubscribed,
-        onRetry = viewModel::load,
+        onRetry = {
+            viewModel.load()
+            if (libraryAlbum || likedPlaylist) scope.launch { libraryRepository.refresh() }
+        },
         onBack = onBack,
         onShare = {
             val link = when (kind) {
@@ -300,6 +354,8 @@ fun CollectionRoute(
 @Composable
 private fun CollectionScreen(
     state: CollectionViewModel.UiState,
+    likedPlaylist: Boolean,
+    albumTrackNumbers: Map<Long, Int>,
     displayTitle: String,
     coverUrl: String,
     onCoverError: () -> Unit,
@@ -401,6 +457,7 @@ private fun CollectionScreen(
 
                     else -> HeaderBlock(
                         info = info,
+                        likedPlaylist = likedPlaylist,
                         displayTitle = displayTitle,
                         coverUrl = coverUrl,
                         onCoverError = onCoverError,
@@ -460,7 +517,9 @@ private fun CollectionScreen(
                                 song = song,
                                 backgroundColor = itemBgColor,
                                 showArtist = song.artistText != state.info.dataOrNull?.author,
-                                index = if (state.info.dataOrNull?.kind == CollectionKind.ALBUM) index + 1 else null,
+                                index = if (state.info.dataOrNull?.kind == CollectionKind.ALBUM) {
+                                    albumTrackNumbers[song.id] ?: (index + 1)
+                                } else null,
                                 position = resolvePosition(songs.size, index),
                                 isPlaying = song.id == playingId,
                                 content = contentColor,
@@ -534,6 +593,7 @@ private fun CollectionScreen(
 @Composable
 private fun HeaderBlock(
     info: CollectionInfo?,
+    likedPlaylist: Boolean,
     displayTitle: String,
     coverUrl: String,
     onCoverError: () -> Unit,
@@ -627,7 +687,7 @@ private fun HeaderBlock(
                 }
             )
 
-            val meta = metaLine(info)
+            val meta = if (likedPlaylist) relativeAddedDay(info?.updateTimeMs ?: 0) else metaLine(info)
             if (meta.isNotEmpty()) {
                 VGap(4.dp)
                 Text(
@@ -645,7 +705,7 @@ private fun HeaderBlock(
 
             VGap(16.dp)
             HeaderActions(
-                canCollect = info != null && info.kind != CollectionKind.DAILY,
+                canCollect = info != null && info.kind != CollectionKind.DAILY && !likedPlaylist,
                 subscribed = info?.subscribed == true,
                 subBusy = subBusy,
                 buttonColor = buttonColor,
@@ -733,106 +793,6 @@ private fun HeaderActions(
             )
         } else {
             Spacer(modifier = Modifier.size(56.dp))
-        }
-    }
-}
-
-/** 曲目一行：序号或封面 + 歌名/歌手 + 更多操作。整行就是播放入口。 */
-@Composable
-private fun TrackRow(
-    song: Song,
-    backgroundColor: Color,
-    showArtist: Boolean,
-    index: Int?,
-    position: ItemPosition,
-    isPlaying: Boolean,
-    content: Color,
-    contentVariant: Color,
-    onClick: () -> Unit,
-    menuContent: @Composable BottomPopupMenuScope.() -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val shape = when (position) {
-        ItemPosition.Single -> RoundedRectangle(20.dp)
-        ItemPosition.First -> UnevenRoundedRectangle(20.dp, 20.dp, 8.dp, 8.dp)
-        ItemPosition.Middle -> RoundedRectangle(8.dp)
-        ItemPosition.Last -> UnevenRoundedRectangle(8.dp, 8.dp, 20.dp, 20.dp)
-    }
-
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .heightIn(min = 56.dp)
-            .clip(shape)
-            .background(backgroundColor)
-            .clickable(onClick = onClick)
-            .padding(start = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (index == null) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedRectangle(TrackCorner)),
-            ) {
-                AsyncImage(
-                    model = coverRequest(song.cover),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.matchParentSize(),
-                )
-                PlayingCoverIndicator(isPlaying, Modifier.matchParentSize())
-            }
-        } else {
-            PlayingTrackNumber(
-                index = index,
-                isCurrent = isPlaying,
-                color = contentVariant,
-                style = MaterialTheme.type.body.copy(fontFeatureSettings = "tnum"),
-                modifier = Modifier.width(32.dp),
-            )
-        }
-        HGap()
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(vertical = 12.dp)
-        ) {
-            Text(
-                text = song.name,
-                style = MaterialTheme.type.body,
-                color = content,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (showArtist) {
-                Text(
-                    text = song.artistText,
-                    style = MaterialTheme.type.subHeadline2,
-                    color = contentVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-        HGap()
-        BottomPopupMenu(
-            menuContent = menuContent
-        ) { openMenu ->
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(RoundedRectangle(24.dp))
-                    .clickable(onClick = openMenu),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ellipsis_vertical),
-                    contentDescription = "更多",
-                    modifier = Modifier.size(24.dp),
-                    tint = contentVariant,
-                )
-            }
         }
     }
 }
@@ -964,20 +924,6 @@ private fun headerCoverModel(url: String, widthDp: Int): Any? {
     }
 }
 
-/** 详情页封面请求：一个淡入即可，尺寸交给 Coil 按布局量。 */
-@Composable
-private fun coverRequest(url: String): Any? {
-    val context = LocalContext.current
-    return remember(url) {
-        url.takeIf { it.isNotEmpty() }?.let {
-            ImageRequest.Builder(context)
-                .data(it)
-                .crossfade(true)
-                .build()
-        }
-    }
-}
-
 /**
  * 头部元信息一行（小标题）：专辑给「年份」、单曲/EP 给「年份 · 类型」、
  * 歌单给「更新时间」。每日推荐的日期已在作者位，这行让空。
@@ -1050,15 +996,4 @@ private fun formatDuration(ms: Long): String {
     if (ms <= 0) return ""
     val totalSeconds = ms / 1000
     return "${totalSeconds / 60}:${(totalSeconds % 60).toString().padStart(2, '0')}"
-}
-
-private fun resolvePosition(size: Int, index: Int): ItemPosition {
-    // 单元素列表（Single 专辑就 1 首）四角都要圆，让 First 和 Last 的圆角叠加不了，
-    // 单给一个值
-    return when {
-        size <= 1 -> ItemPosition.Single
-        index == 0 -> ItemPosition.First
-        index == size - 1 -> ItemPosition.Last
-        else -> ItemPosition.Middle
-    }
 }

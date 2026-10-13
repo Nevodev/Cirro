@@ -4,9 +4,12 @@ import com.nevoit.cirro.data.model.CollectionInfo
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.Playlist
 import com.nevoit.cirro.data.model.Song
+import com.nevoit.cirro.data.model.Session
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import java.time.LocalDate
 import java.time.format.TextStyle
 import java.util.Locale
@@ -27,6 +30,7 @@ private const val DailyTitle = "每日推荐"
  */
 class CollectionRepository(
     private val home: HomeRepository,
+    private val account: AccountRepository,
 ) {
 
     private val infoCache = ConcurrentHashMap<String, CollectionInfo>()
@@ -34,6 +38,10 @@ class CollectionRepository(
     /** 专辑详情捎回来的歌，按专辑 id 分槽（专辑内容不变，缓存到换号为止）。 */
     private val albumSongs = ConcurrentHashMap<Long, List<Song>>()
     private val artistSongs = ConcurrentHashMap<Long, List<Song>>()
+
+    data class Change(val userId: Long, val info: CollectionInfo, val subscribed: Boolean)
+    private val _changes = MutableSharedFlow<Change>(extraBufferCapacity = 32)
+    val changes = _changes.asSharedFlow()
 
     /** 详情头部信息。每日推荐的 id 恒为 0，缓存键天然只有一份。 */
     suspend fun info(kind: CollectionKind, id: Long): Result<CollectionInfo> =
@@ -76,10 +84,20 @@ class CollectionRepository(
         id: Long,
         subscribe: Boolean,
     ): Result<Unit> = withContext(Dispatchers.IO) {
+        val userId = (account.session.value as? Session.LoggedIn)?.profile?.userId ?: 0
         val result = NcmBridge.setCollectionSubscribed(kind, id, subscribe)
         result.onSuccess {
             val key = "$kind:$id"
-            infoCache[key]?.let { infoCache[key] = it.copy(subscribed = subscribe) }
+            infoCache[key]?.let {
+                infoCache[key] = it.copy(subscribed = subscribe)
+                _changes.emit(Change(userId, it, subscribe))
+            }
+        }
+    }
+
+    fun updateLibrarySubscriptions(kind: CollectionKind, ids: Set<Long>) {
+        infoCache.replaceAll { _, info ->
+            if (info.kind == kind) info.copy(subscribed = info.id in ids) else info
         }
     }
 

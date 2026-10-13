@@ -5,6 +5,8 @@ import com.nevoit.cirro.data.model.CollectionDetail
 import com.nevoit.cirro.data.model.CollectionInfo
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.HomeBlock
+import com.nevoit.cirro.data.model.LibraryCollection
+import com.nevoit.cirro.data.model.LibraryTrack
 import com.nevoit.cirro.data.model.Playlist
 import com.nevoit.cirro.data.model.Ranking
 import com.nevoit.cirro.data.model.RecentSong
@@ -213,7 +215,7 @@ object NcmBridge {
     fun likedPlaylistId(userId: Long): Result<Long> = runCatching {
         require(userId > 0)
         decode(nativeLikedPlaylistId(userId.toString())).getOrThrow().id.also {
-            check(it > 0) { "未能获取我喜欢的音乐歌单" }
+            check(it > 0) { "未能获取喜爱歌曲播放列表" }
         }
     }
 
@@ -333,7 +335,7 @@ object NcmBridge {
     fun likedSongIds(userId: Long): Result<Set<Long>> = runCatching {
         require(userId > 0)
         decode(nativeLikedSongIds(userId.toString())).getOrThrow().likedSongIds
-            ?.toSet() ?: error("喜欢歌曲列表缺少 ids")
+            ?.toSet() ?: error("喜爱歌曲列表缺少 ids")
     }
 
     /** 歌曲红心，与歌单 / 专辑的收藏接口独立。 */
@@ -350,7 +352,7 @@ object NcmBridge {
             val page = decode(nativeOwnedPlaylists(userId.toString(), offset)).getOrThrow()
             playlists += page.playlists
             if (!page.more) break
-            check(page.nextOffset > offset) { "歌单分页没有前进" }
+            check(page.nextOffset > offset) { "播放列表分页没有前进" }
             offset = page.nextOffset
         } while (true)
         playlists.distinctBy { it.id }
@@ -359,6 +361,25 @@ object NcmBridge {
     fun addSongToPlaylist(songId: Long, playlistId: Long): Result<Unit> = runCatching {
         require(songId > 0 && playlistId > 0)
         decode(nativeAddSongToPlaylist(playlistId.toString(), songId.toString())).getOrThrow()
+    }
+
+    fun libraryCollections(kind: CollectionKind, userId: Long): Result<List<LibraryCollection>> = runCatching {
+        require(userId > 0 && kind in listOf(CollectionKind.PLAYLIST, CollectionKind.ALBUM, CollectionKind.ARTIST))
+        val items = mutableListOf<LibraryCollection>()
+        var offset = 0
+        do {
+            val page = decode(nativeLibraryPage(kind.name, userId.toString(), offset)).getOrThrow()
+            items += page.libraryItems
+            if (!page.more) break
+            check(page.nextOffset > offset) { "资料库分页没有前进" }
+            offset = page.nextOffset
+        } while (true)
+        items.distinctBy { it.info.id }
+    }
+
+    fun likedTracks(playlistId: Long): Result<List<LibraryTrack>> = runCatching {
+        require(playlistId > 0)
+        decode(nativeLikedTracks(playlistId.toString())).getOrThrow().libraryTracks
     }
 
     /**
@@ -439,6 +460,10 @@ object NcmBridge {
     private external fun nativeOwnedPlaylists(uid: String, offset: Int): String
 
     private external fun nativeAddSongToPlaylist(pid: String, songId: String): String
+
+    private external fun nativeLibraryPage(kind: String, uid: String, offset: Int): String
+
+    private external fun nativeLikedTracks(id: String): String
 }
 
 @Serializable
@@ -469,6 +494,8 @@ private data class BridgeResponse(
     val recent: List<RecentSong> = emptyList(),
     val reported: Boolean = false,
     val likedSongIds: List<Long>? = null,
+    val libraryItems: List<LibraryCollection> = emptyList(),
+    val libraryTracks: List<LibraryTrack> = emptyList(),
     // ---- 统一详情页 ----
     val id: Long = 0,
     val name: String = "",

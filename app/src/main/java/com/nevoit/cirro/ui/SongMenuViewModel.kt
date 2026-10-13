@@ -62,7 +62,7 @@ class SongMenuViewModel(
         if (pendingLike != null) return
         val liked = likes.isLiked(songId, uid) ?: run {
             likes.ensureLoaded()
-            _messages.trySend("喜欢状态加载中，请稍后重试")
+            _messages.trySend("喜爱状态加载中，请稍后重试")
             return
         }
         val request = PendingLike(songId, uid, !liked)
@@ -72,7 +72,7 @@ class SongMenuViewModel(
             try {
                 likes.setLiked(songId, uid, request.liked).onFailure {
                     if (session.value.userIdOrNull() == uid) {
-                        _messages.trySend(if (request.liked) "喜欢歌曲失败，请稍后重试" else "取消喜欢失败，请稍后重试")
+                        _messages.trySend(if (request.liked) "喜爱歌曲失败，请稍后重试" else "取消喜爱失败，请稍后重试")
                     }
                 }
             } finally {
@@ -100,7 +100,7 @@ class SongMenuViewModel(
                 it.copy(
                     loadingPlaylists = false,
                     playlists = result.getOrNull(),
-                    playlistError = result.exceptionOrNull()?.message ?: if (result.isFailure) "加载歌单失败" else null,
+                    playlistError = result.exceptionOrNull()?.message ?: if (result.isFailure) "加载播放列表失败" else null,
                 )
             }
         }
@@ -121,7 +121,7 @@ class SongMenuViewModel(
                     _messages.trySend("已添加到「${playlist.name}」")
                     onAdded()
                 }.onFailure {
-                    _messages.trySend(it.message ?: "添加到歌单失败，请稍后重试")
+                    _messages.trySend(it.message ?: "添加到播放列表失败，请稍后重试")
                 }
             } finally {
                 if (addingRequest === request) {

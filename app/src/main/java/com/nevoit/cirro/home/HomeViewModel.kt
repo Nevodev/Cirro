@@ -9,6 +9,7 @@ import com.nevoit.cirro.data.model.HomeBlock
 import com.nevoit.cirro.data.model.Playlist
 import com.nevoit.cirro.data.model.RecentAlbum
 import com.nevoit.cirro.data.model.Song
+import com.nevoit.cirro.data.model.albumDisplayTitle
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -522,13 +523,9 @@ private fun recentAlbumsShelf(
     items: List<RecentAlbum>,
     albumType: (Long) -> String? = { null },
 ): List<ShelfCard> = items.map { item ->
-    val suffix = albumType(item.id)
-        ?.takeIf { it.equals("Single", ignoreCase = true) }
-        ?.let { " - Single" }
-        .orEmpty()
     ShelfCard(
         id = item.id,
-        title = item.title + suffix,
+        title = albumDisplayTitle(item.title, albumType(item.id)),
         covers = listOfNotNull(item.cover.takeIf { it.isNotEmpty() }),
         subtitle = item.artistText.takeIf { it.isNotEmpty() },
     )

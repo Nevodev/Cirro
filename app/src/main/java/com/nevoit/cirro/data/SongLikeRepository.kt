@@ -60,6 +60,27 @@ class SongLikeRepository(
 
     fun onForeground() = requestSync(onlyMissing = false)
 
+    suspend fun refreshNow(userId: Long): Result<Set<Long>> = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            if (session.value.userIdOrNull() != userId) {
+                return@withLock Result.failure(IllegalStateException("账号已切换"))
+            }
+            if (_snapshot.value.userId != userId) changeAccount(userId)
+            val result = read(userId)
+            if (session.value.userIdOrNull() != userId) {
+                return@withLock Result.failure(IllegalStateException("账号已切换"))
+            }
+            result.onSuccess { ids ->
+                syncJob?.cancel()
+                syncJob = null
+                loadedAtMs = nowMs()
+                retryAtMs = null
+                retryDelayMs = InitialRetryDelayMs
+                _snapshot.value = Snapshot(userId, ids.toSet())
+            }
+        }
+    }
+
     private fun requestSync(onlyMissing: Boolean): Job =
         scope.launch {
             mutex.withLock {

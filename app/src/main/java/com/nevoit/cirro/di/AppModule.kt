@@ -7,6 +7,7 @@ import com.nevoit.cirro.data.CollectionRepository
 import com.nevoit.cirro.data.EncryptedSecretStore
 import com.nevoit.cirro.data.HomeRepository
 import com.nevoit.cirro.data.IntelligenceRepository
+import com.nevoit.cirro.data.LibraryRepository
 import com.nevoit.cirro.data.PlayQueueStore
 import com.nevoit.cirro.data.SessionStore
 import com.nevoit.cirro.data.SongLikeRepository
@@ -14,6 +15,7 @@ import com.nevoit.cirro.ui.SongMenuViewModel
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.detail.CollectionViewModel
 import com.nevoit.cirro.home.HomeViewModel
+import com.nevoit.cirro.library.LibraryViewModel
 import com.nevoit.cirro.login.QrLoginViewModel
 import com.nevoit.cirro.lyrics.data.AppleMusicAccountRepository
 import com.nevoit.cirro.lyrics.data.AppleMusicTokenStore
@@ -67,7 +69,7 @@ val appModule = module {
 
     single { HomeRepository(androidContext(), get(ApplicationScope), get()) }
 
-    single { CollectionRepository(get()) }
+    single { CollectionRepository(get(), get()) }
 
     single {
         SongLikeRepository(get(ApplicationScope), get<AccountRepository>().session, onFailure = {
@@ -76,6 +78,7 @@ val appModule = module {
     }
 
     single { CoverPalette(androidContext(), get(ApplicationScope)) }
+    single { LibraryRepository(androidContext(), get(ApplicationScope), get(), get(), get()) }
 
     // 歌词：独立的一个原生库（libcirro_lyrics.so）。快照落盘 + 四级取词链，
     // 切歌时由 PlaybackService 预取。
@@ -91,6 +94,7 @@ val appModule = module {
     viewModelOf(::QrLoginViewModel)
 
     viewModelOf(::HomeViewModel)
+    viewModelOf(::LibraryViewModel)
 
     viewModelOf(::PlayerLikeViewModel)
 

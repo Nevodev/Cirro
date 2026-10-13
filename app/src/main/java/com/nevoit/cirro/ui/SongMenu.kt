@@ -89,7 +89,7 @@ fun BottomPopupMenuScope.SongMenuContent(
                 contentColor
             ) { choosingPlaylist = false }
             when {
-                state.loadingPlaylists -> SongMenuStatus("加载歌单中…", contentVariantColor)
+                state.loadingPlaylists -> SongMenuStatus("加载播放列表中…", contentVariantColor)
                 state.playlistError != null -> {
                     SongMenuStatus(state.playlistError.orEmpty(), contentVariantColor)
                     SongMenuItem(
@@ -101,7 +101,7 @@ fun BottomPopupMenuScope.SongMenuContent(
                 }
 
                 state.playlists.isNullOrEmpty() -> SongMenuStatus(
-                    "还没有可以添加的歌单，请先创建歌单",
+                    "还没有可以添加的播放列表，请先创建播放列表",
                     contentVariantColor
                 )
 
@@ -164,7 +164,7 @@ fun BottomPopupMenuScope.SongMenuContent(
                     dismiss()
                 }
                 SongMenuAction(
-                    text = if (liked == true) "取消喜欢" else "喜欢",
+                    text = if (liked == true) "取消喜爱" else "喜爱",
                     icon = if (liked == true) R.drawable.star_fill else R.drawable.star,
                     color = contentColor,
                     backgroundColor = actionContainerColor,
@@ -181,7 +181,7 @@ fun BottomPopupMenuScope.SongMenuContent(
                     dismiss()
                 }
             }
-            SongMenuItem("添加到歌单", R.drawable.list_add, contentColor) {
+            SongMenuItem("添加到播放列表", R.drawable.list_add, contentColor) {
                 viewModel.loadPlaylists()
                 if (userId != null) choosingPlaylist = true
             }
@@ -218,7 +218,7 @@ fun BottomPopupMenuScope.SongMenuContent(
                 onOpenAlbum(navigationSong)
             }
             SongMenuItem(
-                text = "前往艺术家",
+                text = "前往艺人",
                 icon = R.drawable.microphone_stand,
                 color = contentColor,
                 enabled = artists.isNotEmpty(),

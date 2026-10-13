@@ -79,7 +79,7 @@ class PlayerLikeViewModel(
                 if (connection.state.value.song?.id == id &&
                     (account.session.value as? Session.LoggedIn)?.profile?.userId == uid) {
                     result.onFailure {
-                        _messages.trySend(if (request.liked) "喜欢歌曲失败，请稍后重试" else "取消喜欢失败，请稍后重试")
+                        _messages.trySend(if (request.liked) "喜爱歌曲失败，请稍后重试" else "取消喜爱失败，请稍后重试")
                     }
                 }
             } finally {

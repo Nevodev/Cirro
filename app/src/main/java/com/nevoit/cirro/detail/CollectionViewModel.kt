@@ -6,6 +6,7 @@ import com.nevoit.cirro.data.CollectionRepository
 import com.nevoit.cirro.data.model.CollectionInfo
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.Song
+import com.nevoit.cirro.data.model.albumDisplayTitle
 import com.nevoit.cirro.home.Section
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -83,8 +84,10 @@ class CollectionViewModel(
      * 才退回接口的原始标题。
      */
     val displayTitle: String
-        get() = titleHint.ifEmpty {
-            (_state.value.info as? Section.Ready)?.data?.title.orEmpty()
+        get() {
+            val info = (_state.value.info as? Section.Ready)?.data
+            val title = titleHint.ifEmpty { info?.title.orEmpty() }
+            return if (kind == CollectionKind.ALBUM) albumDisplayTitle(title, info?.albumType) else title
         }
 
     init {

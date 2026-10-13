@@ -6,6 +6,7 @@
 //! 内存约定：所有返回的 `*mut c_char` 必须由调用方用 `ncm_free` 释放。
 
 use ncm_api_rs::{create_client, ApiClient, NcmError, Query};
+mod library;
 use once_cell::sync::Lazy;
 use std::ffi::{c_char, CString};
 use std::sync::Mutex;
@@ -597,13 +598,13 @@ fn playlist_request_success(body: &serde_json::Value) -> Result<(), String> {
         Ok(())
     } else {
         let message = pick_str(body, &["message", "msg"]);
-        Err(if message.is_empty() { format!("歌单请求失败（code={code}）") } else { message.to_string() })
+        Err(if message.is_empty() { format!("播放列表请求失败（code={code}）") } else { message.to_string() })
     }
 }
 
 fn owned_playlists(body: &serde_json::Value, uid: i64) -> Result<Vec<serde_json::Value>, String> {
     playlist_request_success(body)?;
-    let playlists = body["playlist"].as_array().ok_or("歌单列表缺少 playlist")?;
+    let playlists = body["playlist"].as_array().ok_or("播放列表缺少 playlist")?;
     Ok(playlists.iter().filter_map(|playlist| {
         let id = pick_i64_loose(playlist, &["id"]);
         let owner = pick_i64_loose(&playlist["creator"], &["userId"]);
@@ -711,7 +712,7 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeLikedPlaylistI
     let value = match RUNTIME.block_on(client.user_playlist(&query)) {
         Ok(response) => match liked_playlist_id(&response.body, uid.parse().unwrap_or(0)) {
             Some(id) => serde_json::json!({ "ok": true, "id": id }),
-            None => serde_json::json!({ "ok": false, "message": "未能获取我喜欢的音乐歌单" }),
+            None => serde_json::json!({ "ok": false, "message": "未能获取喜爱歌曲播放列表" }),
         },
         Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
     };
@@ -1021,12 +1022,12 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeAlbumDetail<'l
 fn flatten_artist_detail(body: &serde_json::Value) -> Result<serde_json::Value, String> {
     if pick_i64_loose(body, &["code"]) != 200 {
         let message = pick_str(body, &["message", "msg"]);
-        return Err(if message.is_empty() { "加载艺术家失败".into() } else { message.into() });
+        return Err(if message.is_empty() { "加载艺人失败".into() } else { message.into() });
     }
     let artist = &body["artist"];
     let id = pick_i64_loose(artist, &["id"]);
     if id <= 0 || !body["hotSongs"].is_array() {
-        return Err("艺术家详情缺少资料或热门歌曲".into());
+        return Err("艺人详情缺少资料或热门歌曲".into());
     }
     let songs = flatten_song_array(&body["hotSongs"]);
     Ok(serde_json::json!({
@@ -1098,7 +1099,7 @@ fn song_like_success(body: &serde_json::Value) -> Result<(), String> {
         Ok(())
     } else {
         let message = pick_str(body, &["message", "msg"]);
-        let message = if message.is_empty() { "喜欢歌曲请求失败" } else { message };
+        let message = if message.is_empty() { "喜爱歌曲请求失败" } else { message };
         Err(format!("{message}（code={}）", code.map(|code| code.to_string()).unwrap_or_else(|| "missing".to_string())))
     }
 }
@@ -1107,9 +1108,9 @@ fn liked_song_ids(body: &serde_json::Value) -> Result<Vec<i64>, String> {
     song_like_success(body)?;
     body.get("ids")
         .and_then(|ids| ids.as_array())
-        .ok_or_else(|| "喜欢歌曲列表缺少 ids".to_string())?
+        .ok_or_else(|| "喜爱歌曲列表缺少 ids".to_string())?
         .iter()
-        .map(|id| id.as_i64().filter(|id| *id > 0).ok_or_else(|| "喜欢歌曲 id 无效".to_string()))
+        .map(|id| id.as_i64().filter(|id| *id > 0).ok_or_else(|| "喜爱歌曲 id 无效".to_string()))
         .collect()
 }
 

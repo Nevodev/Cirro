@@ -53,3 +53,8 @@ data class CollectionDetail(
     val info: CollectionInfo,
     val songs: List<Song>,
 )
+
+fun albumDisplayTitle(title: String, albumType: String?): String =
+    if (title.isNotEmpty() && albumType.equals("Single", ignoreCase = true) &&
+        !title.endsWith(" - Single", ignoreCase = true)
+    ) "$title - Single" else title

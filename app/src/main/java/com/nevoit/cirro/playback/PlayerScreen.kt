@@ -1175,7 +1175,7 @@ private fun PlayerLikeButton(songId: Long, background: ColorProducer, tint: Colo
     val liked = state.songId == songId && state.liked == true
     CircleIconButton(
         iconRes = if (liked) R.drawable.star_fill else R.drawable.star,
-        label = if (liked) "取消喜欢" else "喜欢",
+        label = if (liked) "取消喜爱" else "喜爱",
         background = background,
         tint = tint,
         onClick = remember(viewModel) { { viewModel.toggle() } },

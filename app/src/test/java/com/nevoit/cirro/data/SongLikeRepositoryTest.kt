@@ -28,6 +28,38 @@ import org.junit.Test
 
 class SongLikeRepositoryTest {
     @Test
+    fun libraryRefreshUpdatesKnownLikesBeforeTheForegroundIntervalExpires() = runBlocking {
+        val ids = AtomicReference(setOf(123L))
+        Fixture(read = { Result.success(ids.get()) }).use { f ->
+            f.login(1)
+            f.loaded(1)
+            ids.set(setOf(456L))
+            assertEquals(setOf(456L), f.repository.refreshNow(1).getOrThrow())
+            assertEquals(false, f.repository.isLiked(123, 1))
+            assertEquals(true, f.repository.isLiked(456, 1))
+            assertEquals(2, f.reads.get())
+            f.repository.onForeground().join()
+            assertEquals(2, f.reads.get())
+        }
+    }
+
+    @Test
+    fun rejectedLibraryRefreshKeepsKnownLikesAndCannotReadAnotherAccount() = runBlocking {
+        val offline = AtomicBoolean(false)
+        Fixture(read = {
+            if (offline.get()) Result.failure(IllegalStateException("offline")) else Result.success(setOf(123L))
+        }).use { f ->
+            f.login(1)
+            f.loaded(1)
+            offline.set(true)
+            assertTrue(f.repository.refreshNow(1).isFailure)
+            assertEquals(true, f.repository.isLiked(123, 1))
+            assertTrue(f.repository.refreshNow(2).isFailure)
+            assertEquals(2, f.reads.get())
+        }
+    }
+
+    @Test
     fun switchingSongsAndOpeningThePlayerNeverRefreshAnExistingSnapshot() = runBlocking {
         Fixture(read = { Result.success(setOf(123L, 456L)) }).use { f ->
             f.login(1)

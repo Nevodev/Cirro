@@ -51,6 +51,12 @@ import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.detail.CollectionRoute
 import com.nevoit.cirro.home.HomeRoute
+import com.nevoit.cirro.library.LibraryRoute
+import com.nevoit.cirro.library.LibraryLikedSongsRoute
+import com.nevoit.cirro.library.LibraryPlaylistsRoute
+import com.nevoit.cirro.library.LibraryArtistsRoute
+import com.nevoit.cirro.library.LibraryAlbumsRoute
+import com.nevoit.cirro.library.LibrarySongsRoute
 import com.nevoit.cirro.login.AppleMusicLoginActivity
 import com.nevoit.cirro.palette.CoverPalette
 import com.nevoit.cirro.palette.CoverSeed
@@ -87,7 +93,7 @@ data class NavItem(
 enum class NavItems(val item: NavItem) {
     Home(NavItem(iconRes = R.drawable.home, label = "主页")),
     Explore(NavItem(iconRes = R.drawable.square_grid_2x2, label = "探索")),
-    Library(NavItem(iconRes = R.drawable.music_note_square_stack, label = "资源库")),
+    Library(NavItem(iconRes = R.drawable.music_note_square_stack, label = "资料库")),
     Search(NavItem(iconRes = R.drawable.magnifyingglass, label = "搜索")),
 }
 
@@ -148,6 +154,21 @@ sealed interface MainDestination {
     @Serializable
     data object Tabs : MainDestination
 
+    @Serializable
+    data object LibraryLikedSongs : MainDestination
+
+    @Serializable
+    data object LibraryPlaylists : MainDestination
+
+    @Serializable
+    data object LibraryArtists : MainDestination
+
+    @Serializable
+    data object LibraryAlbums : MainDestination
+
+    @Serializable
+    data object LibrarySongs : MainDestination
+
     /**
      * 统一详情页（歌单 / 专辑 / 每日推荐）。
      *
@@ -162,6 +183,7 @@ sealed interface MainDestination {
         val titleHint: String = "",
         // 入口处的封面串：取色缓存按整串 URL 做 key，用它才保证第一帧命中
         val coverHint: String = "",
+        val libraryAlbum: Boolean = false,
     ) : MainDestination
 }
 
@@ -297,14 +319,63 @@ fun BoxScope.Main() {
                         onOpenCollection = { kind, id, titleHint, coverHint ->
                             navigate(MainDestination.Collection(kind, id, titleHint, coverHint))
                         },
+                        onOpenLibraryAlbum = { id, title, cover ->
+                            navigate(MainDestination.Collection(CollectionKind.ALBUM, id, title, cover, libraryAlbum = true))
+                        },
+                        onOpenLibraryLikedSongs = { navigate(MainDestination.LibraryLikedSongs) },
+                        onOpenLibraryPlaylists = { navigate(MainDestination.LibraryPlaylists) },
+                        onOpenLibraryArtists = { navigate(MainDestination.LibraryArtists) },
+                        onOpenLibraryAlbums = { navigate(MainDestination.LibraryAlbums) },
+                        onOpenLibrarySongs = { navigate(MainDestination.LibrarySongs) },
                     )
                 }
+
+                MainDestination.LibraryLikedSongs -> LibraryLikedSongsRoute(
+                    session = session,
+                    onBack = ::back,
+                    onOpenCollection = { kind, id, titleHint, coverHint ->
+                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint))
+                    },
+                )
+
+                MainDestination.LibraryPlaylists -> LibraryPlaylistsRoute(
+                    session = session,
+                    onBack = ::back,
+                    onOpenCollection = { kind, id, titleHint, coverHint ->
+                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint))
+                    },
+                )
+
+                MainDestination.LibraryArtists -> LibraryArtistsRoute(
+                    session = session,
+                    onBack = ::back,
+                    onOpenCollection = { kind, id, titleHint, coverHint ->
+                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint))
+                    },
+                )
+
+                MainDestination.LibraryAlbums -> LibraryAlbumsRoute(
+                    session = session,
+                    onBack = ::back,
+                    onOpenLibraryAlbum = { id, title, cover ->
+                        navigate(MainDestination.Collection(CollectionKind.ALBUM, id, title, cover, libraryAlbum = true))
+                    },
+                )
+
+                MainDestination.LibrarySongs -> LibrarySongsRoute(
+                    session = session,
+                    onBack = ::back,
+                    onOpenCollection = { kind, id, titleHint, coverHint ->
+                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint))
+                    },
+                )
 
                 is MainDestination.Collection -> CollectionRoute(
                     kind = destination.kind,
                     id = destination.id,
                     titleHint = destination.titleHint,
                     coverHint = destination.coverHint,
+                    libraryAlbum = destination.libraryAlbum,
                     onBack = ::back,
                     onOpenCollection = { kind, id, titleHint, coverHint ->
                         navigate(MainDestination.Collection(kind, id, titleHint, coverHint))
@@ -387,6 +458,12 @@ private fun BoxScope.MainTabs(
     selectedIndex: Int,
     onSelect: (Int) -> Unit,
     onOpenCollection: (CollectionKind, Long, String, String) -> Unit,
+    onOpenLibraryAlbum: (Long, String, String) -> Unit,
+    onOpenLibraryLikedSongs: () -> Unit,
+    onOpenLibraryPlaylists: () -> Unit,
+    onOpenLibraryArtists: () -> Unit,
+    onOpenLibraryAlbums: () -> Unit,
+    onOpenLibrarySongs: () -> Unit,
 ) {
     val context = LocalContext.current
 
@@ -401,7 +478,15 @@ private fun BoxScope.MainTabs(
             )
 
             MainDestinations.Explore -> {}
-            MainDestinations.Library -> {}
+            MainDestinations.Library -> LibraryRoute(
+                session = session,
+                onOpenLibraryAlbum = onOpenLibraryAlbum,
+                onOpenLikedSongs = onOpenLibraryLikedSongs,
+                onOpenPlaylists = onOpenLibraryPlaylists,
+                onOpenArtists = onOpenLibraryArtists,
+                onOpenAlbums = onOpenLibraryAlbums,
+                onOpenSongs = onOpenLibrarySongs,
+            )
             MainDestinations.Search -> {}
         }
     }
