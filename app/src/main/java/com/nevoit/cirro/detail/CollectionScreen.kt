@@ -526,9 +526,9 @@ private fun CollectionScreen(
                                 contentVariant = contentVariantColor,
                                 onClick = { onPlay(index) },
                                 menuContent = { songMenuContent(song) },
+                                // 左右边距在 TrackRow 内部（背景要铺满整宽，左侧那条缝留给红心星）
                                 modifier = Modifier
-                                    .animateItem(tween(200), Springs.crisp(), tween(200))
-                                    .padding(horizontal = PagePadding),
+                                    .animateItem(tween(200), Springs.crisp(), tween(200)),
                             )
                             if (index < songs.size - 1) {
                                 VGap(4.dp)

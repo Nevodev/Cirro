@@ -144,8 +144,8 @@ fun BoxScope.LibrarySongsRoute(
                     menuContent = {
                         LibrarySongMenuContent(song, source, playback, menu, queueActions, onOpenCollection, play)
                     },
-                    modifier = Modifier.animateItem(tween(200), Springs.crisp(), tween(200))
-                        .padding(horizontal = 12.dp),
+                    // 左右边距在 TrackRow 内部（背景要铺满整宽，左侧那条缝留给红心星）
+                    modifier = Modifier.animateItem(tween(200), Springs.crisp(), tween(200)),
                 )
                 if (index < songs.lastIndex) VGap(4.dp)
             }

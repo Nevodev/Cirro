@@ -47,6 +47,7 @@ import androidx.core.content.ContextCompat
 import coil3.compose.AsyncImage
 import com.materialkolor.hct.Hct
 import com.nevoit.cirro.data.AccountRepository
+import com.nevoit.cirro.data.LibraryRepository
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.detail.CollectionRoute
@@ -212,7 +213,22 @@ fun BoxScope.Main() {
     // 刷新底栏，顺带给详情页暖了取色缓存。navigator.current 是 snapshot state，
     // 进出详情页这里自动重算。
     val palette = koinInject<CoverPalette>()
-    val coverHint = (navigator.current.destination as? MainDestination.Collection)?.coverHint
+    // 🔴 「喜爱歌曲」是资料库的子页：歌单详情在它**内部**渲染，不走 MainDestination.Collection，
+    // 所以拿不到入口处的 coverHint，底栏就会掉回主题色（页面自己有颜色，底栏没有）。
+    // 这里直接盯资料库快照里第一首歌的封面 —— 跟详情页内部用的是同一个来源，资料库加载完底栏自己会跟上。
+    // 只订阅这一张图：喜欢状态之类的其它快照变化不会惊动底栏。
+    val libraryRepository = koinInject<LibraryRepository>()
+    val likedCover by produceState<String?>(initialValue = null) {
+        libraryRepository.snapshot
+            .map { it?.likedSongs?.firstOrNull()?.cover }
+            .distinctUntilChanged()
+            .collect { value = it }
+    }
+    val coverHint = when (val destination = navigator.current.destination) {
+        is MainDestination.Collection -> destination.coverHint
+        MainDestination.LibraryLikedSongs -> likedCover
+        else -> null
+    }
     val barSeed by produceState<CoverSeed?>(
         initialValue = coverHint?.let { palette.cached(it) },
         coverHint
