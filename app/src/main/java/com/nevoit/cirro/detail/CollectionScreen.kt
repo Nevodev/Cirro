@@ -107,7 +107,6 @@ import org.koin.core.parameter.parametersOf
 import java.time.Instant
 import java.time.ZoneId
 import kotlin.math.roundToInt
-import kotlin.random.Random
 
 private val PagePadding = 12.dp
 
@@ -323,9 +322,10 @@ fun CollectionRoute(
             )
         },
         onShuffle = {
-            // 随机播放 = 同一份队列，从随机的一个位置起步；顺序仍是接着往下听
+            // 随机播放 = 整份歌单进队列 + 随机那一轴打开（播放页那颗按钮跟着亮）。
+            // 整队乱序由 `playQueueOf(shuffle = true)` 负责，起点就是乱序后的第一首。
             if (songs.isNotEmpty()) {
-                playback.playSongs(songs, Random.nextInt(songs.size), queueSource)
+                playback.playSongs(songs, 0, queueSource, shuffle = true)
             }
         },
         onToggleSubscribed = viewModel::toggleSubscribed,

@@ -55,7 +55,9 @@ fun LibrarySnapshot.likedPlaylistInfo(author: String, fallback: CollectionInfo? 
     (fallback ?: CollectionInfo(CollectionKind.PLAYLIST, likedPlaylistId)).copy(
         title = "喜爱歌曲",
         author = author.ifEmpty { fallback?.author.orEmpty() },
-        cover = fallback?.cover?.takeIf { it.isNotEmpty() } ?: likedSongs.firstOrNull()?.cover.orEmpty(),
+        // 头图固定跟第一首歌走：远程歌单详情后到，若让它优先会当场换图。
+        cover = likedSongs.firstOrNull()?.cover?.takeIf { it.isNotEmpty() }
+            ?: fallback?.cover.orEmpty(),
         updateTimeMs = likedTracks.maxOfOrNull { it.addedAtMs.coerceAtLeast(0) } ?: 0,
         trackCount = if (likesLoaded) likedSongs.size else fallback?.trackCount ?: 0,
         subscribed = false,

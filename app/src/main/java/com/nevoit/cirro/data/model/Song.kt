@@ -23,6 +23,17 @@ data class Song(
     val albumId: Long = 0L,
     /** 与 [artists] 按下标对应；缺失 id 的艺术家以 0 占位，旧缓存可能整列缺失。 */
     val artistIds: List<Long> = emptyList(),
+    /**
+     * 上游说这首歌**还能不能播**：`privileges` 里下架（`st < 0`）或一个可播档位都没有（`pl == 0`）。
+     *
+     * 🔴 判据**不是** [durationMs] == 0：有版权的歌照样可能不给时长。实测 Phaxe/Morten Granau
+     * 的「Lost」（id 485964202）`dt=0` 但 `pl=999000`，直链正常；而下架的「月亮之子」
+     * `st=-200`/`pl=0`，`song_url` 回 404。
+     *
+     * 默认 `true`：拿不到 `privileges` 的来源（每日推荐、首页、以及**旧缓存**）一律按能播，
+     * 宁可漏灰也不要误灰。
+     */
+    val playable: Boolean = true,
 ) {
     val artistText: String get() = artists.joinToString(" & ")
 }

@@ -49,7 +49,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
-import kotlin.random.Random
 
 @Composable
 fun BoxScope.LibrarySongsRoute(
@@ -115,7 +114,10 @@ fun BoxScope.LibrarySongsRoute(
                         enabled = songs.isNotEmpty(),
                         onPlay = { if (songs.isNotEmpty()) playback.playSongs(songs, 0, source) },
                         onShuffle = {
-                            if (songs.isNotEmpty()) playback.playSongs(songs, Random.nextInt(songs.size), source)
+                            // 跟歌单页一致：整份歌单进队列 + 随机那一轴打开，乱序在 playQueueOf 里做。
+                            if (songs.isNotEmpty()) {
+                                playback.playSongs(songs, 0, source, shuffle = true)
+                            }
                         },
                     )
                     VGap(24.dp)

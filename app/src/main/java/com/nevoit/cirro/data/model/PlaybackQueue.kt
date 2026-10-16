@@ -98,7 +98,16 @@ data class PlaybackQueue(
     val infinite: Boolean = false,
 )
 
-/** 建队：歌单 / 专辑 / 每日推荐点一首、首页播一整块都走这里。随机模式下建队即打乱。 */
+/**
+ * 建队：歌单 / 专辑 / 每日推荐点一首、首页播一整块都走这里。
+ *
+ * 🔴 **随机建队 = 整队乱序、从第一首播起**（"随机起点"就落在乱序后的第一首上），**不能**复用
+ * [shuffledTail] 去洗尾部 —— 那个函数是给"播放途中切随机"用的，它要护住正在播的那一首不动；
+ * 建队时压根没有"正在播"，复用它就成了"第 0 首钉死不动"：起点之后的乱序、起点之前的却还是原序，
+ * 而待播区只画当前位置及之后，于是界面上凭空少了半份歌单。
+ *
+ * [QueueEntry.seq] 一律按**原歌单顺序**记，所以关掉随机还能回到歌单原序。
+ */
 fun playQueueOf(
     songs: List<Song>,
     startIndex: Int,
@@ -108,19 +117,17 @@ fun playQueueOf(
     infinite: Boolean = false,
 ): PlaybackQueue {
     if (songs.isEmpty()) return PlaybackQueue(mode = mode, shuffle = shuffle, infinite = infinite)
-    val index = startIndex.coerceIn(0, songs.lastIndex)
     val entries = songs.mapIndexed { i, song ->
         QueueEntry(uid = nextEntryUid(), song = song, source = source, seq = i)
     }
-    val queue = PlaybackQueue(
-        entries = entries,
-        currentIndex = index,
+    return PlaybackQueue(
+        entries = if (shuffle) entries.shuffled() else entries,
+        currentIndex = if (shuffle) 0 else startIndex.coerceIn(0, songs.lastIndex),
         mode = mode,
         shuffle = shuffle,
         source = source,
         infinite = infinite,
     )
-    return if (shuffle) queue.shuffledTail() else queue
 }
 
 /** 把 [index] 认作当前位置（播放器说了算）。越界就原样返回。 */

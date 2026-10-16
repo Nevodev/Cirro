@@ -70,6 +70,13 @@ private const val MaxPlaybackRetries = 3
 /** 自动重试的退避基数：第 n 次重试等 `n × 这个值`。 */
 private const val RetryBaseDelayMs = 1_000L
 
+/**
+ * 连续跳过多少首"放不了"的歌就认输。
+ *
+ * 整份队列都是下架歌时不能一路跳到底 —— 那样比直接报错更难懂。
+ */
+private const val MaxSkipUnavailable = 5
+
 /** 正在播的那首歌，字段全部来自 MediaItem 的元数据，所以重连之后也拿得回来。 */
 data class NowPlaying(
     val id: Long,
@@ -174,7 +181,29 @@ class PlaybackConnection(
     private var retryCount = 0
     private var retryJob: Job? = null
 
+    /** 连着跳过了几首"放不了"的歌；真的播起来了就清零（见 [listener] 的 `onEvents`）。 */
+    private var skippedUnavailable = 0
+
     private val listener = object : Player.Listener {
+        /**
+         * ⚠️ 归档老歌这件事**必须**在这里也做一次，不能只靠 service 端。
+         *
+         * controller 端对 `seekTo` 是本地乐观更新：它先把游标推过去、**同步**派发 `onEvents`
+         * （→ [syncCurrentIndex]），命令才被 post 到 session 的 looper。而 service 端那条
+         * `finishPlaybackHistory` 要等命令真跑完才回调 —— 同一根主线程，中间夹着下一个消息，
+         * 也就是夹着一个帧回调：那一帧里待播区已经少了老歌、历史区还没有它，看着就是"闪一空"。
+         *
+         * 放在这里跟 `syncCurrentIndex` 同一条消息、同一帧落地，空档就没了。
+         * [PlayQueueStore] 的归档是幂等的（`playing` 对不上才归档、归档后置空），所以 service 端
+         * 稍后照跑不误、不会记两条；"真的出声了没有"仍然由 service 端说了算。
+         */
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            queueStore.finishPlaybackHistory(
+                nextUid = mediaItem?.queueEntryUid,
+                repeated = reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT,
+            )
+        }
+
         override fun onEvents(player: Player, events: Player.Events) {
             if (events.contains(Player.EVENT_PLAY_WHEN_READY_CHANGED) && !player.playWhenReady) {
                 advanceAfterRecommendations = false
@@ -188,10 +217,11 @@ class PlaybackConnection(
                 // 上一首的错误提示也不该跟着飘过来（新歌成不成，等它自己的结果）。
                 _state.value = _state.value.copy(error = null)
             }
-            // 真的播起来了，之前攒的重试额度作废。
+            // 真的播起来了，之前攒的重试额度和"连跳"计数一起作废。
             if (player.playbackState == Player.STATE_READY) {
                 retryCount = 0
                 retryJob?.cancel()
+                skippedUnavailable = 0
             }
             // 必须在 publish 之前算：宽限窗口是 publish 要读的状态。
             updatePlayIntent(player)
@@ -210,8 +240,13 @@ class PlaybackConnection(
         }
 
         override fun onPlayerError(error: PlaybackException) {
-            // "这首歌确定放不了"（无版权 / 下架 / 拿不到直链）是结论而不是抖动，重试只是白等。
-            if (error.songUnavailable() != null || retryCount >= MaxPlaybackRetries) {
+            // "这首歌确定放不了"（下架 / 无版权 / 拿不到直链）是结论而不是抖动：既不重试也不提示，
+            // 直接往后跳 —— 一首坏歌不该把整份队列卡住。连着跳太多首才认输。
+            if (error.songUnavailable() != null) {
+                skipUnavailable(error)
+                return
+            }
+            if (retryCount >= MaxPlaybackRetries) {
                 giveUp(error)
                 return
             }
@@ -266,8 +301,28 @@ class PlaybackConnection(
         retryJob?.cancel()
         retryJob = null
         retryCount = 0
+        skippedUnavailable = 0
         controller?.pause()
         _state.value = _state.value.copy(error = error.readableMessage())
+    }
+
+    /**
+     * 播到放不了的歌：直接跳下一首，**不给提示**。
+     *
+     * 连着跳过 [MaxSkipUnavailable] 首还没落到一首能放的，就当这份队列没得听 —— 按原来的方式
+     * 报错停住，免得一路跳到底、用户还以为是播放器卡了。
+     */
+    private fun skipUnavailable(error: PlaybackException) {
+        val controller = controller ?: return
+        val queue = liveQueue()
+        val target = queue?.manualNextIndex(controller.currentMediaItemIndex)
+        if (queue == null || target == null || skippedUnavailable + 1 >= MaxSkipUnavailable) {
+            skippedUnavailable = 0
+            giveUp(error)
+            return
+        }
+        skippedUnavailable++
+        playAt(controller, target, restartCurrent = false)
     }
 
     init {
@@ -342,8 +397,17 @@ class PlaybackConnection(
      *
      * [source] 是这批歌的出身，名称随队列保留，集合 id 用于打卡时回传 `sourceId`。
      * 详情页传歌单/专辑的名称和 id，首页混排块只传名称，没有来源信息时传 null。
+     *
+     * [shuffle] 是"随机那一轴"，跟只给一个随机 [startIndex] 不是一回事：前者建队即打乱当前位置
+     * 之后的顺序、播放页那颗随机按钮跟着亮（列表循环回头时也是乱序接着走），后者只是挑了个起点、
+     * 之后仍按列表原序往下放。「随机播放」按钮要的是 随机起点 + 整份列表 + 这个标志。
      */
-    fun playSongs(songs: List<Song>, startIndex: Int, source: QueueSource? = null) {
+    fun playSongs(
+        songs: List<Song>,
+        startIndex: Int,
+        source: QueueSource? = null,
+        shuffle: Boolean = false,
+    ) {
         if (songs.isEmpty()) return
 
         scope.launch(Dispatchers.Main) {
@@ -356,7 +420,7 @@ class PlaybackConnection(
             }
 
             startQueue(controller, playQueueOf(songs, startIndex, source, mode = currentMode(),
-                infinite = queue.value.infinite))
+                shuffle = shuffle, infinite = queue.value.infinite))
         }
     }
 
@@ -723,19 +787,22 @@ class PlaybackConnection(
     /**
      * 把播放器列表重排成 [to] 的顺序。
      *
-     * 逐个"就位"：谁不在目标位置上就挪过去。因为要动的槽位都在当前位置**之后**，
-     * 正在播的那条的下标不会变，播放不中断。
+     * 🔴 **整段一次换掉**，不能逐条 `moveMediaItem`：MediaController 每做一次列表操作，都要经
+     * `IMediaSession` 发过去、再把整份 playlist 重新打包回推一遍（单次 O(n)）。逐条搬 n 个槽位就是
+     * O(n²) —— 队列上千首时点一下随机就是几千万次 MediaItem 打包，主线程直接 OOM/ANR
+     * （androidx/media#81）。建队那条路（[startQueue]）只发一次 `setMediaItems`，所以它一直没事。
+     *
+     * 🔴 改动只发生在当前位置**之后**（`PlaybackQueue.shuffledTail()` / `restoredTail()` 的契约），
+     * 所以替换区间永远不含当前曲：它的 media source 原地不动，播放不中断。代价是被换掉的条目要重建 media source
+     * —— 下一首的预读缓冲丢掉，真正播到时才重新解析直链（直链本来就是临播前才换的）。
      */
     private fun reorderPlayer(from: List<QueueEntry>, to: List<QueueEntry>) {
         val controller = controller ?: return
-        val working = from.toMutableList()
-        to.forEachIndexed { target, want ->
-            val at = working.indexOfFirst { it.uid == want.uid }
-            if (at >= 0 && at != target) {
-                controller.moveMediaItem(at, target)
-                working.add(target, working.removeAt(at))
-            }
-        }
+        if (controller.mediaItemCount != from.size) return
+        val start = from.indices.firstOrNull { from[it].uid != to[it].uid } ?: return
+        controller.replaceMediaItems(
+            start, to.size, to.drop(start).map { it.song.toMediaItem(it.uid) },
+        )
     }
 
     /**

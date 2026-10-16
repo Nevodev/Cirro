@@ -79,6 +79,9 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
 
 private val RowMinHeight = 56.dp
 
+/** 播不了的歌（下架 / 一个可播档位都没有）整行的透明度。 */
+private const val UnplayableAlpha = 0.5f
+
 /** 行首封面。 */
 private val CoverSize = 48.dp
 
@@ -503,12 +506,19 @@ private fun QueueRow(
     val interactionSource = remember { MutableInteractionSource() }
     val indication = remember { AlphaIndication() }
 
+    // 播不了的歌整行淡一半。
+    // 🔴 系数必须**并进 edgeFade 的 panelAlpha**，不能在这行外面套一层 `alpha`：那会多出一个
+    // 离屏层，右半那条 `Plus` 立刻失效（见 [edgeFade] 的说明）。并进去之后仍是同一个层，
+    // `Plus` 的合成量随之减半，跟"整行半透明"是一个效果。
+    val rowAlpha: () -> Float = { panelAlpha() * if (song.playable) 1f else UnplayableAlpha }
+
     // 点击只发送交互，反馈放在两个混合层内；整行的透明缓冲会隔离 Plus 要叠加的背景。
     Box(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = RowMinHeight)
             .clickable(
+                enabled = song.playable,
                 interactionSource = interactionSource,
                 indication = null,
                 onClickLabel = "播放这首歌",
@@ -526,7 +536,7 @@ private fun QueueRow(
                     BlendMode.SrcOver,
                     section,
                     overscrollEffect,
-                    panelAlpha,
+                    rowAlpha,
                     enabled = edgeFadeEnabled,
                 )
                 .indication(interactionSource, indication),
@@ -553,7 +563,7 @@ private fun QueueRow(
                 .fillMaxWidth()
                 .heightIn(min = RowMinHeight)
                 .edgeFade(
-                    listState, rowKey, BlendMode.Plus, section, overscrollEffect, panelAlpha,
+                    listState, rowKey, BlendMode.Plus, section, overscrollEffect, rowAlpha,
                     enabled = edgeFadeEnabled,
                 )
                 .indication(interactionSource, indication),

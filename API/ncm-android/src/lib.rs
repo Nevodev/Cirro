@@ -208,7 +208,48 @@ fn flatten_song(node: &serde_json::Value, cover_fallback: Option<&str>) -> serde
         "cover": cover,
         "durationMs": pick_i64(node, &["dt", "duration"]),
         "fee": pick_i64(node, &["fee"]),
+        // 能不能播默认按"能"处理：只有 song_detail 那类带 `privileges` 的响应才判得出来，
+        // 那种情况由 flatten_song_detail 覆盖。宁可不置灰，也别把能放的歌灰掉。
+        "playable": true,
     })
+}
+
+/// `song_detail` 类响应（`{songs:[…], privileges:[…]}`）→ 扁平歌曲数组。
+///
+/// 🔴 **能不能播看 `privileges`，不看 `dt`**。实测 Phaxe/Morten Granau 的「Lost」
+/// （id 485964202）`dt=0`，但 privileges 里 `pl=999000` / `st=0`，`song_url` 回 200、
+/// 照常拿到直链；而下架的「月亮之子」（id 1383715435）`st=-200` / `pl=0`，
+/// `song_url` 回 **404**。拿 `dt <= 0` 当判据会把前一种误杀。
+fn flatten_song_detail(body: &serde_json::Value) -> Vec<serde_json::Value> {
+    let privileges = body["privileges"].as_array();
+    body["songs"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|s| {
+                    let mut out = flatten_song(s, None);
+                    let id = out["id"].as_i64().unwrap_or(0);
+                    let found = privileges
+                        .and_then(|list| list.iter().find(|x| pick_i64_loose(x, &["id"]) == id));
+                    if let Some(p) = found {
+                        out["playable"] = serde_json::json!(privilege_playable(p));
+                    }
+                    out
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 这条 privilege 还能不能播。
+///
+/// 只在**明确不可播**时给 false：`st < 0`（下架 / 无版权）或 `pl == 0`（一个可播档位都没有）。
+/// 字段缺失一律当能播 —— 接口少给一个键，不该把整行灰掉。
+fn privilege_playable(privilege: &serde_json::Value) -> bool {
+    if pick_i64_loose(privilege, &["st"]) < 0 {
+        return false;
+    }
+    !matches!(privilege.get("pl").and_then(|v| v.as_i64()), Some(v) if v <= 0)
 }
 
 /// 宽松取整数：首页那几个 id 和播放量有时是数字、有时是字符串，两种都要认。
@@ -518,10 +559,7 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeSongDetail<'lo
     let client = client_snapshot();
     let value = match RUNTIME.block_on(client.song_detail(&Query::new().param("ids", &ids))) {
         Ok(r) => {
-            let songs: Vec<serde_json::Value> = r.body["songs"]
-                .as_array()
-                .map(|arr| arr.iter().map(|s| flatten_song(s, None)).collect())
-                .unwrap_or_default();
+            let songs = flatten_song_detail(&r.body);
             serde_json::json!({ "ok": true, "songs": songs })
         }
         Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
@@ -900,7 +938,8 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativePlaylistTracks
     let client = client_snapshot();
     let value = match RUNTIME.block_on(client.playlist_track_all(&query)) {
         Ok(r) => {
-            let songs = flatten_song_array(&r.body["songs"]);
+            // 上游第二步就是 /api/v3/song/detail，所以这里同样带 privileges，能一起判可播性。
+            let songs = flatten_song_detail(&r.body);
             serde_json::json!({ "ok": true, "songs": songs })
         }
         Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
@@ -1060,7 +1099,7 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeArtistDetail<'
 
 #[cfg(test)]
 mod song_navigation_tests {
-    use super::{flatten_artist_detail, flatten_song};
+    use super::{flatten_artist_detail, flatten_song, flatten_song_detail, privilege_playable};
     use serde_json::json;
 
     #[test]
@@ -1087,6 +1126,43 @@ mod song_navigation_tests {
         assert_eq!(detail["songs"][0]["id"], 5);
         assert!(flatten_artist_detail(&json!({"code": 200, "artist": {"id": 42}})).is_err());
         assert!(flatten_artist_detail(&json!({"code": 302})).is_err());
+    }
+
+    /// 可播性只认 `privileges`，**不认 `dt`** —— 两个反例都来自实测：
+    /// 「月亮之子」1383715435 已下架（`st=-200`/`pl=0`，`song_url` 回 404）；
+    /// Phaxe/Morten Granau「Lost」485964202 的 `dt` 同样是 0，但 `pl=999000`，直链正常。
+    #[test]
+    fn playable_comes_from_privileges_not_duration() {
+        let body = json!({
+            "songs": [
+                {"id": 1383715435, "name": "月亮之子", "dt": 0, "ar": [], "al": {}},
+                {"id": 485964202, "name": "Lost", "dt": 0, "ar": [], "al": {}}
+            ],
+            "privileges": [
+                {"id": 1383715435, "st": -200, "pl": 0},
+                {"id": 485964202, "st": 0, "pl": 999000}
+            ]
+        });
+        let songs = flatten_song_detail(&body);
+        assert_eq!(songs[0]["playable"], json!(false));
+        assert_eq!(songs[1]["playable"], json!(true));
+    }
+
+    /// 拿不到 privileges / 里面没这首 / 键缺失：一律当能播，绝不误灰。
+    #[test]
+    fn playable_defaults_to_true_when_unknown() {
+        let no_privileges = flatten_song_detail(&json!({"songs": [{"id": 7, "ar": [], "al": {}}]}));
+        assert_eq!(no_privileges[0]["playable"], json!(true));
+
+        let not_listed = flatten_song_detail(&json!({
+            "songs": [{"id": 7, "ar": [], "al": {}}],
+            "privileges": [{"id": 8, "st": -200, "pl": 0}]
+        }));
+        assert_eq!(not_listed[0]["playable"], json!(true));
+
+        // 只有 pl=0（st 还是 0）也要判死；空 privilege 判活。
+        assert!(!privilege_playable(&json!({"st": 0, "pl": 0})));
+        assert!(privilege_playable(&json!({})));
     }
 }
 

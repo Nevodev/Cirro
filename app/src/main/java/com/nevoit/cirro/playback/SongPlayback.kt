@@ -3,7 +3,6 @@ package com.nevoit.cirro.playback
 import android.net.Uri
 import android.os.Bundle
 import androidx.core.net.toUri
-import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import com.nevoit.cirro.data.SongUnavailableException
@@ -46,7 +45,10 @@ internal fun Song.toMediaItem(queueEntryUid: Long): MediaItem = MediaItem.Builde
             .setArtist(artistText)
             .setAlbumTitle(album)
             // 元数据先给时长，别等 READY：迷你条的进度条要靠它才能提前算出来
-            .setDurationMs(durationMs.takeIf { it > 0 } ?: C.TIME_UNSET)
+            // 🔴 media3 1.11 起 durationMs 是**可空**的装箱 Long，只收 null 或 >= 0：
+            // 1.8 以前传 C.TIME_UNSET，现在那是负数，`setDurationMs` 当场 IllegalArgumentException。
+            // 时长未知（缺失 / 0）就给 null，别退化成 TIME_UNSET。
+            .setDurationMs(durationMs.takeIf { it > 0 })
             .apply { if (cover.isNotEmpty()) setArtworkUri(cover.toUri()) }
             .build()
     )

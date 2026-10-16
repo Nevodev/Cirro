@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -32,6 +33,9 @@ import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.CircleIconButton
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.theme.MaterialTheme
+
+/** 播不了的歌，内容那一层的透明度（背景不淡）。 */
+private const val UnplayableAlpha = 0.5f
 
 internal enum class ItemPosition {
     Single,
@@ -70,68 +74,79 @@ internal fun TrackRow(
             .heightIn(min = 56.dp)
             .clip(shape)
             .background(backgroundColor)
-            .clickable(onClick = onClick)
+            // 播不了的歌整行不给点（封面、文字、行本身都不响应）。
+            .clickable(enabled = song.playable, onClick = onClick)
             .padding(start = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (index == null) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedRectangle(8.dp)),
-            ) {
-                AsyncImage(
-                    model = rememberCoverRequest(song.cover),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.matchParentSize(),
-                )
-                PlayingCoverIndicator(isPlaying, Modifier.matchParentSize())
-            }
-        } else {
-            PlayingTrackNumber(
-                index = index,
-                isCurrent = isPlaying,
-                color = contentVariant,
-                style = MaterialTheme.type.body.copy(fontFeatureSettings = "tnum"),
-                modifier = Modifier.width(32.dp),
-            )
-        }
-        HGap()
-        Column(
+        // 淡的是**内容**这一层，背景不动，所以 alpha 只能挂在这里。
+        // 挂在上面那层会把背景一起淡掉。
+        Row(
             modifier = Modifier
-                .weight(1f)
-                .padding(vertical = 12.dp)
+                .fillMaxWidth()
+                .graphicsLayer { alpha = if (song.playable) 1f else UnplayableAlpha },
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = song.name,
-                style = MaterialTheme.type.body,
-                color = content,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (showArtist) {
-                Text(
-                    text = song.artistText,
-                    style = MaterialTheme.type.subHeadline2,
+            if (index == null) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedRectangle(8.dp)),
+                ) {
+                    AsyncImage(
+                        model = rememberCoverRequest(song.cover),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.matchParentSize(),
+                    )
+                    PlayingCoverIndicator(isPlaying, Modifier.matchParentSize())
+                }
+            } else {
+                PlayingTrackNumber(
+                    index = index,
+                    isCurrent = isPlaying,
                     color = contentVariant,
-                    maxLines = 1,
+                    style = MaterialTheme.type.body.copy(fontFeatureSettings = "tnum"),
+                    modifier = Modifier.width(32.dp),
+                )
+            }
+            HGap()
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(vertical = 12.dp)
+            ) {
+                Text(
+                    text = song.name,
+                    style = MaterialTheme.type.body,
+                    color = content,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (showArtist) {
+                    Text(
+                        text = song.artistText,
+                        style = MaterialTheme.type.subHeadline2,
+                        color = contentVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
-        }
-        HGap()
-        BottomPopupMenu(
-            menuContent = menuContent
-        ) { openMenu ->
-            CircleIconButton(
-                iconRes = R.drawable.ellipsis_vertical,
-                label = "更多",
-                background = Color.Transparent,
-                tint = contentVariant,
-                onClick = openMenu,
-                iconSize = 24.dp,
-            )
+            HGap()
+            BottomPopupMenu(
+                menuContent = menuContent
+            ) { openMenu ->
+                CircleIconButton(
+                    iconRes = R.drawable.ellipsis_vertical,
+                    label = "更多",
+                    background = Color.Transparent,
+                    tint = contentVariant,
+                    onClick = openMenu,
+                    enabled = song.playable,
+                    iconSize = 24.dp,
+                )
+            }
         }
     }
 }
