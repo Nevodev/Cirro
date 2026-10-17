@@ -1,5 +1,6 @@
 package com.nevoit.cirro.library
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -16,7 +17,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.crossfade
 import com.nevoit.cirro.R
 import com.nevoit.cirro.data.HomeRepository
 import com.nevoit.cirro.data.model.CollectionInfo
@@ -25,10 +31,12 @@ import com.nevoit.cirro.data.model.LibraryCollection
 import com.nevoit.cirro.data.model.albumDisplayTitle
 import com.nevoit.cirro.palette.CoverPalette
 import com.nevoit.cirro.ui.CollectionCard
+import com.nevoit.cirro.ui.rememberCoverRequest
 import com.nevoit.material.core.component.CircleIconButton
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
 import com.nevoit.material.core.interaction.DimIndication
+import com.nevoit.material.core.modifier.thenIf
 import com.nevoit.material.core.utility.NavigationBarSpacer
 import com.nevoit.material.theme.MaterialTheme
 import org.koin.compose.koinInject
@@ -36,12 +44,38 @@ import org.koin.compose.koinInject
 internal val AlbumGridMinSize = 140.dp
 internal val AlbumGridPadding = PaddingValues(horizontal = 10.dp)
 
+/**
+ * 列表行里的小封面。尺寸和裁剪由调用方给，没图的时候垫一层行底色占位。
+ */
+@Composable
+internal fun LibraryCover(
+    cover: String,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    AsyncImage(
+        model = remember(context, cover) {
+            ImageRequest.Builder(context)
+                .data(cover.takeIf { it.isNotBlank() })
+                .crossfade(true)
+                .build()
+        },
+        contentDescription = null,
+        contentScale = ContentScale.Crop,
+        modifier = modifier.thenIf(cover.isBlank()) {
+            background(MaterialTheme.colors.cardBackground)
+        },
+    )
+}
+
 @Composable
 internal fun BoxScope.LibraryBackButton(onBack: () -> Unit) {
-    Box(Modifier
-        .align(Alignment.TopStart)
-        .statusBarsPadding()
-        .padding(12.dp)) {
+    Box(
+        Modifier
+            .align(Alignment.TopStart)
+            .statusBarsPadding()
+            .padding(12.dp)
+    ) {
         CircleIconButton(
             iconRes = R.drawable.chevron_left_nav,
             label = "返回资料库",
@@ -67,7 +101,7 @@ internal fun LibraryAlbumGridCard(
         CollectionCard(
             title = title,
             subtitle = album.info.author,
-            model = album.info.cover.takeIf { it.isNotBlank() },
+            model = rememberCoverRequest(album.info.cover),
             onClick = {
                 onOpenLibraryAlbum(
                     album.info.id,
@@ -78,7 +112,6 @@ internal fun LibraryAlbumGridCard(
             },
             modifier = Modifier.fillMaxWidth(),
             indication = DimIndication(),
-            coverBackground = MaterialTheme.colors.cardBackground,
         )
         VGap(16.dp)
     }

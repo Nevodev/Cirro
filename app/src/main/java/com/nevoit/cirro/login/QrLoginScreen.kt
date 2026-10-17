@@ -28,6 +28,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import com.google.zxing.qrcode.encoder.Encoder
@@ -55,6 +57,9 @@ fun QrLoginScreen(
 ) {
     LaunchedEffect(Unit) { viewModel.start() }
 
+    // 切后台回来时轮询可能已经因为没网判失败了，这里自动接上
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onForeground() }
+
     val state = viewModel.state
 
     LaunchedEffect(state) {
@@ -79,7 +84,9 @@ fun QrLoginScreen(
                 QrLoginPanel(
                     state = state,
                     qrUrl = viewModel.qrUrl,
+                    retrying = viewModel.retrying,
                     onRefresh = viewModel::refresh,
+                    onRetry = viewModel::retry,
                     modifier = Modifier.padding(horizontal = 12.dp),
                 )
             }
@@ -93,16 +100,23 @@ fun QrLoginScreen(
 private fun QrLoginPanel(
     state: QrLoginState,
     qrUrl: String?,
+    retrying: Boolean,
     onRefresh: () -> Unit,
+    onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        QrTile(state = state, qrUrl = qrUrl, onRefresh = onRefresh)
+        QrTile(
+            state = state,
+            qrUrl = qrUrl,
+            onRefresh = onRefresh,
+            onRetry = onRetry,
+        )
         VGap(20.dp)
-        QrStatus(state = state)
+        QrStatus(state = state, retrying = retrying)
     }
 }
 
@@ -111,6 +125,7 @@ private fun QrTile(
     state: QrLoginState,
     qrUrl: String?,
     onRefresh: () -> Unit,
+    onRetry: () -> Unit,
 ) {
     // 二维码必须深色模块压浅底才认得出，所以这层永远是白底，不跟主题走。
     Box(
@@ -157,6 +172,12 @@ private fun QrTile(
                 )
             }
 
+            is QrLoginState.Failed -> QrTileOverlay {
+                Button(onClick = onRetry) {
+                    Text(text = "点击重试")
+                }
+            }
+
             else -> Unit
         }
     }
@@ -174,7 +195,10 @@ private fun QrTileOverlay(content: @Composable BoxScope.() -> Unit) {
 }
 
 @Composable
-private fun QrStatus(state: QrLoginState) {
+private fun QrStatus(
+    state: QrLoginState,
+    retrying: Boolean,
+) {
     val (title, footnote) = when (state) {
         is QrLoginState.Waiting -> {
             "请使用「网易云音乐」App 扫描二维码" to "二维码 ${state.remainingSeconds} 秒后失效"
@@ -186,6 +210,8 @@ private fun QrStatus(state: QrLoginState) {
         QrLoginState.Loading -> "正在获取二维码…" to null
         is QrLoginState.Failed -> "登录失败" to state.message
     }
+    // 重连期间倒计时是停着的，换一行提示说明为什么不动
+    val hint = if (retrying) "网络不稳定，正在重试…" else footnote
 
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
@@ -197,7 +223,7 @@ private fun QrStatus(state: QrLoginState) {
                 MaterialTheme.colors.content
             },
         )
-        footnote?.let {
+        hint?.let {
             VGap(4.dp)
             Text(
                 text = it,

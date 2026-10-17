@@ -45,7 +45,6 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -108,12 +107,12 @@ private const val RadioTopTone = 20
 private const val RadioBottomTone = 45
 
 /**
- * 取色回来的淡入时长。
+ * 电台卡整块（渐变底 + 三张图）的淡入时长。
  *
- * 🔴 不能设短：从默认底色直接跳到封面色就是"突变"，用户明确否掉过。900ms 足够看清
- * 颜色是"化"进去的，又不至于让人等。
+ * 是一次性的入场，不是循环动画：等三张图和颜色都到齐才淡入，之后完全静止。
+ * 缓存命中时连这一次都不跑（见 [RadioCard] 的 `gate` 初值）。
  */
-private const val RadioRevealMillis = 900
+private const val RadioFadeMillis = 480
 
 private const val CreditLines = 2
 
@@ -370,11 +369,14 @@ private fun EntryCard(
  *
  * 跟 [EntryCard] 是两种卡：那张是**入口**（点进详情页），这张是**动作**（直接出声）。
  *
- * 背景不用任何图片：颜色只从第一张大圆（种子歌封面）取一次色，两个 tone 是同一个色系
- * 的深浅两档（色相锁死）。取色回来时**淡入**，不硬切。
+ * **入场**：渐变底和三张图是**一整块**，等「三张图全落地（成功或失败都算）+ 颜色有着落」
+ * 才一起淡入；文字在这块外面，始终可见，不参与动画。
  *
- * 🔴 淡入进度是 `State`，**只在 `drawBehind` 里读** —— 在组合期读（`by`）会让整张卡
- * 每帧重组。这里每帧只重绘一层渐变。
+ * **第二次起秒进**：颜色缓存命中（= 这张卡以前完整显示过）时，gate 从 1f 起步，
+ * 连这一次淡入都不跑。
+ *
+ * 🔴 入场进度是 `State`，**只在 `graphicsLayer` 里读** —— 在组合期读（`by`）会让整张卡
+ * 每帧重组。
  */
 @Composable
 private fun RadioCard(
@@ -387,15 +389,27 @@ private fun RadioCard(
     val heroCover = opening.seed.cover
     val guests = opening.guestCovers
 
-    var seed by remember(heroCover) { mutableStateOf<CoverSeed?>(null) }
-    LaunchedEffect(heroCover) { seed = palette.seed(heroCover) }
+    // 颜色：首帧同步读缓存，命中就直接算"已就绪"。
+    val cached = remember(heroCover) { palette.cached(heroCover) }
+    var seed by remember(heroCover) { mutableStateOf(cached) }
+    var colorReady by remember(heroCover) { mutableStateOf(cached != null) }
+    LaunchedEffect(heroCover) {
+        if (cached == null) seed = palette.seed(heroCover)
+        // 取色失败也算就绪 —— 不能因为一张封面取不出色就永远不显示这张卡。
+        colorReady = true
+    }
 
-    // 🔴 取色回来那一刻**不能硬切**：默认底色 → 封面色要淡进去。
-    // 这个进度只在 draw 阶段读，不参与组合。
-    val reveal = remember(heroCover) { Animatable(0f) }
-    LaunchedEffect(seed) {
-        if (seed != null) {
-            reveal.animateTo(1f, tween(RadioRevealMillis, easing = FastOutSlowInEasing))
+    // 三张图要**全部落地**才放行。成功和失败都算落地：挂掉一张也不能把整张卡锁死。
+    val imageTotal = (if (heroCover.isEmpty()) 0 else 1) + guests.size
+    var settled by remember(heroCover, guests) { mutableStateOf(emptySet<String>()) }
+    val imagesReady = settled.size >= imageTotal
+
+    // 🔴 缓存已经在手 = 这张卡以前完整显示过 → gate 从 1f 起步，一次动画都不跑（秒进）。
+    // 只有真正第一次显示才等齐再淡入。gate 只在 graphicsLayer 里读，不参与组合。
+    val gate = remember(heroCover) { Animatable(if (cached != null) 1f else 0f) }
+    LaunchedEffect(imagesReady, colorReady) {
+        if (imagesReady && colorReady && gate.value < 1f) {
+            gate.animateTo(1f, tween(RadioFadeMillis, easing = FastOutSlowInEasing))
         }
     }
 
@@ -407,22 +421,31 @@ private fun RadioCard(
             .width(CardWidth)
             .height(CardHeight)
             .clip(RoundedRectangle(20.dp))
-            .drawBehind {
-                // 0..1：取色回来后的淡入进度（不是硬切）
-                val blend = reveal.value
-                val topColor = seed?.let {
-                    lerp(fallback, Color(it.primaryTone(RadioTopTone)), blend)
-                } ?: fallback
-                val bottomColor = seed?.let {
-                    lerp(fallback, Color(it.primaryTone(RadioBottomTone)), blend)
-                } ?: fallback
-                drawRect(Brush.verticalGradient(listOf(topColor, bottomColor)))
-            }
             .clickable(onClick = onPlay),
     ) {
-        if (heroCover.isNotEmpty()) RadioCircle(heroCover, size = 112.dp, x = 16.dp, y = 16.dp)
-        guests.getOrNull(0)?.let { RadioCircle(it, size = 80.dp, x = 120.dp, y = 88.dp) }
-        guests.getOrNull(1)?.let { RadioCircle(it, size = 64.dp, x = 56.dp, y = 136.dp) }
+        // 渐变底 + 三张图是**一整块**：一起等齐、一起淡入。文字在它外面，始终可见。
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .graphicsLayer { alpha = gate.value }
+                .drawBehind {
+                    val topColor = seed?.let { Color(it.primaryTone(RadioTopTone)) } ?: fallback
+                    val bottomColor = seed?.let { Color(it.primaryTone(RadioBottomTone)) } ?: fallback
+                    drawRect(Brush.verticalGradient(listOf(topColor, bottomColor)))
+                },
+        ) {
+            if (heroCover.isNotEmpty()) {
+                RadioCircle(heroCover, size = 112.dp, x = 16.dp, y = 16.dp) {
+                    settled = settled + "hero"
+                }
+            }
+            guests.getOrNull(0)?.let { url ->
+                RadioCircle(url, size = 80.dp, x = 120.dp, y = 88.dp) { settled = settled + "guest0" }
+            }
+            guests.getOrNull(1)?.let { url ->
+                RadioCircle(url, size = 64.dp, x = 56.dp, y = 136.dp) { settled = settled + "guest1" }
+            }
+        }
 
         Column(
             modifier = Modifier
@@ -451,13 +474,26 @@ private fun RadioCard(
     }
 }
 
-/** 电台卡上的一枚圆形艺人/封面图。位置与直径都是按参考图的比例摊到 [CardWidth] 上的。 */
+/**
+ * 电台卡上的一枚圆形艺人/封面图。位置与直径都是按参考图的比例摊到 [CardWidth] 上的。
+ *
+ * [onSettled] 在**成功或失败**时都回调一次：整张卡的入场动画要等三张图都落地，
+ * 挂掉的那张也必须算落地，否则卡片永远不显示。
+ */
 @Composable
-private fun BoxScope.RadioCircle(url: String, size: Dp, x: Dp, y: Dp) {
+private fun BoxScope.RadioCircle(
+    url: String,
+    size: Dp,
+    x: Dp,
+    y: Dp,
+    onSettled: () -> Unit = {},
+) {
     AsyncImage(
         model = rememberCoverRequest(url),
         contentDescription = null,
         contentScale = ContentScale.Crop,
+        onSuccess = { onSettled() },
+        onError = { onSettled() },
         modifier = Modifier
             .align(Alignment.TopStart)
             .offset(x = x, y = y)

@@ -25,6 +25,7 @@ import coil3.compose.AsyncImagePainter
 import com.kyant.shapes.RoundedRectangle
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
+import com.nevoit.material.core.modifier.thenIf
 import com.nevoit.material.theme.MaterialTheme
 
 @Composable
@@ -48,7 +49,9 @@ internal fun CollectionCard(
                 .fillMaxWidth()
                 .aspectRatio(1f)
                 .clip(RoundedRectangle(12.dp))
-                .background(coverBackground)
+                // 透明就别挂 background：多一层纯透明的填充，封面又是整块不透明的，
+                // 白让 GPU 多画一遍。只有真要垫底色（占位）时才加这层。
+                .thenIf(coverBackground != Color.Transparent) { background(coverBackground) }
                 .indication(interactionSource, indication),
         ) {
             AsyncImage(

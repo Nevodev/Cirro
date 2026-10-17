@@ -18,13 +18,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil3.compose.AsyncImage
 import com.kyant.shapes.RoundedRectangle
 import com.nevoit.cirro.data.LibraryRepository
 import com.nevoit.cirro.data.model.CollectionInfo
@@ -42,7 +40,6 @@ import com.nevoit.material.core.component.PageHeader
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
 import com.nevoit.material.core.layout.VerticalStack
-import com.nevoit.material.core.modifier.thenIf
 import com.nevoit.material.theme.MaterialTheme
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
@@ -126,17 +123,12 @@ private fun LibraryPlaylistRow(
             .clickable(onClick = onClick),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        AsyncImage(
-            model = info.cover.takeIf { it.isNotBlank() },
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
+        LibraryCover(
+            cover = info.cover,
             modifier = Modifier
                 .padding(12.dp)
                 .clip(RoundedRectangle(8.dp))
-                .size(56.dp)
-                .thenIf(info.cover.isBlank()) {
-                    background(MaterialTheme.colors.cardBackground)
-                },
+                .size(56.dp),
         )
         Column(Modifier.weight(1f)) {
             Text(

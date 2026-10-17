@@ -4,6 +4,7 @@ import android.app.Application
 import com.nevoit.cirro.data.AccountRepository
 import com.nevoit.cirro.data.LibraryRepository
 import com.nevoit.cirro.data.SongLikeRepository
+import com.nevoit.cirro.data.installImageLoader
 import com.nevoit.cirro.di.appModule
 import com.nevoit.cirro.lyrics.data.AppleMusicAccountRepository
 import com.nevoit.cirro.lyrics.data.LyricsBridge
@@ -15,6 +16,9 @@ class CirroApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+
+        // 必须在任何一处取图之前装：给全站的网易云封面默认补上 1024 的尺寸参数。
+        installImageLoader()
 
         val koin = startKoin {
             androidContext(this@CirroApplication)
