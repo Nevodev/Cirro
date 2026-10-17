@@ -33,7 +33,13 @@ internal fun LibraryPlaybackButtons(
     Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         LibraryPlaybackButton("播放", R.drawable.play_fill, enabled, onPlay, Modifier.weight(1f))
         HGap(12.dp)
-        LibraryPlaybackButton("随机播放", R.drawable.shuffle, enabled, onShuffle, Modifier.weight(1f))
+        LibraryPlaybackButton(
+            "随机播放",
+            R.drawable.shuffle,
+            enabled,
+            onShuffle,
+            Modifier.weight(1f)
+        )
     }
 }
 
@@ -46,10 +52,12 @@ private fun LibraryPlaybackButton(
     modifier: Modifier,
 ) {
     val shape = remember { Capsule() }
-    val content = MaterialTheme.colors.contentVariant.let { if (enabled) it else it.copy(alpha = 0.38f) }
+    val content = MaterialTheme.colors.onPrimaryContainer
     Row(
-        modifier.heightIn(min = 56.dp).clip(shape)
-            .background(MaterialTheme.colors.cardBackground)
+        modifier
+            .heightIn(min = 56.dp)
+            .clip(shape)
+            .background(MaterialTheme.colors.primaryContainer)
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.Center,
@@ -57,6 +65,6 @@ private fun LibraryPlaybackButton(
     ) {
         Icon(painterResource(icon), null, Modifier.size(24.dp), tint = content)
         HGap(8.dp)
-        Text(title, style = MaterialTheme.type.body, color = content)
+        Text(title, color = content)
     }
 }

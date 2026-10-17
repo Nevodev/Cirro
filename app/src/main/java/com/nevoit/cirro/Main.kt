@@ -185,6 +185,7 @@ sealed interface MainDestination {
         // 入口处的封面串：取色缓存按整串 URL 做 key，用它才保证第一帧命中
         val coverHint: String = "",
         val libraryAlbum: Boolean = false,
+        val authorHint: String = "",
     ) : MainDestination
 }
 
@@ -332,11 +333,11 @@ fun BoxScope.Main() {
                         session = session,
                         selectedIndex = selectedIndex,
                         onSelect = { selectedIndex = it },
-                        onOpenCollection = { kind, id, titleHint, coverHint ->
-                            navigate(MainDestination.Collection(kind, id, titleHint, coverHint))
+                        onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
+                            navigate(MainDestination.Collection(kind, id, titleHint, coverHint, authorHint = authorHint))
                         },
-                        onOpenLibraryAlbum = { id, title, cover ->
-                            navigate(MainDestination.Collection(CollectionKind.ALBUM, id, title, cover, libraryAlbum = true))
+                        onOpenLibraryAlbum = { id, title, cover, author ->
+                            navigate(MainDestination.Collection(CollectionKind.ALBUM, id, title, cover, libraryAlbum = true, authorHint = author))
                         },
                         onOpenLibraryLikedSongs = { navigate(MainDestination.LibraryLikedSongs) },
                         onOpenLibraryPlaylists = { navigate(MainDestination.LibraryPlaylists) },
@@ -349,40 +350,40 @@ fun BoxScope.Main() {
                 MainDestination.LibraryLikedSongs -> LibraryLikedSongsRoute(
                     session = session,
                     onBack = ::back,
-                    onOpenCollection = { kind, id, titleHint, coverHint ->
-                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint))
+                    onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
+                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint, authorHint = authorHint))
                     },
                 )
 
                 MainDestination.LibraryPlaylists -> LibraryPlaylistsRoute(
                     session = session,
                     onBack = ::back,
-                    onOpenCollection = { kind, id, titleHint, coverHint ->
-                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint))
+                    onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
+                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint, authorHint = authorHint))
                     },
                 )
 
                 MainDestination.LibraryArtists -> LibraryArtistsRoute(
                     session = session,
                     onBack = ::back,
-                    onOpenCollection = { kind, id, titleHint, coverHint ->
-                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint))
+                    onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
+                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint, authorHint = authorHint))
                     },
                 )
 
                 MainDestination.LibraryAlbums -> LibraryAlbumsRoute(
                     session = session,
                     onBack = ::back,
-                    onOpenLibraryAlbum = { id, title, cover ->
-                        navigate(MainDestination.Collection(CollectionKind.ALBUM, id, title, cover, libraryAlbum = true))
+                    onOpenLibraryAlbum = { id, title, cover, author ->
+                        navigate(MainDestination.Collection(CollectionKind.ALBUM, id, title, cover, libraryAlbum = true, authorHint = author))
                     },
                 )
 
                 MainDestination.LibrarySongs -> LibrarySongsRoute(
                     session = session,
                     onBack = ::back,
-                    onOpenCollection = { kind, id, titleHint, coverHint ->
-                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint))
+                    onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
+                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint, authorHint = authorHint))
                     },
                 )
 
@@ -391,10 +392,11 @@ fun BoxScope.Main() {
                     id = destination.id,
                     titleHint = destination.titleHint,
                     coverHint = destination.coverHint,
+                    authorHint = destination.authorHint,
                     libraryAlbum = destination.libraryAlbum,
                     onBack = ::back,
-                    onOpenCollection = { kind, id, titleHint, coverHint ->
-                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint))
+                    onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
+                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint, authorHint = authorHint))
                     },
                 )
             }
@@ -473,8 +475,8 @@ private fun BoxScope.MainTabs(
     session: Session,
     selectedIndex: Int,
     onSelect: (Int) -> Unit,
-    onOpenCollection: (CollectionKind, Long, String, String) -> Unit,
-    onOpenLibraryAlbum: (Long, String, String) -> Unit,
+    onOpenCollection: (CollectionKind, Long, String, String, String) -> Unit,
+    onOpenLibraryAlbum: (Long, String, String, String) -> Unit,
     onOpenLibraryLikedSongs: () -> Unit,
     onOpenLibraryPlaylists: () -> Unit,
     onOpenLibraryArtists: () -> Unit,

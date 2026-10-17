@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -63,10 +64,12 @@ import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.QueueSource
 import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.data.model.Song
+import com.nevoit.cirro.data.model.albumDisplayTitle
 import com.nevoit.cirro.data.model.forSession
 import com.nevoit.cirro.data.model.hasPendingInserts
 import com.nevoit.cirro.data.model.likedPlaylistInfo
 import com.nevoit.cirro.data.model.tracksForAlbum
+import com.nevoit.cirro.home.OpenCollection
 import com.nevoit.cirro.home.Section
 import com.nevoit.cirro.home.dataOrNull
 import com.nevoit.cirro.palette.CoverPalette
@@ -79,9 +82,7 @@ import com.nevoit.cirro.ui.SongMenuViewModel
 import com.nevoit.cirro.ui.TopShade
 import com.nevoit.cirro.ui.TrackRow
 import com.nevoit.cirro.ui.resolvePosition
-import com.nevoit.cirro.ui.rememberCoverRequest
 import com.nevoit.material.core.animation.rememberPressAnimatable
-import com.nevoit.material.core.component.BottomPopupMenu
 import com.nevoit.material.core.component.BottomPopupMenuScope
 import com.nevoit.material.core.component.CircleIconButton
 import com.nevoit.material.core.component.HGap
@@ -97,6 +98,8 @@ import com.nevoit.material.core.utility.NavigationBarSpacer
 import com.nevoit.material.navigation.LocalPageTransitionState
 import com.nevoit.material.theme.MaterialShapes
 import com.nevoit.material.theme.MaterialTheme
+import com.nevoit.material.theme.local.ProvideContentColor
+import com.nevoit.material.theme.scaled
 import com.nevoit.material.theme.tokens.Springs
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -160,10 +163,11 @@ fun CollectionRoute(
     titleHint: String,
     coverHint: String,
     onBack: () -> Unit,
-    onOpenCollection: (CollectionKind, Long, String, String) -> Unit,
+    onOpenCollection: OpenCollection,
     modifier: Modifier = Modifier,
     libraryAlbum: Boolean = false,
     likedPlaylist: Boolean = false,
+    authorHint: String = "",
 ) {
     val viewModel: CollectionViewModel = koinViewModel {
         parametersOf(kind, id, titleHint)
@@ -177,21 +181,35 @@ fun CollectionRoute(
     val session by koinInject<AccountRepository>().session.collectAsState()
     val scope = rememberCoroutineScope()
     var tracksRevealed by remember(viewModel) { mutableStateOf(false) }
-    val state = remember(remoteState, library, libraryError, session, libraryAlbum, likedPlaylist, id, tracksRevealed) {
-        val liked = library?.forSession(session)?.takeIf { likedPlaylist && it.likedPlaylistId == id }
+    var showFullAlbum by rememberSaveable(kind, id) { mutableStateOf(false) }
+    val state = remember(
+        remoteState,
+        library,
+        libraryError,
+        session,
+        libraryAlbum,
+        likedPlaylist,
+        id,
+        tracksRevealed,
+        showFullAlbum,
+    ) {
+        val liked =
+            library?.forSession(session)?.takeIf { likedPlaylist && it.likedPlaylistId == id }
         if (liked != null) {
             remoteState.copy(
-                info = Section.Ready(liked.likedPlaylistInfo(
-                    (session as? Session.LoggedIn)?.profile?.nickname.orEmpty(),
-                    remoteState.info.dataOrNull,
-                )),
+                info = Section.Ready(
+                    liked.likedPlaylistInfo(
+                        (session as? Session.LoggedIn)?.profile?.nickname.orEmpty(),
+                        remoteState.info.dataOrNull,
+                    )
+                ),
                 songs = when {
                     !liked.likesLoaded -> remoteState.songs
                     tracksRevealed -> Section.Ready(liked.likedSongs)
                     else -> Section.Loading
                 },
             )
-        } else if (libraryAlbum && remoteState.songs is Section.Ready) {
+        } else if (libraryAlbum && !showFullAlbum && remoteState.songs is Section.Ready) {
             val uid = (session as? Session.LoggedIn)?.profile?.userId
             val snapshot = library?.takeIf { it.userId == uid }
             when {
@@ -217,6 +235,9 @@ fun CollectionRoute(
                 .toMap()
         } else emptyMap()
     }
+    val incompleteAlbum = libraryAlbum && kind == CollectionKind.ALBUM && !showFullAlbum &&
+            (state.songs !is Section.Ready ||
+                    state.songs.dataOrNull?.size != remoteState.songs.dataOrNull?.size)
     val context = LocalContext.current
 
     LaunchedEffect(viewModel) {
@@ -271,13 +292,27 @@ fun CollectionRoute(
     CollectionScreen(
         state = state,
         likedPlaylist = likedPlaylist,
+        incompleteAlbum = incompleteAlbum,
+        onShowFullAlbum = { showFullAlbum = true },
         albumTrackNumbers = albumTrackNumbers,
         displayTitle = viewModel.displayTitle,
+        authorHint = authorHint,
         coverUrl = coverUrl,
         onCoverError = { coverHintFailed = true },
         playingId = playingId,
         seed = seed,
         onPlay = { index -> if (songs.isNotEmpty()) playback.playSongs(songs, index, queueSource) },
+        onOpenAlbum = { album ->
+            onOpenCollection(
+                CollectionKind.ALBUM,
+                album.id,
+                albumDisplayTitle(album.title, album.albumType),
+                album.cover,
+                album.author
+            )
+        },
+        onRetryMoreWorks = viewModel::loadMoreWorks,
+        onRetrySimilarSongs = viewModel::loadSimilarSongs,
         songMenuContent = { song ->
             SongMenuContent(
                 song = song,
@@ -298,7 +333,8 @@ fun CollectionRoute(
                         CollectionKind.ALBUM,
                         metadata.albumId,
                         metadata.album,
-                        metadata.cover
+                        metadata.cover,
+                        "",
                     )
                 },
                 onOpenArtist = { artistId, name ->
@@ -306,7 +342,8 @@ fun CollectionRoute(
                         CollectionKind.ARTIST,
                         artistId,
                         name,
-                        ""
+                        "",
+                        "热门歌曲",
                     )
                 },
                 onShare = {
@@ -355,13 +392,19 @@ fun CollectionRoute(
 private fun CollectionScreen(
     state: CollectionViewModel.UiState,
     likedPlaylist: Boolean,
+    incompleteAlbum: Boolean,
+    onShowFullAlbum: () -> Unit,
     albumTrackNumbers: Map<Long, Int>,
     displayTitle: String,
+    authorHint: String,
     coverUrl: String,
     onCoverError: () -> Unit,
     playingId: Long?,
     seed: CoverSeed?,
     onPlay: (Int) -> Unit,
+    onOpenAlbum: (CollectionInfo) -> Unit,
+    onRetryMoreWorks: () -> Unit,
+    onRetrySimilarSongs: () -> Unit,
     songMenuContent: @Composable BottomPopupMenuScope.(Song) -> Unit,
     onShuffle: () -> Unit,
     onToggleSubscribed: () -> Unit,
@@ -459,6 +502,7 @@ private fun CollectionScreen(
                         info = info,
                         likedPlaylist = likedPlaylist,
                         displayTitle = displayTitle,
+                        authorHint = authorHint,
                         coverUrl = coverUrl,
                         onCoverError = onCoverError,
                         backgroundColor = backgroundColor,
@@ -472,7 +516,7 @@ private fun CollectionScreen(
                     )
                 }
             }
-            if (description.isNotEmpty()) {
+            if (!incompleteAlbum && description.isNotEmpty()) {
                 item(key = "description") {
                     VGap(24.dp)
                     var expanded by rememberSaveable { mutableStateOf(false) }
@@ -558,6 +602,56 @@ private fun CollectionScreen(
                 }
             }
 
+            if (incompleteAlbum && state.songs is Section.Ready) {
+                item(key = "show-full-album") {
+                    VGap()
+                    ProvideContentColor(contentVariantColor) {
+                        Row(
+                            modifier = Modifier
+                                .animateItem(tween(200), Springs.crisp(), tween(200))
+                                .fillMaxWidth()
+                                .heightIn(48.dp)
+                                .clickable(onClick = onShowFullAlbum)
+                                .padding(horizontal = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(text = "显示完整专辑")
+                            Icon(
+                                painter = painterResource(R.drawable.chevron_right_semibold),
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (state.info.dataOrNull?.kind == CollectionKind.ALBUM && state.songs is Section.Ready) {
+                val info = state.info.dataOrNull
+                if (info != null && info.primaryArtistId > 0) {
+                    item(key = "more-works") {
+                        AlbumWorksSection(
+                            title = "更多${info.primaryArtistName}的作品",
+                            albums = state.moreWorks,
+                            content = contentColor,
+                            contentVariant = contentVariantColor,
+                            onOpenAlbum = onOpenAlbum,
+                            onRetry = onRetryMoreWorks,
+                        )
+                    }
+                }
+                item(key = "similar-songs") {
+                    AlbumWorksSection(
+                        title = "你可能也喜欢",
+                        albums = state.similarAlbums,
+                        content = contentColor,
+                        contentVariant = contentVariantColor,
+                        onOpenAlbum = onOpenAlbum,
+                        onRetry = onRetrySimilarSongs,
+                    )
+                }
+            }
+
             // 尾距垫住常驻的 MiniPlayer + 底栏（数字跟首页同一个约定）
             item(key = "bottom") {
                 VGap(36.dp)
@@ -595,6 +689,7 @@ private fun HeaderBlock(
     info: CollectionInfo?,
     likedPlaylist: Boolean,
     displayTitle: String,
+    authorHint: String,
     coverUrl: String,
     onCoverError: () -> Unit,
     backgroundColor: Color,
@@ -672,7 +767,7 @@ private fun HeaderBlock(
                 }
             )
 
-            val author = info?.author.orEmpty()
+            val author = info?.author ?: authorHint
             VGap(4.dp)
             Text(
                 text = author,
@@ -687,7 +782,8 @@ private fun HeaderBlock(
                 }
             )
 
-            val meta = if (likedPlaylist) relativeAddedDay(info?.updateTimeMs ?: 0) else metaLine(info)
+            val meta =
+                if (likedPlaylist) relativeAddedDay(info?.updateTimeMs ?: 0) else metaLine(info)
             if (meta.isNotEmpty()) {
                 VGap(4.dp)
                 Text(
@@ -785,7 +881,7 @@ private fun HeaderActions(
             MaterialShapeButton(
                 iconRes = if (subscribed) R.drawable.star_fill else R.drawable.star,
                 label = if (subscribed) "已收藏" else "收藏",
-                shape = MaterialShapes.Sunny,
+                shape = MaterialShapes.Sunny.scaled(0.97f),
                 background = buttonColor,
                 tint = buttonIconColor,
                 enabled = !subBusy,

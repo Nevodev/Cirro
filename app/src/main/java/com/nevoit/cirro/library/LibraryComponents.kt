@@ -2,15 +2,12 @@ package com.nevoit.cirro.library
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.indication
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -23,12 +20,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
-import com.kyant.shapes.RoundedRectangle
 import com.nevoit.cirro.R
 import com.nevoit.cirro.data.HomeRepository
 import com.nevoit.cirro.data.model.CollectionInfo
@@ -86,11 +81,10 @@ internal fun LibraryCollectionRow(info: CollectionInfo, onClick: () -> Unit) {
 @Composable
 internal fun LibraryAlbumGridCard(
     album: LibraryCollection,
-    onOpenLibraryAlbum: (Long, String, String) -> Unit,
+    onOpenLibraryAlbum: (Long, String, String, String) -> Unit,
 ) {
     val title = rememberLibraryCollectionTitle(album.info)
     val palette = koinInject<CoverPalette>()
-    val interactionSource = remember { MutableInteractionSource() }
 
     LaunchedEffect(album.info.cover) {
         palette.prefetch(album.info.cover)
@@ -99,20 +93,12 @@ internal fun LibraryAlbumGridCard(
         CollectionCard(
             title = title,
             subtitle = album.info.author,
-            onClick = { onOpenLibraryAlbum(album.info.id, title, album.info.cover) },
+            model = album.info.cover.takeIf { it.isNotBlank() },
+            onClick = { onOpenLibraryAlbum(album.info.id, title, album.info.cover, album.info.author) },
             modifier = Modifier.fillMaxWidth(),
-            indication = null,
-            interactionSource = interactionSource,
-        ) {
-            LibraryCover(
-                url = album.info.cover,
-                modifier = Modifier
-                    .clip(RoundedRectangle(12.dp))
-                    .indication(interactionSource, DimIndication())
-                    .fillMaxWidth()
-                    .aspectRatio(1f),
-            )
-        }
+            indication = DimIndication(),
+            coverBackground = MaterialTheme.colors.cardBackground,
+        )
         VGap(16.dp)
     }
 }

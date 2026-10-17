@@ -31,13 +31,13 @@ fun Modifier.smoothGradient(
     intensity: Float
 ): Modifier = drawWithCache {
     val brush = Brush.verticalGradient(
-        colors = smoothStepGradientColors(color(), start, end, intensity),
+        colors = smoothStepGradientColors(color(), start, end, 1f),
         startY = 0f,
         endY = size.height
     )
 
     onDrawBehind {
-        drawRect(brush = brush)
+        drawRect(brush = brush, alpha = intensity)
     }
 }
 
@@ -54,7 +54,7 @@ private fun smoothStepGradientColors(
         val mask = smoothStep(start, end, p)
         val alpha = (intensity * mask).coerceIn(0f, 1f)
 
-        color.copy(alpha = alpha)
+        color.copy(alpha = color.alpha * alpha)
     }
 
 private fun smoothStep(edge0: Float, edge1: Float, x: Float): Float {

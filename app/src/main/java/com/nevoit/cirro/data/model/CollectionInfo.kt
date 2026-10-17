@@ -41,6 +41,8 @@ data class CollectionInfo(
     val company: String = "",
     /** 专辑类型："专辑" / "Single" / "EP"……仅专辑有。 */
     val albumType: String = "",
+    val primaryArtistId: Long = 0L,
+    val primaryArtistName: String = "",
 )
 
 /**

@@ -62,7 +62,7 @@ fun BoxScope.LibraryPlaylistsRoute(
             }
             items(playlists, key = { it.info.id }) { playlist ->
                 LibraryCollectionRow(playlist.info) {
-                    onOpenCollection(playlist.info.kind, playlist.info.id, playlist.info.title, playlist.info.cover)
+                    onOpenCollection(playlist.info.kind, playlist.info.id, playlist.info.title, playlist.info.cover, playlist.info.author)
                 }
             }
         }

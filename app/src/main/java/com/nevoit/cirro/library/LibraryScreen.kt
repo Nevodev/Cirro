@@ -58,7 +58,7 @@ enum class LibraryCategory(val title: String, val icon: Int) {
 @Composable
 fun BoxScope.LibraryRoute(
     session: Session,
-    onOpenLibraryAlbum: (Long, String, String) -> Unit,
+    onOpenLibraryAlbum: (Long, String, String, String) -> Unit,
     onOpenLikedSongs: () -> Unit,
     onOpenPlaylists: () -> Unit,
     onOpenArtists: () -> Unit,

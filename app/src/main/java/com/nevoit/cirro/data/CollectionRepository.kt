@@ -75,6 +75,14 @@ class CollectionRepository(
             }
         }
 
+    suspend fun artistAlbums(artistId: Long): Result<List<CollectionInfo>> =
+        withContext(Dispatchers.IO) { NcmBridge.artistAlbums(artistId) }
+
+    suspend fun similarSongs(songId: Long): Result<List<Song>> =
+        withContext(Dispatchers.IO) { NcmBridge.similarSongs(songId) }
+
+    suspend fun albumType(albumId: Long): String = home.albumType(albumId)
+
     /**
      * 收藏 / 取消收藏。成功后把缓存里的收藏状态一并改掉——界面上按钮立即翻面，
      * 下次进来也不会看到旧状态闪一下。

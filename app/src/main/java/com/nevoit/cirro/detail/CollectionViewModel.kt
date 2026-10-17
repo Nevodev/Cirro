@@ -8,7 +8,11 @@ import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.data.model.albumDisplayTitle
 import com.nevoit.cirro.home.Section
+import com.nevoit.cirro.home.dataOrNull
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,6 +51,8 @@ class CollectionViewModel(
     data class UiState(
         val info: Section<CollectionInfo> = Section.Loading,
         val songs: Section<List<Song>> = Section.Loading,
+        val moreWorks: Section<List<CollectionInfo>> = Section.Loading,
+        val similarAlbums: Section<List<CollectionInfo>> = Section.Loading,
         /** 收藏切换在途：按钮置灰防连点。 */
         val subBusy: Boolean = false,
     )
@@ -64,6 +70,9 @@ class CollectionViewModel(
 
     /** 曲目预取那次请求。重试时要能掐掉它（可能正卡在退避里）。 */
     private var tracksJob: Job? = null
+    private var moreWorksJob: Job? = null
+    private var similarSongsJob: Job? = null
+    private var recommendationTracks: List<Song> = emptyList()
 
     /**
      * 预取到、但**还没亮出去**的曲目。
@@ -105,6 +114,8 @@ class CollectionViewModel(
     fun load() {
         infoJob?.cancel()
         tracksJob?.cancel()
+        moreWorksJob?.cancel()
+        similarSongsJob?.cancel()
         pendingTracks = null
         tracksRevealed = true
         loadInfo()
@@ -116,6 +127,7 @@ class CollectionViewModel(
         infoJob = viewModelScope.launch {
             val info = retrying { repository.info(kind, id) }
             _state.update { it.copy(info = info.toSection(keep = it.info)) }
+            if (kind == CollectionKind.ALBUM) loadMoreWorks()
         }
     }
 
@@ -132,6 +144,45 @@ class CollectionViewModel(
                 .toSection(keep = _state.value.songs)
             if (tracksRevealed) _state.update { it.copy(songs = section) }
             else pendingTracks = section
+            if (kind == CollectionKind.ALBUM && section is Section.Ready) {
+                recommendationTracks = section.data
+                loadSimilarSongs()
+            }
+        }
+    }
+
+    fun loadMoreWorks() {
+        val artistId = _state.value.info.dataOrNull?.primaryArtistId ?: return
+        moreWorksJob?.cancel()
+        if (artistId <= 0) {
+            _state.update { it.copy(moreWorks = Section.Ready(emptyList())) }
+            return
+        }
+        moreWorksJob = viewModelScope.launch {
+            val result = retrying { repository.artistAlbums(artistId) }
+                .map { otherArtistAlbums(it, id) }
+            _state.update { it.copy(moreWorks = result.toSection(keep = it.moreWorks)) }
+        }
+    }
+
+    fun loadSimilarSongs() {
+        similarSongsJob?.cancel()
+        val seed = recommendationSeed(recommendationTracks)
+        if (seed == null) {
+            _state.update { it.copy(similarAlbums = Section.Ready(emptyList())) }
+            return
+        }
+        similarSongsJob = viewModelScope.launch {
+            val result = retrying { repository.similarSongs(seed) }
+                .map { recommendationAlbums(albumSimilarSongs(it, id, recommendationTracks)) }
+                .map { albums ->
+                    coroutineScope {
+                        albums.map { album ->
+                            async { album.copy(albumType = repository.albumType(album.id)) }
+                        }.awaitAll()
+                    }
+                }
+            _state.update { it.copy(similarAlbums = result.toSection(keep = it.similarAlbums)) }
         }
     }
 

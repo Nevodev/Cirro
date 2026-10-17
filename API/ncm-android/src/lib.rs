@@ -1040,6 +1040,8 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeAlbumDetail<'l
                 "cover": canon_pic(al["picUrl"].as_str().unwrap_or("")),
                 "artists": artists,
                 "description": description,
+                "primaryArtistId": primary_album_artist(al).0,
+                "primaryArtistName": primary_album_artist(al).1,
                 "updateTime": pick_i64_loose(al, &["publishTime"]),
                 "trackCount": pick_i64_loose(al, &["size"]),
                 // 版权/发行公司；老专辑可能给空串（界面留空兜底）
@@ -1056,6 +1058,90 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeAlbumDetail<'l
         (Err(e), _) => serde_json::json!({ "ok": false, "message": e.to_string() }),
     };
     jni_out(&mut env, value)
+}
+
+fn primary_album_artist(album: &serde_json::Value) -> (i64, &str) {
+    let artist = album["artists"].as_array().and_then(|xs| xs.first())
+        .unwrap_or(&album["artist"]);
+    (pick_i64_loose(artist, &["id"]), pick_str(artist, &["name"]))
+}
+
+fn flatten_artist_albums(body: &serde_json::Value) -> Result<serde_json::Value, String> {
+    if pick_i64_loose(body, &["code"]) != 200 || !body["hotAlbums"].is_array() {
+        return Err("加载艺人作品失败".into());
+    }
+    let albums: Vec<_> = body["hotAlbums"].as_array().unwrap().iter().map(|album| {
+        let (artist_id, artist_name) = primary_album_artist(album);
+        serde_json::json!({
+            "kind": "ALBUM", "id": pick_i64_loose(album, &["id"]),
+            "title": pick_str(album, &["name"]), "author": artist_name,
+            "cover": canon_pic(pick_str(album, &["picUrl"])),
+            "updateTimeMs": pick_i64_loose(album, &["publishTime"]),
+            "albumType": pick_str(album, &["type"]),
+            "primaryArtistId": artist_id, "primaryArtistName": artist_name,
+        })
+    }).collect();
+    Ok(serde_json::json!({"ok": true, "albums": albums}))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeArtistAlbums<'local>(
+    mut env: JNIEnv<'local>, _this: JObject<'local>, id: JString<'local>,
+) -> jstring {
+    let id = jni_in(&mut env, &id);
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(client.artist_album(&Query::new().param("id", &id))) {
+        Ok(r) => match flatten_artist_albums(&r.body) {
+            Ok(value) => value,
+            Err(message) => serde_json::json!({"ok": false, "message": message}),
+        },
+        Err(e) => serde_json::json!({"ok": false, "message": e.to_string()}),
+    };
+    jni_out(&mut env, value)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeSimilarSongs<'local>(
+    mut env: JNIEnv<'local>, _this: JObject<'local>, id: JString<'local>,
+) -> jstring {
+    let id = jni_in(&mut env, &id);
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(client.simi_song(&Query::new().param("id", &id))) {
+        Ok(r) if pick_i64_loose(&r.body, &["code"]) == 200 && r.body["songs"].is_array() =>
+            serde_json::json!({"ok": true, "songs": flatten_song_detail(&r.body)}),
+        Ok(_) => serde_json::json!({"ok": false, "message": "加载相似歌曲失败"}),
+        Err(e) => serde_json::json!({"ok": false, "message": e.to_string()}),
+    };
+    jni_out(&mut env, value)
+}
+
+#[cfg(test)]
+mod album_recommendation_tests {
+    use super::{primary_album_artist, flatten_artist_albums};
+    use serde_json::json;
+
+    #[test]
+    fn primary_artist_is_the_first_album_credit_even_if_tracks_have_other_artists() {
+        let album = json!({"artists": [
+            {"id": "3402673449", "name": "first"}, {"id": 2, "name": "second"}
+        ]});
+        assert_eq!(primary_album_artist(&album), (3402673449, "first"));
+        assert_eq!(primary_album_artist(&json!({"artist": {"id": 3, "name": "fallback"}})), (3, "fallback"));
+    }
+
+    #[test]
+    fn album_shelf_keeps_navigation_identity_and_rejects_failed_or_missing_lists() {
+        let result = flatten_artist_albums(&json!({"code": 200, "hotAlbums": [{
+            "id": "17715824860", "name": "work", "type": "Single",
+            "artist": {"id": 3, "name": "artist"}, "picUrl": "https://p3.music.126.net/cover"
+        }]})).unwrap();
+        assert_eq!(result["albums"][0]["id"], 17715824860i64);
+        assert_eq!(result["albums"][0]["kind"], "ALBUM");
+        assert_eq!(result["albums"][0]["albumType"], "Single");
+        assert_eq!(result["albums"][0]["cover"], "https://p1.music.126.net/cover");
+        assert!(flatten_artist_albums(&json!({"code": 302, "hotAlbums": []})).is_err());
+        assert!(flatten_artist_albums(&json!({"code": 200})).is_err());
+    }
 }
 
 fn flatten_artist_detail(body: &serde_json::Value) -> Result<serde_json::Value, String> {

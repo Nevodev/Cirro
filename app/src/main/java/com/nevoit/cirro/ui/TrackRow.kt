@@ -71,6 +71,7 @@ internal fun TrackRow(
     isPlaying: Boolean,
     content: Color,
     contentVariant: Color,
+    starColor: Color = contentVariant,
     onClick: () -> Unit,
     menuContent: @Composable BottomPopupMenuScope.() -> Unit,
     modifier: Modifier = Modifier,
@@ -78,87 +79,78 @@ internal fun TrackRow(
     val shape = position.roundedShape()
     val liked = rememberIsLiked(song.id)
 
-    // 最外层就代表 TrackRow 的整个宽度。行本体（clip / 背景 / 点击）在里层缩进一圈，
-    // 于是它的左边缘外面空出一条缝 —— 红心星就落在那儿（在 clip 之外，不会被圆角裁掉）。
     Box(modifier = modifier.fillMaxWidth()) {
-        Box(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 56.dp)
-                // 原来调用点在行**外面**加的左右间距，现在归 TrackRow 自己管。
                 .padding(horizontal = 12.dp)
                 .clip(shape)
                 .background(backgroundColor)
                 .clickable(enabled = song.playable, onClick = onClick)
-                .padding(start = 12.dp),
-            contentAlignment = Alignment.CenterStart
+                .padding(start = 12.dp)
+                .graphicsLayer { alpha = if (song.playable) 1f else UnplayableAlpha },
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .graphicsLayer { alpha = if (song.playable) 1f else UnplayableAlpha },
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (index == null) {
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(RoundedRectangle(8.dp)),
-                    ) {
-                        AsyncImage(
-                            model = rememberCoverRequest(song.cover),
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.matchParentSize(),
-                        )
-                        PlayingCoverIndicator(isPlaying, Modifier.matchParentSize())
-                    }
-                } else {
-                    PlayingTrackNumber(
-                        index = index,
-                        isCurrent = isPlaying,
-                        color = contentVariant,
-                        style = MaterialTheme.type.body.copy(fontFeatureSettings = "tnum"),
-                        modifier = Modifier.width(32.dp),
-                    )
-                }
-                HGap()
-                Column(
+            if (index == null) {
+                Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .padding(vertical = 12.dp)
+                        .size(40.dp)
+                        .clip(RoundedRectangle(8.dp)),
                 ) {
+                    AsyncImage(
+                        model = rememberCoverRequest(song.cover),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.matchParentSize(),
+                    )
+                    PlayingCoverIndicator(isPlaying, Modifier.matchParentSize())
+                }
+            } else {
+                PlayingTrackNumber(
+                    index = index,
+                    isCurrent = isPlaying,
+                    color = contentVariant,
+                    style = MaterialTheme.type.body.copy(fontFeatureSettings = "tnum"),
+                    modifier = Modifier.width(32.dp),
+                )
+            }
+            HGap()
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(vertical = 12.dp)
+            ) {
+                Text(
+                    text = song.name,
+                    style = MaterialTheme.type.body,
+                    color = content,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (showArtist) {
                     Text(
-                        text = song.name,
-                        style = MaterialTheme.type.body,
-                        color = content,
-                        maxLines = 2,
+                        text = song.artistText,
+                        style = MaterialTheme.type.subHeadline2,
+                        color = contentVariant,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    if (showArtist) {
-                        Text(
-                            text = song.artistText,
-                            style = MaterialTheme.type.subHeadline2,
-                            color = contentVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
                 }
-                HGap()
-                BottomPopupMenu(
-                    menuContent = menuContent
-                ) { openMenu ->
-                    CircleIconButton(
-                        iconRes = R.drawable.ellipsis_vertical,
-                        label = "更多",
-                        background = Color.Transparent,
-                        tint = contentVariant,
-                        onClick = openMenu,
-                        enabled = song.playable,
-                        iconSize = 24.dp,
-                    )
-                }
+            }
+            HGap()
+            BottomPopupMenu(
+                menuContent = menuContent
+            ) { openMenu ->
+                CircleIconButton(
+                    iconRes = R.drawable.ellipsis_vertical,
+                    label = "更多",
+                    background = Color.Transparent,
+                    tint = contentVariant,
+                    onClick = openMenu,
+                    enabled = song.playable,
+                    iconSize = 24.dp,
+                )
             }
         }
 
@@ -166,7 +158,7 @@ internal fun TrackRow(
             Icon(
                 painter = painterResource(R.drawable.star_fill_small),
                 contentDescription = "已喜爱",
-                tint = contentVariant,
+                tint = starColor,
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     .graphicsLayer { alpha = if (song.playable) 1f else UnplayableAlpha }
@@ -176,28 +168,16 @@ internal fun TrackRow(
     }
 }
 
-/**
- * 这一首有没有红心。
- *
- * 跟播放状态同一套路（`rememberIsCurrentSong`）：**每行自己订阅**，状态读取关在行内 ——
- * `likedIds` 一波动只有状态真变的那一行重组，页面那层完全不用跟着动。`LazyColumn` 只组合可见行，
- * 所以订阅数也就是十来条。
- *
- * `likedIds` 为 null（还没加载 / 刚切账号）一律当"没红心"；`SongLikeRepository` 切账号时会立刻
- * 把快照清空，所以这里读到的不会串到上一个账号。
- */
 @Composable
 internal fun rememberIsLiked(songId: Long): Boolean {
     val likes = koinInject<SongLikeRepository>()
     val liked by remember(likes, songId) {
         likes.snapshot.map { it.likedIds?.contains(songId) == true }.distinctUntilChanged()
-    }.collectAsState(initial = likes.snapshot.value.likedIds?.contains(songId) == true)
+    }.collectAsState(initial = remember { likes.snapshot.value.likedIds?.contains(songId) == true })
     return liked
 }
 
 internal fun resolvePosition(size: Int, index: Int): ItemPosition {
-    // 单元素列表（Single 专辑就 1 首）四角都要圆，让 First 和 Last 的圆角叠加不了，
-    // 单给一个值
     return when {
         size <= 1 -> ItemPosition.Single
         index == 0 -> ItemPosition.First

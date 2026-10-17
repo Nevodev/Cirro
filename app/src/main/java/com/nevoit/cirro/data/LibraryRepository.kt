@@ -60,12 +60,19 @@ class LibraryRepository(
             var owner: Long? = null
             account.session.collect { session ->
                 if (session == Session.Unknown || session == Session.Offline) return@collect
+                // 扫码完成到用户资料返回之间的占位账号不是退出登录。
+                if (session is Session.LoggedIn && session.profile.userId <= 0) return@collect
                 val uid = (session as? Session.LoggedIn)?.profile?.userId?.takeIf { it > 0 }
                 if (uid == null) {
                     mutex.withLock {
+                        val previousUserId = _snapshot.value?.userId
                         _snapshot.value = null
+                        _content.value = null
                         _error.value = null
-                        withContext(Dispatchers.IO) { ownerFile.delete() }
+                        withContext(Dispatchers.IO) {
+                            previousUserId?.let { AtomicFile(File(directory, "$it.json")).delete() }
+                            ownerFile.delete()
+                        }
                     }
                     owner = null
                     return@collect

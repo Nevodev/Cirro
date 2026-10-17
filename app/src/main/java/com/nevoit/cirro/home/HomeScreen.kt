@@ -114,15 +114,14 @@ private const val RecentShelfTitle = "最近播放"
 
 /** 歌单卡：正方形封面 + 下方歌单名（+ 可选的一行小字）。 */
 private val PlaylistCardSize = 152.dp
-private val PlaylistCardCorner = 12.dp
 
 /** 点入口卡 / 横滑卡时要去的详情页目的地：种类、id、清洗过的显示名。 */
-typealias OpenCollection = (kind: CollectionKind, id: Long, titleHint: String, coverHint: String) -> Unit
+typealias OpenCollection = (kind: CollectionKind, id: Long, titleHint: String, coverHint: String, authorHint: String) -> Unit
 
 @Composable
 fun BoxScope.HomeRoute(
     session: Session,
-    onOpenCollection: OpenCollection = { _, _, _, _ -> },
+    onOpenCollection: OpenCollection = { _, _, _, _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     // 初始化会立即请求首页数据并启动轮询，登录前不创建 ViewModel。
@@ -269,7 +268,8 @@ private fun EntryCard(
                     entry.kind,
                     entry.id,
                     entry.title,
-                    entry.detail.dataOrNull?.covers?.firstOrNull().orEmpty()
+                    entry.detail.dataOrNull?.covers?.firstOrNull().orEmpty(),
+                    "",
                 )
             },
     ) {
@@ -350,7 +350,8 @@ private fun PlaylistShelf(
                             kind,
                             card.id,
                             card.title,
-                            card.covers.firstOrNull().orEmpty()
+                            card.covers.firstOrNull().orEmpty(),
+                            if (kind == CollectionKind.ALBUM) card.subtitle.orEmpty() else "",
                         )
                     },
                 )
@@ -449,34 +450,22 @@ private fun LazyItemScope.PlaylistCard(
         title = card.title,
         // 雷达歌单没有可用副标题，留空才能保持卡片带的原有高度。
         subtitle = card.subtitle,
+        model = rememberCoverRequest(covers.current),
+        onError = { covers.advance() },
         onClick = onClick,
         modifier = modifier
             .animateItem(placementSpec = Springs.crisp())
-            .width(PlaylistCardSize)
-            .clip(RoundedRectangle(PlaylistCardCorner)),
+            .width(PlaylistCardSize),
     ) {
-        Box(
-            modifier = Modifier
-                .size(PlaylistCardSize)
-                .clip(RoundedRectangle(PlaylistCardCorner))
-        ) {
-            AsyncImage(
-                model = rememberCoverRequest(covers.current),
+        if (showBadge) {
+            Image(
+                painter = painterResource(R.drawable.cirro_logo_badge),
                 contentDescription = null,
-                onError = { covers.advance() },
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+                    .size(20.dp)
             )
-            if (showBadge) {
-                Image(
-                    painter = painterResource(R.drawable.cirro_logo_badge),
-                    contentDescription = null,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(8.dp)
-                        .size(20.dp)
-                )
-            }
         }
     }
 }

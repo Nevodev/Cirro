@@ -7,9 +7,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -30,19 +31,20 @@ import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.data.model.forSession
 import com.nevoit.cirro.data.model.hasPendingInserts
-import com.nevoit.cirro.home.OpenCollection
 import com.nevoit.cirro.home.LoginCard
+import com.nevoit.cirro.home.OpenCollection
 import com.nevoit.cirro.playback.PlaybackConnection
 import com.nevoit.cirro.playback.rememberIsCurrentSong
+import com.nevoit.cirro.ui.BottomShade
 import com.nevoit.cirro.ui.SongMenuContent
 import com.nevoit.cirro.ui.SongMenuViewModel
-import com.nevoit.cirro.ui.BottomShade
+import com.nevoit.cirro.ui.TopShade
 import com.nevoit.cirro.ui.TrackRow
 import com.nevoit.cirro.ui.resolvePosition
 import com.nevoit.material.core.component.BottomPopupMenuScope
 import com.nevoit.material.core.component.PageHeader
 import com.nevoit.material.core.component.VGap
-import com.nevoit.material.core.interaction.rememberFlingBehavior
+import com.nevoit.material.core.layout.VerticalStack
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.tokens.Springs
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -90,13 +92,21 @@ fun BoxScope.LibrarySongsRoute(
         menu.messages.collect { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
     }
     val source = remember { QueueSource(title = "歌曲") }
+    val subTitle = if (songs.isNotEmpty()) "${songs.size} 首" else null
+    val listState = rememberLazyListState()
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().background(MaterialTheme.colors.pageBackground),
-        flingBehavior = rememberFlingBehavior(),
+    VerticalStack(
+        state = listState,
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colors.pageBackground),
     ) {
         item(key = "title") {
-            PageHeader(title = "歌曲", modifier = Modifier.padding(horizontal = 12.dp))
+            PageHeader(
+                title = "歌曲",
+                subTitle = subTitle,
+                modifier = Modifier.padding(horizontal = 12.dp)
+            )
         }
         if (error != null) item(key = "library_error") {
             LibraryStatus(error.orEmpty(), viewModel::refresh)
@@ -140,9 +150,18 @@ fun BoxScope.LibrarySongsRoute(
                     isPlaying = rememberIsCurrentSong(song.id),
                     content = MaterialTheme.colors.content,
                     contentVariant = MaterialTheme.colors.contentVariant,
+                    starColor = MaterialTheme.colors.primary,
                     onClick = play,
                     menuContent = {
-                        LibrarySongMenuContent(song, source, playback, menu, queueActions, onOpenCollection, play)
+                        LibrarySongMenuContent(
+                            song,
+                            source,
+                            playback,
+                            menu,
+                            queueActions,
+                            onOpenCollection,
+                            play
+                        )
                     },
                     // 左右边距在 TrackRow 内部（背景要铺满整宽，左侧那条缝留给红心星）
                     modifier = Modifier.animateItem(tween(200), Springs.crisp(), tween(200)),
@@ -152,6 +171,12 @@ fun BoxScope.LibrarySongsRoute(
         }
         item(key = "footer") { LibraryFooter() }
     }
+    TopShade(
+        color = MaterialTheme.colors.pageBackground,
+        threshold = { it.calculateTopPadding() + 12.dp },
+        listState = listState,
+        modifier = Modifier.height(72.dp + 48.dp)
+    )
     BottomShade(color = MaterialTheme.colors.pageBackground)
     LibraryBackButton(onBack)
 }
@@ -175,11 +200,30 @@ private fun BottomPopupMenuScope.LibrarySongMenuContent(
         onShare = {
             val intent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"
-                putExtra(Intent.EXTRA_TEXT, "${song.name} - ${song.artistText}\nhttps://music.163.com/song?id=${song.id}")
+                putExtra(
+                    Intent.EXTRA_TEXT,
+                    "${song.name} - ${song.artistText}\nhttps://music.163.com/song?id=${song.id}"
+                )
             }
             context.startActivity(Intent.createChooser(intent, "分享歌曲"))
         },
-        onOpenAlbum = { onOpenCollection(CollectionKind.ALBUM, it.albumId, it.album, it.cover) },
-        onOpenArtist = { id, name -> onOpenCollection(CollectionKind.ARTIST, id, name, "") },
+        onOpenAlbum = {
+            onOpenCollection(
+                CollectionKind.ALBUM,
+                it.albumId,
+                it.album,
+                it.cover,
+                ""
+            )
+        },
+        onOpenArtist = { id, name ->
+            onOpenCollection(
+                CollectionKind.ARTIST,
+                id,
+                name,
+                "",
+                "热门歌曲"
+            )
+        },
     )
 }

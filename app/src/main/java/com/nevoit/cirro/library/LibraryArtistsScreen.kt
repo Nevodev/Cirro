@@ -62,7 +62,7 @@ fun BoxScope.LibraryArtistsRoute(
             }
             items(artists, key = { it.info.id }) { artist ->
                 LibraryCollectionRow(artist.info) {
-                    onOpenCollection(artist.info.kind, artist.info.id, artist.info.title, artist.info.cover)
+                    onOpenCollection(artist.info.kind, artist.info.id, artist.info.title, artist.info.cover, "热门歌曲")
                 }
             }
         }

@@ -294,9 +294,19 @@ object NcmBridge {
                     subscribed = body.subscribed,
                     company = body.company,
                     albumType = body.albumType,
+                    primaryArtistId = body.primaryArtistId,
+                    primaryArtistName = body.primaryArtistName,
                 ),
                 songs = body.songs,
             )
+    }
+
+    fun artistAlbums(id: Long): Result<List<CollectionInfo>> = runCatching {
+        decode(nativeArtistAlbums(id.toString())).getOrThrow().albums
+    }
+
+    fun similarSongs(id: Long): Result<List<Song>> = runCatching {
+        decode(nativeSimilarSongs(id.toString())).getOrThrow().songs
     }
 
     fun artistDetail(id: Long): Result<CollectionDetail> = runCatching {
@@ -448,6 +458,8 @@ object NcmBridge {
     private external fun nativePlaylistDetail(id: String): String
 
     private external fun nativeAlbumDetail(id: String): String
+    private external fun nativeArtistAlbums(id: String): String
+    private external fun nativeSimilarSongs(id: String): String
 
     private external fun nativeArtistDetail(id: String): String
 
@@ -509,6 +521,9 @@ private data class BridgeResponse(
     val artists: List<String> = emptyList(),
     val company: String = "",
     val albumType: String = "",
+    val primaryArtistId: Long = 0L,
+    val primaryArtistName: String = "",
+    val albums: List<CollectionInfo> = emptyList(),
 )
 
 /** [NcmBridge.songQuality] 原生层返回的一档：`level` 是 wire 名，`size` 是这一档的体积（字节）。 */

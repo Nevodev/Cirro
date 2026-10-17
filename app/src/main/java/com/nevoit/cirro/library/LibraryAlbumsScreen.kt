@@ -30,7 +30,7 @@ import org.koin.compose.koinInject
 fun BoxScope.LibraryAlbumsRoute(
     session: Session,
     onBack: () -> Unit,
-    onOpenLibraryAlbum: (Long, String, String) -> Unit,
+    onOpenLibraryAlbum: (Long, String, String, String) -> Unit,
 ) {
     val repository = koinInject<LibraryRepository>()
     val library by repository.content.collectAsStateWithLifecycle()

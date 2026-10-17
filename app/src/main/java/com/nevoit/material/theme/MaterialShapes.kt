@@ -536,6 +536,15 @@ object MaterialShapes {
     }
 }
 
+fun RoundedPolygon.scaled(scale: Float): RoundedPolygon {
+    return transformed { x, y ->
+        TransformResult(
+            centerX + (x - centerX) * scale,
+            centerY + (y - centerY) * scale,
+        )
+    }
+}
+
 /** Converts a normalized [RoundedPolygon] into a Compose [Shape]. */
 @Composable
 fun RoundedPolygon.toShape(startAngle: Int = 0): Shape {
