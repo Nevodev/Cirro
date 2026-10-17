@@ -124,8 +124,10 @@ fun BoxScope.HomeRoute(
     onOpenCollection: OpenCollection = { _, _, _, _, _ -> },
     modifier: Modifier = Modifier,
 ) {
-    // 初始化会立即请求首页数据并启动轮询，登录前不创建 ViewModel。
-    val viewModel = if (session is Session.LoggedIn) koinViewModel<HomeViewModel>() else null
+    // 🔴 只有「确定没登录」才不建 VM。登录态还未知（冷启动 Session.Unknown）时也得建：
+    // 首页第一屏全靠 HomeRepository 的磁盘快照，建了 VM 才有第一帧 —— 等 loginStatus 的
+    // 网络往返回来再建，磁盘缓存就白存了。VM 自己会等 cookie 进原生层才发请求。
+    val viewModel = if (session != Session.LoggedOut) koinViewModel<HomeViewModel>() else null
     val playback = koinInject<PlaybackConnection>()
     val state = viewModel?.state?.collectAsState()?.value
 

@@ -2,12 +2,14 @@ package com.nevoit.cirro.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.nevoit.cirro.data.AccountRepository
 import com.nevoit.cirro.data.HomeRepository
 import com.nevoit.cirro.data.contentDay
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.HomeBlock
 import com.nevoit.cirro.data.model.Playlist
 import com.nevoit.cirro.data.model.RecentAlbum
+import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.data.model.albumDisplayTitle
 import kotlinx.coroutines.async
@@ -180,6 +182,7 @@ data class HomeUiState(
  */
 class HomeViewModel(
     private val repository: HomeRepository,
+    private val account: AccountRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(HomeUiState())
@@ -199,9 +202,25 @@ class HomeViewModel(
     /** 重拉去重：上一趟还没回来时，这一分钟的 tick 直接跳过（见 [attemptDailyReload]）。 */
     private var reloadInFlight = false
 
+    /**
+     * 上次为**哪个登录态**拉过网络。[Session] 是值对象，相等就不重复拉——
+     * 登录流程里先抛占位的 `LoggedIn(空资料)`、再抛真资料，那种连续两次只作一次算。
+     */
+    private var pulledFor: Session? = null
+
     init {
-        refresh()
+        // 🔴 首帧只画快照，**不发请求**：登录态还没查明时原生层可能还没拿到 cookie，
+        // 而记录类端点在未登录时返 code=200 + 空数组（不是失败），一发就把刚垫上去的
+        // 「最近播放」清成空。等登录态确定再拉，见下面的观察。
+        paintSnapshot()
         startTicker()
+        viewModelScope.launch {
+            account.session.collect { session ->
+                if (session == Session.Unknown || session == pulledFor) return@collect
+                pulledFor = session
+                if (session != Session.LoggedOut) refresh()
+            }
+        }
     }
 
     /**
@@ -214,6 +233,13 @@ class HomeViewModel(
      * 快照可能是跨天的旧数据：先垫底，新数据回来自然顶掉；哪块连快照都没有（首次使用）才真的 Loading。
      */
     fun refresh() {
+        paintSnapshot()
+        viewModelScope.launch { attemptDailyReload(contentDay()) }
+        loadRecent()
+    }
+
+    /** 只读快照、只动界面：[refresh] 的同步那一半，也用作登录态未定时的首帧。 */
+    private fun paintSnapshot() {
         val blocks = repository.homeBlocksSnapshot()
         lastRecent = repository.recentAlbumsSnapshot()
 
@@ -228,9 +254,12 @@ class HomeViewModel(
                 ?.let { recentAlbumsShelf(it) { id -> repository.albumTypeSnapshot(id) } }
                 .toSectionOrNull(),
         )
+    }
 
-        viewModelScope.launch { attemptDailyReload(contentDay()) }
-        loadRecent()
+    /** 能不能发请求：登录态说明 cookie 已经进原生层了（见 [init]）。 */
+    private fun canFetch(): Boolean {
+        val session = account.session.value
+        return session != Session.Unknown && session != Session.LoggedOut
     }
 
     /**
@@ -242,6 +271,9 @@ class HomeViewModel(
         viewModelScope.launch {
             while (true) {
                 delay(RefreshIntervalMs.milliseconds)
+                // 登录态还没查明/确定没登录时这一拍跳过：cookie 可能没进原生层，
+                // 拉回来的是"未登录的空数组"，会把垫在界面上的快照清掉（见 [init]）
+                if (!canFetch()) continue
 
                 val day = contentDay()
                 if (day != loadedDay) {

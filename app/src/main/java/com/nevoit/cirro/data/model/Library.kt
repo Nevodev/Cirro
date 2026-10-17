@@ -25,6 +25,13 @@ data class LibrarySnapshot(
     val likesLoaded: Boolean = false,
     val albumsLoaded: Boolean = false,
     val albumSongs: Map<Long, List<Song>> = emptyMap(),
+    /**
+     * 艺人头像：艺人 id → 图 URL。
+     *
+     * 🔴 艺人**静态元数据**（跟专辑类型一个性质），查一次终身有效，所以跟快照一起落盘。
+     * 空串是**查过了、上游没有图**，别当成"还没查"——否则没头像的艺人每次刷新都会被再问一遍。
+     */
+    val artistCovers: Map<Long, String> = emptyMap(),
 )
 
 data class LibraryContent(
@@ -97,12 +104,30 @@ fun LibrarySnapshot.libraryArtists(): List<LibraryCollection> {
         ids.forEachIndexed { index, id ->
             val name = names.getOrNull(index).orEmpty()
             if (id > 0 && name.isNotBlank()) result.putIfAbsent(id, LibraryCollection(
-                CollectionInfo(CollectionKind.ARTIST, id, title = name),
+                // 头像来自补图缓存（见 [artistCovers]）：这批艺人是从歌曲/专辑里推出来的，
+                // 订阅接口没给过他们的图。
+                CollectionInfo(CollectionKind.ARTIST, id, title = name, cover = artistCovers[id].orEmpty()),
             ))
         }
     }
     likedSongs.forEach { add(it.artistIds, it.artists) }
     albums.forEach { add(it.artistIds, it.artistNames) }
-    artists.forEach { result[it.info.id] = it }
+    // 订阅艺人自带 `artist_sublist` 的图，优先用它；没有才退回补图缓存
+    artists.forEach { artist ->
+        result[artist.info.id] = artist.copy(
+            info = artist.info.copy(
+                cover = artist.info.cover.ifEmpty { artistCovers[artist.info.id].orEmpty() },
+            ),
+        )
+    }
     return result.values.toList()
 }
+
+/**
+ * 「全部艺人」里还缺头像、且**没查过**的那批 id。
+ *
+ * 🔴 判据是 `id !in artistCovers`，不是 `cover.isBlank()`：空串代表"查过了，上游没图"。
+ * 两者混为一谈会让没头像的艺人永远留在待办里，每次刷新重查一遍。
+ */
+fun LibrarySnapshot.artistsMissingCover(): List<Long> =
+    libraryArtists().filter { it.info.cover.isBlank() }.map { it.info.id }.filterNot { it in artistCovers }

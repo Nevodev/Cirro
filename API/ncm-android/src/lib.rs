@@ -1183,9 +1183,51 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeArtistDetail<'
     jni_out(&mut env, value)
 }
 
+/// 艺人头像（轻量）。
+///
+/// 🔴 走 `/api/artist/head/info/get`（实测 ~3 KB / 250 ms），不是 `/api/v1/artist/{id}`
+/// （~95 KB，还捎回 50 首热门歌）——「全部艺人」列表要补几十上百个头像，后者三十倍的体积受不了。
+/// 这个端点**不支持批量**（`id` 传逗号串直接返错），只能一个一个来。
+///
+/// 拿不到图不是失败：`ok: true` + `cover: ""`（跟"拿不到直链"一个约定），上层缓存空串，
+/// 免得没头像的艺人每次都被重查一遍；`ok: false` 才是请求本身坏了。
+fn flatten_artist_cover(body: &serde_json::Value) -> Result<serde_json::Value, String> {
+    if pick_i64_loose(body, &["code"]) != 200 {
+        let message = pick_str(body, &["message", "msg"]);
+        return Err(if message.is_empty() { "加载艺人头像失败".into() } else { message.into() });
+    }
+    let artist = &body["data"]["artist"];
+    let id = pick_i64_loose(artist, &["id"]);
+    if id <= 0 {
+        return Err("艺人资料缺失".into());
+    }
+    // cover 是艺人页那张大方图，avatar 是 img1v1 小方图，圆头像用哪个都行，优先 cover
+    let cover = pick_str(artist, &["cover", "avatar", "picUrl", "img1v1Url"]);
+    let cover = if cover.is_empty() { String::new() } else { canon_pic(cover) };
+    Ok(serde_json::json!({ "ok": true, "id": id, "cover": cover }))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeArtistCover<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    id: JString<'local>,
+) -> jstring {
+    let id = jni_in(&mut env, &id);
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(client.artist_detail(&Query::new().param("id", &id))) {
+        Ok(response) => match flatten_artist_cover(&response.body) {
+            Ok(value) => value,
+            Err(message) => serde_json::json!({ "ok": false, "message": message }),
+        },
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
 #[cfg(test)]
 mod song_navigation_tests {
-    use super::{flatten_artist_detail, flatten_song, flatten_song_detail, privilege_playable};
+    use super::{flatten_artist_cover, flatten_artist_detail, flatten_song, flatten_song_detail, privilege_playable};
     use serde_json::json;
 
     #[test]
@@ -1212,6 +1254,26 @@ mod song_navigation_tests {
         assert_eq!(detail["songs"][0]["id"], 5);
         assert!(flatten_artist_detail(&json!({"code": 200, "artist": {"id": 42}})).is_err());
         assert!(flatten_artist_detail(&json!({"code": 302})).is_err());
+    }
+
+    /// 艺人头像：`cover` 优先于 `avatar`；**没图的艺人返成功 + 空串**（不是失败），
+    /// 免得上层把"这个艺人就是没头像"当成网络错误、每次刷新都重查一遍。
+    #[test]
+    fn artist_cover_is_ok_with_empty_url_and_normalizes_host() {
+        let with_cover = flatten_artist_cover(&json!({"code": 200, "data": {"artist": {
+            "id": 42, "cover": "http://p3.music.126.net/portrait.jpg",
+            "avatar": "http://p4.music.126.net/small.jpg"
+        }}})).unwrap();
+        assert_eq!(with_cover["cover"], "http://p1.music.126.net/portrait.jpg");
+        let only_avatar = flatten_artist_cover(&json!({"code": 200, "data": {"artist": {
+            "id": 42, "avatar": "http://p4.music.126.net/small.jpg"
+        }}})).unwrap();
+        assert_eq!(only_avatar["cover"], "http://p1.music.126.net/small.jpg");
+        let no_pic = flatten_artist_cover(&json!({"code": 200, "data": {"artist": {"id": 42}}})).unwrap();
+        assert_eq!(no_pic["ok"], true);
+        assert_eq!(no_pic["cover"], "");
+        assert!(flatten_artist_cover(&json!({"code": 200, "data": {}})).is_err());
+        assert!(flatten_artist_cover(&json!({"code": 404, "message": "nope"})).is_err());
     }
 
     /// 可播性只认 `privileges`，**不认 `dt`** —— 两个反例都来自实测：

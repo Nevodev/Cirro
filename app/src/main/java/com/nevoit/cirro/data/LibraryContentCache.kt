@@ -27,8 +27,10 @@ internal class LibraryContentCache {
             userId = snapshot.userId,
             playlists = if (previous != null && before?.playlists == snapshot.playlists) previous.playlists
                 else snapshot.playlists.sortedByLibraryName { it.info.title },
-            artists = if (previous != null && sameLikes && sameAlbums && before.artists == snapshot.artists)
-                previous.artists else snapshot.libraryArtists().sortedByLibraryName { it.info.title },
+            artists = if (previous != null && sameLikes && sameAlbums &&
+                before?.artists == snapshot.artists &&
+                before?.artistCovers == snapshot.artistCovers
+            ) previous.artists else snapshot.libraryArtists().sortedByLibraryName { it.info.title },
             albums = if (previous != null && sameLikes && sameAlbums && before.likedTracks == snapshot.likedTracks)
                 previous.albums else snapshot.recentAlbums().sortedByLibraryName { it.info.title },
             songs = if (previous != null && sameLikes && previous.albumIds == albumIds &&

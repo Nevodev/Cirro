@@ -71,13 +71,14 @@ internal fun TrackRow(
     isPlaying: Boolean,
     content: Color,
     contentVariant: Color,
+    showStar: Boolean = true,
     starColor: Color = contentVariant,
     onClick: () -> Unit,
     menuContent: @Composable BottomPopupMenuScope.() -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val shape = position.roundedShape()
-    val liked = rememberIsLiked(song.id)
+    val liked = if (showStar) rememberIsLiked(song.id) else false
 
     Box(modifier = modifier.fillMaxWidth()) {
         Row(

@@ -305,6 +305,16 @@ object NcmBridge {
         decode(nativeArtistAlbums(id.toString())).getOrThrow().albums
     }
 
+    /**
+     * 艺人头像，走 `/api/artist/head/info/get`（约 3 KB），比 [artistDetail] 轻三十倍——
+     * 「全部艺人」列表要补几十上百个头像，不能每条都拉一份带 50 首热门歌的详情。
+     *
+     * 空串表示这个艺人上游就没有图（不是失败）：调用方缓存空串，别再反复查。
+     */
+    fun artistCover(id: Long): Result<String> = runCatching {
+        decode(nativeArtistCover(id.toString())).getOrThrow().cover
+    }
+
     fun similarSongs(id: Long): Result<List<Song>> = runCatching {
         decode(nativeSimilarSongs(id.toString())).getOrThrow().songs
     }
@@ -462,6 +472,8 @@ object NcmBridge {
     private external fun nativeSimilarSongs(id: String): String
 
     private external fun nativeArtistDetail(id: String): String
+
+    private external fun nativeArtistCover(id: String): String
 
     private external fun nativeCollectionSub(kind: String, id: String, t: String): String
 

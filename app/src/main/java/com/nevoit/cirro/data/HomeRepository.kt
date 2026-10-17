@@ -98,6 +98,14 @@ class HomeRepository(
 
     private val recentSlot = Slot<List<RecentAlbum>>()
 
+    /**
+     * 磁盘上那份缓存属于谁（`owner` 文件里的 userId）。
+     *
+     * 冷启动时 session 多半还是 `Unknown`，[restoreDisk] 那趟没法跟当前身份比对，只能先记下来，
+     * 交给 [watchSession] 当"已知归属"的起点。
+     */
+    private var diskOwnerId: Long? = null
+
     /** 歌单曲目按歌单 id 分槽，存最近一次真拉到的结果（快照 + 最新值，见 [playlistTracks]）。 */
     private val tracksCache = ConcurrentHashMap<Long, Slot<List<Song>>>()
 
@@ -258,21 +266,24 @@ class HomeRepository(
 
     /**
      * 盯着登录态：确定是**另一个登录用户**（换号）就整体作废，磁盘一起清——
-     * 上一账号的「最近播放」绝不能漏给下一账号。第一次通知只是认下当前身份，不清
-     * （init 刚 restore 完，清了就白读了）。
+     * 上一账号的「最近播放」绝不能漏给下一账号。
+     *
+     * 🔴 **身份不明（Unknown / 登出，userId 取不到）时一个字都不许动**。首页的 VM 现在
+     * 在登录态查明前就创建了（冷启动要画磁盘快照），这个仓库也就跟着在 Unknown 时出生——
+     * 把"取不到 id"当成 id=0 认下来，随后 LoggedIn(uid) 就会被判成换号，`wipe()` 把
+     * 刚恢复的磁盘缓存整个删掉，缓存等于没有。所以只在**拿到真 id** 时才认身份 / 判换号。
      */
     private fun watchSession() {
         scope.launch {
-            var owner = -1L
-            var first = true
+            // 起点是磁盘上那份缓存的归属（可能为 null —— 首次运行），不是"第一个看到的身份"
+            var owner: Long? = diskOwnerId
             account.session.collect { session ->
-                val id = (session as? Session.LoggedIn)?.profile?.userId ?: 0L
+                val id = (session as? Session.LoggedIn)?.profile?.userId?.takeIf { it != 0L }
+                    ?: return@collect
+                val known = owner
                 when {
-                    first -> {
-                        first = false
-                        owner = id
-                    }
-                    id != owner -> {
+                    known == null -> owner = id
+                    known != id -> {
                         owner = id
                         wipe()
                     }
@@ -329,6 +340,10 @@ class HomeRepository(
             runCatching { dir.listFiles()?.forEach { it.delete() } }
             return
         }
+        // 冷启动时 session 多半还是 Unknown（current 为 null），这趟比不了；把磁盘上的归属
+        // 记下来交给 watchSession 当起点，等真身份到了再判换号——否则 Unknown 出生这一步
+        // 会让"磁盘属于 B、cookie 已是 A"这种情形漏过去。
+        diskOwnerId = saved
 
         runCatching {
             val pack = HomeJson.decodeFromString<SongPack>(File(dir, "daily_songs.json").readText())

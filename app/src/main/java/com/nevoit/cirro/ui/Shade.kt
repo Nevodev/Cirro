@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -109,4 +110,22 @@ fun BoxScope.TopShade(
             .statusBarsPadding()
             .then(modifier)
     )
+}
+
+@Composable
+fun BoxScope.TopShade(
+    color: Color,
+    listState: LazyGridState,
+    threshold: (PaddingValues) -> Dp,
+    modifier: Modifier = Modifier,
+) {
+    val windowInsets = WindowInsets.statusBars.asPaddingValues()
+    val showTopShade by listState.isScrolledPast(threshold(windowInsets))
+    val topShapeAlpha by animateFloatAsState(
+        targetValue = if (showTopShade) 1f else 0f,
+        animationSpec = tween(durationMillis = 200),
+        label = "topShadeAlpha",
+    )
+
+    TopShade(color = color, alpha = { topShapeAlpha }, modifier = modifier)
 }

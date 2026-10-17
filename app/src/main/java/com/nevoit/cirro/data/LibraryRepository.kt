@@ -10,11 +10,16 @@ import com.nevoit.cirro.data.model.LibrarySnapshot
 import com.nevoit.cirro.data.model.LibraryTrack
 import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.data.model.Song
+import com.nevoit.cirro.data.model.artistsMissingCover
 import com.nevoit.cirro.data.model.cachedSongs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -25,6 +30,15 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * 一轮补多少个艺人头像。
+ *
+ * 没有批量接口（见 [fillArtistCovers]），一条约 250 ms / 3 KB，6 路并发下一批不到 300 ms；
+ * 再往上加只是同时压 3 KB 的请求数，不值。
+ */
+private const val ArtistCoverBatch = 6
 
 class LibraryRepository(
     context: Context,
@@ -46,6 +60,12 @@ class LibraryRepository(
     val loading = _loading.asStateFlow()
     private val _error = MutableStateFlow<String?>(null)
     val error = _error.asStateFlow()
+
+    /** 正在跑的补图任务（同时只允许一趟）。 */
+    private var coverFill: Job? = null
+
+    /** 这一趟进程里查失败过的艺人 id：失败不落盘，下次启动还会再试。 */
+    private val coverFailures: MutableSet<Long> = ConcurrentHashMap.newKeySet()
 
     init {
         scope.launch(Dispatchers.Default) {
@@ -132,6 +152,8 @@ class LibraryRepository(
         } finally {
             refreshMutex.unlock()
         }
+        // 头像补图跟着刷新走：资料库任何一页刷新都会顺手补齐（已查过的一条请求都没有）
+        scheduleArtistCovers()
     }
 
     private suspend fun refreshLocked() = mutex.withLock {
@@ -178,6 +200,65 @@ class LibraryRepository(
             persist()
         } finally {
             _loading.value = false
+        }
+    }
+
+    /**
+     * 排一趟「全部艺人」头像补图。已经有一趟在跑就直接返回。
+     *
+     * 跑在 [scope]（Application 级）而不是调用方的 scope 上：页面退出不该把补图掐断，
+     * 否则每次进来都从头开始（已补到的一批有落盘，但这一趟的进度会白丢）。
+     */
+    private fun scheduleArtistCovers() {
+        if (coverFill?.isActive == true) return
+        val uid = userId() ?: return
+        coverFill = scope.launch(Dispatchers.IO) { fillArtistCovers(uid) }
+    }
+
+    /**
+     * 把「全部艺人」里**还没查过头像**的艺人一条条问回来。
+     *
+     * 为什么不是一个批量接口：`/api/v1/artist` 的批量 `ids` 参数实测直接返 `code=404`
+     * （探针 `API/ncm-api-rs/examples/artist_pic_probe.rs`），只有单条的
+     * `/api/artist/head/info/get` 可用（约 3 KB / 250 ms，比 `/api/v1/artist/{id}`
+     * 那份带 50 首热门歌的 95 KB 轻三十倍）。所以按 [ArtistCoverBatch] 分批，
+     * 一批落地一次，界面就一批批长出头像。
+     *
+     * 结果进 [LibrarySnapshot.artistCovers] 跟快照一起落盘，**一个艺人一辈子只查一次**；
+     * 查失败（`ok:false`）只进 [coverFailures]（本进程），下次启动还会重试。
+     */
+    private suspend fun fillArtistCovers(uid: Long) {
+        var changed = false
+        try {
+            while (true) {
+                val snapshot = mutex.withLock { _snapshot.value?.takeIf { it.userId == uid } } ?: return
+                val pending = snapshot.artistsMissingCover()
+                    .filterNot { it in coverFailures }
+                    .take(ArtistCoverBatch)
+                if (pending.isEmpty()) return
+
+                val results = coroutineScope {
+                    pending.map { id ->
+                        async(Dispatchers.IO) { id to NcmBridge.artistCover(id) }
+                    }.awaitAll()
+                }
+                results.filter { it.second.isFailure }.forEach { coverFailures += it.first }
+                // 空串也是结果（上游没这个艺人的图），照样记下来，免得反复重查
+                val covers = results.mapNotNull { (id, result) ->
+                    result.getOrNull()?.let { id to it }
+                }
+                if (covers.isEmpty()) continue
+
+                mutex.withLock {
+                    val current = _snapshot.value?.takeIf { it.userId == uid } ?: return@withLock
+                    _snapshot.value = current.copy(artistCovers = current.artistCovers + covers)
+                }
+                changed = true
+            }
+        } finally {
+            // 整趟结束（或被换号打断）才写一次盘：快照 JSON 是 MB 级的，一批一写不值。
+            // 写盘必须拿锁——`AtomicFile` 不是并发安全的，别跟 refresh 那趟撞上
+            if (changed) withContext(NonCancellable) { mutex.withLock { persist() } }
         }
     }
 

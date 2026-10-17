@@ -568,6 +568,9 @@ private fun CollectionScreen(
                                 isPlaying = song.id == playingId,
                                 content = contentColor,
                                 contentVariant = contentVariantColor,
+                                // 喜爱歌单整份都是「已喜爱」：行行亮着星星没有信息量，
+                                // 顺带省掉每行一条喜欢态订阅（见 TrackRow 的 showStar）
+                                showStar = !likedPlaylist,
                                 onClick = { onPlay(index) },
                                 menuContent = { songMenuContent(song) },
                                 // 左右边距在 TrackRow 内部（背景要铺满整宽，左侧那条缝留给红心星）
