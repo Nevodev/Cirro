@@ -619,6 +619,186 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeIntelligenceSo
     jni_out(&mut env, value)
 }
 
+/// 私人FM 这次回了哪几首。
+///
+/// 🔴 FM 的 `data` 里是**简版歌曲**：只有 `id` / `name`，`ar` / `al` 全是 null（实测），
+/// 直接拍平会得到一批没有歌手、没有封面的空壳。所以这里只取 id，再统一走一次 `song/detail`
+/// 换成完整对象。
+/// `/song/simi/get` 这次回了哪首歌。
+///
+/// 🔴 它**一次只给一首**（官方客户端就是"一首一首插"），挂在
+/// `data.commonResourceList[].resourceId`，而且 `resourceId` 是**字符串**（`"1340757963"`），
+/// 必须走 `pick_i64_loose`。别去读 `songs` —— 那层根本没有。
+fn simi_resource_ids(body: &serde_json::Value) -> Result<Vec<i64>, String> {
+    if pick_i64_loose(body, &["code"]) != 200 {
+        let message = pick_str(body, &["message", "msg"]);
+        return Err(if message.is_empty() {
+            "插播相似歌曲请求失败".to_string()
+        } else {
+            message.to_string()
+        });
+    }
+    let list = body["data"]["commonResourceList"]
+        .as_array()
+        .ok_or_else(|| "插播相似歌曲返回缺少列表".to_string())?;
+    Ok(list
+        .iter()
+        .map(|item| pick_i64_loose(item, &["resourceId"]))
+        .filter(|id| *id > 0)
+        .collect())
+}
+
+/// 插播相似歌曲：要 `count` 首就得**链式**要 —— 每次拿上一首当种子再问一次。
+///
+/// 服务端对同一个种子会换着给（同一首连问两次拿到的是不同的歌），所以链式走下来
+/// 天然是一条"越走越相似"的路，正好是电台要的东西。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeSongSimiGet<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    id: JString<'local>,
+    count: jint,
+) -> jstring {
+    let mut cursor = jni_in(&mut env, &id);
+    if cursor.is_empty() {
+        return jni_out(
+            &mut env,
+            serde_json::json!({ "ok": false, "message": "id 为空" }),
+        );
+    }
+    let count = count.clamp(1, 10);
+    let client = client_snapshot();
+    let mut ids: Vec<i64> = Vec::new();
+    let mut last_error = String::new();
+
+    for _ in 0..count {
+        let query = Query::new().param("id", &cursor);
+        match RUNTIME.block_on(client.song_simi_get(&query)) {
+            Ok(response) => match simi_resource_ids(&response.body) {
+                Ok(found) => {
+                    let next = found.into_iter().find(|candidate| {
+                        *candidate > 0 && !ids.contains(candidate) && candidate.to_string() != cursor
+                    });
+                    match next {
+                        Some(next_id) => {
+                            cursor = next_id.to_string();
+                            ids.push(next_id);
+                        }
+                        None => break,
+                    }
+                }
+                Err(message) => {
+                    // 第一首就要不到才算失败；半路断了就把手上这几首交出去。
+                    if ids.is_empty() {
+                        last_error = message;
+                    }
+                    break;
+                }
+            },
+            Err(e) => {
+                if ids.is_empty() {
+                    last_error = e.to_string();
+                }
+                break;
+            }
+        }
+    }
+
+    if ids.is_empty() {
+        let message = if last_error.is_empty() {
+            "插播相似歌曲没有返回".to_string()
+        } else {
+            last_error
+        };
+        return jni_out(&mut env, serde_json::json!({ "ok": false, "message": message }));
+    }
+
+    let id_list = ids
+        .iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let value = match RUNTIME.block_on(client.song_detail(&Query::new().param("ids", &id_list))) {
+        Ok(detail) => {
+            let songs = flatten_song_detail(&detail.body);
+            if songs.is_empty() {
+                serde_json::json!({ "ok": false, "message": "插播相似歌曲的详情为空" })
+            } else {
+                serde_json::json!({ "ok": true, "songs": songs })
+            }
+        }
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+fn personal_fm_ids(body: &serde_json::Value) -> Result<Vec<i64>, String> {
+    if pick_i64_loose(body, &["code"]) != 200 {
+        let message = pick_str(body, &["message", "msg"]);
+        return Err(if message.is_empty() {
+            "私人FM请求失败".to_string()
+        } else {
+            message.to_string()
+        });
+    }
+    let ids: Vec<i64> = body["data"]
+        .as_array()
+        .ok_or_else(|| "私人FM返回缺少歌曲列表".to_string())?
+        .iter()
+        .map(|item| pick_i64_loose(item, &["id"]))
+        .filter(|id| *id > 0)
+        .collect();
+    if ids.is_empty() {
+        return Err("私人FM这次没有返回歌曲".to_string());
+    }
+    Ok(ids)
+}
+
+/// 近七天播放最多的一首：`user_record` 的 `type=1` 榜单**已经按播放次数降序**，
+/// 第一条就是种子，不用再排一次。
+fn weekly_top_song(body: &serde_json::Value) -> Result<serde_json::Value, String> {
+    if pick_i64_loose(body, &["code"]) != 200 {
+        let message = pick_str(body, &["message", "msg"]);
+        return Err(if message.is_empty() {
+            "听歌排行请求失败".to_string()
+        } else {
+            message.to_string()
+        });
+    }
+    let song = body["weekData"]
+        .as_array()
+        .and_then(|list| list.first())
+        .map(|entry| &entry["song"])
+        .filter(|song| song.is_object())
+        .ok_or_else(|| "最近七天没有听歌记录".to_string())?;
+
+    let flattened = flatten_song(song, None);
+    if flattened["id"].as_i64().unwrap_or(0) <= 0 {
+        return Err("听歌排行返回的歌曲无效".to_string());
+    }
+    Ok(flattened)
+}
+
+/// 电台的种子：该用户近七天播放最多的一首歌。
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeWeeklyTopSong<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    uid: JString<'local>,
+) -> jstring {
+    let uid = jni_in(&mut env, &uid);
+    let query = Query::new().param("uid", &uid).param("type", "1");
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(client.user_record(&query)) {
+        Ok(response) => match weekly_top_song(&response.body) {
+            Ok(song) => serde_json::json!({ "ok": true, "song": song }),
+            Err(message) => serde_json::json!({ "ok": false, "message": message }),
+        },
+        Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
 fn liked_playlist_id(body: &serde_json::Value, uid: i64) -> Option<i64> {
     if pick_i64_loose(body, &["code"]) != 200 { return None; }
     body["playlist"].as_array()?.iter()
@@ -886,6 +1066,10 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeToplist<'local
 }
 
 /// 私人 FM（需登录）。网易云一次只给 3 首，是流式的，切一首要再拉一次。
+///
+/// 🔴 FM 的 `data` 是**简版歌曲**：只有 `id` / `name`，`ar` / `al` 全是 null（实测）。
+/// 照原样拍平会得到一批没有歌手、没有封面的空壳，所以这里先取 id 再统一走一次
+/// `song/detail` 换成完整对象，顺带拿到 `privileges` 判可播性。
 /// 返回 `{"ok":true,"songs":[...]}`，形状与每日推荐一致。
 #[no_mangle]
 pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativePersonalFm<'local>(
@@ -894,10 +1078,28 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativePersonalFm<'lo
 ) -> jstring {
     let client = client_snapshot();
     let value = match RUNTIME.block_on(client.personal_fm(&Query::new())) {
-        Ok(r) => {
-            let songs = flatten_song_array(&r.body["data"]);
-            serde_json::json!({ "ok": true, "songs": songs })
-        }
+        Ok(r) => match personal_fm_ids(&r.body) {
+            Ok(ids) => {
+                let id_list = ids
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let query = Query::new().param("ids", &id_list);
+                match RUNTIME.block_on(client.song_detail(&query)) {
+                    Ok(detail) => {
+                        let songs = flatten_song_detail(&detail.body);
+                        if songs.is_empty() {
+                            serde_json::json!({ "ok": false, "message": "私人FM的歌曲详情为空" })
+                        } else {
+                            serde_json::json!({ "ok": true, "songs": songs })
+                        }
+                    }
+                    Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+                }
+            }
+            Err(message) => serde_json::json!({ "ok": false, "message": message }),
+        },
         Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
     };
     jni_out(&mut env, value)

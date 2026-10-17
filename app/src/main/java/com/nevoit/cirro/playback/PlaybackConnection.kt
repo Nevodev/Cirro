@@ -16,6 +16,8 @@ import com.nevoit.cirro.data.IntelligenceRepository
 import com.nevoit.cirro.data.IntelligenceSeed
 import com.nevoit.cirro.data.NcmBridge
 import com.nevoit.cirro.data.PlayQueueStore
+import com.nevoit.cirro.data.RadioOpening
+import com.nevoit.cirro.data.RadioRepository
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.PlayMode
 import com.nevoit.cirro.data.model.PlaybackQueue
@@ -146,6 +148,7 @@ class PlaybackConnection(
     private val queueStore: PlayQueueStore,
     private val account: AccountRepository,
     private val intelligence: IntelligenceRepository,
+    private val radio: RadioRepository,
 ) {
 
     private val appContext = context.applicationContext
@@ -425,6 +428,40 @@ class PlaybackConnection(
     }
 
     /**
+     * 电台：种子歌打头，后面接相似歌曲 / 私人FM 的流。
+     *
+     * 整队标 [PlaybackQueue.radio]，播到快见底时由 [continueRadio] 再要一批 FM。
+     *
+     * 🔴 **不复用「无限播放」那个开关**：那个续的是心动模式，开关本身还亮在队列面板上，
+     * 跟"电台模式下三颗按钮都点不动"直接冲突。两条续拉路径各走各的。
+     */
+    fun playRadio(opening: RadioOpening) {
+        val songs = opening.queue
+        if (songs.isEmpty()) return
+
+        scope.launch(Dispatchers.Main) {
+            _state.value = _state.value.copy(error = null)
+
+            val controller = controller
+            if (controller == null) {
+                _state.value = _state.value.copy(error = "播放器还没准备好")
+                return@launch
+            }
+
+            startQueue(
+                controller,
+                playQueueOf(
+                    songs = songs,
+                    startIndex = 0,
+                    source = RadioQueueSource,
+                    mode = PlayMode.SEQUENTIAL,
+                    radio = true,
+                ),
+            )
+        }
+    }
+
+    /**
      * 临时插播：**下一个播放**。紧接着当前这首。
      *
      * 只往播放器列表里插一条，不重建列表。
@@ -546,8 +583,11 @@ class PlaybackConnection(
 
     /**
      * 切**循环**那一轴（顺序 / 列表循环 / 单曲循环）。随机那一轴原样保留 —— 两根轴互不干扰。
+     *
+     * 电台模式下直接忽略：电台的"循环"就是它自己的无限续拉，档位改了没有任何意义。
      */
     fun setLoopMode(mode: PlayMode) {
+        if (queue.value.radio) return
         applyMode(loop = mode, shuffle = currentShuffle())
     }
 
@@ -558,10 +598,14 @@ class PlaybackConnection(
      * 插播条目原地不动），所以要多一步 `moveMediaItem`。关掉时按建队时的基准序还原。
      */
     fun setShuffle(enabled: Boolean) {
+        // 电台不给打乱：那 3 首一批的顺序是服务端给的，重排也只是把同一批搅一遍。
+        if (queue.value.radio) return
         applyMode(loop = currentMode(), shuffle = enabled)
     }
 
     fun setInfinite(enabled: Boolean) {
+        // 电台自己就是无限的，这开关对它是空操作（面板上那颗按钮也是禁用的）。
+        if (queue.value.radio) return
         scope.launch(Dispatchers.Main.immediate) {
             if (!enabled) {
                 disableInfinitePlayback()
@@ -612,9 +656,16 @@ class PlaybackConnection(
     private fun maybeContinuePlayback(force: Boolean = false) {
         val player = controller ?: return
         val initial = liveQueue() ?: return
-        if (!initial.infinite || infiniteJob?.isActive == true) return
+        if ((!initial.infinite && !initial.radio) || infiniteJob?.isActive == true) return
         if (!force && initial.entries.lastIndex - initial.currentIndex > 3) return
         if (player.mediaItemCount != initial.entries.size) return
+
+        // 电台的长尾只认私人FM，不需要登录态也不需要心动模式的歌单种子。
+        if (initial.radio) {
+            continueRadio(player, initial)
+            return
+        }
+
         val userId = (account.session.value as? Session.LoggedIn)?.profile?.userId ?: return
         if (userId <= 0) return
         val request = infiniteGeneration
@@ -670,6 +721,61 @@ class PlaybackConnection(
             }
         }
     }
+
+    /**
+     * 电台续拉：再要一批私人FM（3 首），追加到队尾。
+     *
+     * 跟心动模式那条路的差别：没有歌单种子、没有 userId 校验，唯一的作废条件是"队列已经不是
+     * 同一台电台了"（队首 uid 变了、或者 radio 标记被清掉）——用户中途点了别的歌单，
+     * 这批就不该再落回来。
+     */
+    private fun continueRadio(player: MediaController, initial: PlaybackQueue) {
+        val request = infiniteGeneration
+        val firstUid = initial.entries.first().uid
+        _infiniteState.value = InfinitePlaybackState(loading = true)
+        infiniteJob = scope.launch(Dispatchers.Main) {
+            try {
+                retryInfinitePlayback(
+                    isCurrent = { isCurrentRadioRequest(request, firstUid) },
+                    onFailure = { Log.w("CirroPlayback", "电台续拉失败，将静默重试", it) },
+                ) {
+                    val live = liveQueue() ?: return@retryInfinitePlayback
+                    val tail = live.entries.lastOrNull()?.song ?: return@retryInfinitePlayback
+                    val played = live.entries.mapTo(mutableSetOf()) { it.song.id }
+                    val songs = radio.next(tail, played).getOrThrow()
+                    if (!isCurrentRadioRequest(request, firstUid)) return@retryInfinitePlayback
+                    val extended = live.withRecommendations(songs, RadioQueueSource)
+                    if (extended === live) error("暂时没有新的推荐歌曲")
+                    if (player.mediaItemCount != live.entries.size) return@retryInfinitePlayback
+                    val ended = player.playbackState == Player.STATE_ENDED
+                    val added = extended.entries.drop(live.entries.size)
+                    // 先发布来源，服务的切歌回调才能为新曲取到正确的打卡和歌词元数据。
+                    check(player.isCommandAvailable(Player.COMMAND_CHANGE_MEDIA_ITEMS))
+                    queueStore.set(extended)
+                    try {
+                        player.addMediaItems(added.map { it.song.toMediaItem(it.uid) })
+                    } catch (error: Exception) {
+                        queueStore.set(live.withCurrent(player.currentMediaItemIndex))
+                        throw error
+                    }
+                    _infiniteState.value = InfinitePlaybackState()
+                    // 放完了才回来的那批：直接续上，否则会停在原地等人点。
+                    if (ended && player.playWhenReady) {
+                        playAt(player, live.entries.size, restartCurrent = false)
+                    }
+                }
+            } finally {
+                if (request == infiniteGeneration) {
+                    infiniteJob = null
+                    _infiniteState.value = _infiniteState.value.copy(loading = false)
+                }
+            }
+        }
+    }
+
+    private fun isCurrentRadioRequest(request: Int, firstUid: Long): Boolean =
+        request == infiniteGeneration && queue.value.radio &&
+            queue.value.entries.firstOrNull()?.uid == firstUid
 
     private fun isCurrentInfiniteRequest(request: Int, firstUid: Long, userId: Long): Boolean =
         request == infiniteGeneration && queue.value.infinite &&
@@ -842,6 +948,14 @@ class PlaybackConnection(
         )
     }
 }
+
+/**
+ * 电台队列的来源。
+ *
+ * 没有集合 id —— 打卡时 `sourceId` 留空（电台不对应服务端任何一个集合），
+ * 名称只给日志和将来的队列界面看。
+ */
+private val RadioQueueSource = QueueSource(title = "电台")
 
 /**
  * 队列的两根轴 → 播放器的 `repeatMode`。

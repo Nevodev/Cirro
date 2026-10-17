@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nevoit.cirro.data.AccountRepository
 import com.nevoit.cirro.data.HomeRepository
+import com.nevoit.cirro.data.RadioOpening
+import com.nevoit.cirro.data.RadioRepository
 import com.nevoit.cirro.data.contentDay
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.HomeBlock
@@ -121,6 +123,34 @@ data class HomeEntry(
 )
 
 /**
+ * 首页顶部横滑区的一张卡。
+ *
+ * 🔴 这一层就是「按列表自动匹配卡片与内容」的地方：界面只 `when` 一次分发，
+ * 不再关心"第一张是什么、第二张是什么"。加一种新卡（比如新歌速递）只需要
+ * 多一个子类型 + 在 [HomeUiState.cards] 里挑个位置，界面那一行不用动。
+ *
+ * [key] 是 LazyRow 的 item 身份。**不能只用标题**（两张卡可能同名），
+ * 也不能用下标（电台卡时有时无，会把后面的卡的身份全打乱）。
+ * [covers] 给首页统一预取用。
+ */
+sealed interface HomeCard {
+    val key: String
+    val covers: List<String>
+
+    /** 有实体目的地的入口卡：点它进详情页。 */
+    data class Entry(val entry: HomeEntry) : HomeCard {
+        override val key: String get() = "entry:${entry.kind}:${entry.id}"
+        override val covers: List<String> get() = entry.detail.dataOrNull?.covers.orEmpty()
+    }
+
+    /** 电台卡：点一下**直接开播**，不进任何页面。 */
+    data class Radio(val opening: RadioOpening) : HomeCard {
+        override val key: String get() = "radio"
+        override val covers: List<String> get() = opening.covers
+    }
+}
+
+/**
  * 横滑带里的一张卡：展示名 + 封面候选 + **可选**的一行小字。
  *
  * 封面跟 [EntryDetail.covers] 一样是**候选表**：正常用歌单里第一首的专辑图，
@@ -155,13 +185,35 @@ data class HomeUiState(
     val shelf: Section<List<ShelfCard>> = Section.Loading,
     val style: Section<StylePicks> = Section.Loading,
     val recent: Section<List<ShelfCard>> = Section.Loading,
+    /**
+     * 电台卡。
+     *
+     * 它跟别的卡不是一类：点了**直接开播**，不进详情页。加载失败就整张不出现 ——
+     * 一张点不动的电台卡比没有更让人困惑。
+     */
+    val radio: Section<RadioOpening> = Section.Loading,
 ) {
-    /** 顶部卡片，顺序即展示顺序。 */
-    val entries: List<HomeEntry>
-        get() = listOf(
-            HomeEntry("每日推荐", CollectionKind.DAILY, 0L, daily),
-            HomeEntry("私人雷达", CollectionKind.PLAYLIST, RadarPlaylistId, radar),
-        )
+    /**
+     * 顶部卡片，**顺序即展示顺序**：每日推荐 → 电台 → 私人雷达。
+     *
+     * 电台排第二是定死的；它没数据（还在加载 / 失败 / 未登录）时列表里干脆没有这一项，
+     * 后面那张自然前移 —— 不留一张点不动的空卡占位。
+     */
+    val cards: List<HomeCard>
+        get() = buildList {
+            add(HomeCard.Entry(HomeEntry("每日推荐", CollectionKind.DAILY, 0L, daily)))
+            add(
+                HomeCard.Entry(
+                    HomeEntry(
+                        "私人雷达",
+                        CollectionKind.PLAYLIST,
+                        RadarPlaylistId,
+                        radar
+                    )
+                )
+            )
+            radio.dataOrNull?.let { add(HomeCard.Radio(it)) }
+        }
 
     /**
      * 「最近播放」要不要占位置。
@@ -183,6 +235,7 @@ data class HomeUiState(
 class HomeViewModel(
     private val repository: HomeRepository,
     private val account: AccountRepository,
+    private val radio: RadioRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(HomeUiState())
@@ -236,6 +289,7 @@ class HomeViewModel(
         paintSnapshot()
         viewModelScope.launch { attemptDailyReload(contentDay()) }
         loadRecent()
+        loadRadio()
     }
 
     /** 只读快照、只动界面：[refresh] 的同步那一半，也用作登录态未定时的首帧。 */
@@ -357,6 +411,30 @@ class HomeViewModel(
         _state.update { it.copy(shelf = mergeFailure(shelf, it.shelf)) }
 
         return blocks.isSuccess
+    }
+
+    /**
+     * 电台卡：种子歌（近七天播放最多那首）+ 相似歌曲开路。
+     *
+     * 它**不参与** [attemptDailyReload] 那个"三块内容全成功才认日"的账：电台失败只是少一张卡，
+     * 不该把每日推荐/雷达一起判成没加载出来。也不缓存 —— 种子跟着听歌记录走，
+     * 每次进首页重算一遍才有意义。
+     */
+    private fun loadRadio() {
+        val userId = (account.session.value as? Session.LoggedIn)?.profile?.userId
+        if (userId == null || userId <= 0) return
+
+        viewModelScope.launch {
+            radio.opening(userId)
+                .onSuccess { opening -> _state.update { it.copy(radio = Section.Ready(opening)) } }
+                .onFailure { error ->
+                    // 已经有内容就别把失败盖上去（跟「最近播放」同一个处理）。
+                    _state.update {
+                        if (it.radio is Section.Ready) it
+                        else it.copy(radio = Section.Failed(error.message ?: "电台加载失败"))
+                    }
+                }
+        }
     }
 
     /**

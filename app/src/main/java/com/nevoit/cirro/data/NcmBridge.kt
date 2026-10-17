@@ -172,9 +172,38 @@ object NcmBridge {
      * 私人 FM（需登录）。
      *
      * 一次只返回 3 首，是流式的——想接着听就得再调一次。用完即弃，别当队列囤。
+     *
+     * 🔴 原生层已经把「FM 的简版 id」换成过 `song/detail` 的完整对象（歌手、封面、可播性都齐），
+     * 所以这里拿到的就是能直接建队列的歌，不用再补一次详情。
      */
     fun personalFm(): Result<List<Song>> = runCatching {
         decode(nativePersonalFm()).getOrThrow().songs
+    }
+
+    /**
+     * 近七天播放最多的一首歌（听歌排行的周榜）。
+     *
+     * 服务端**已经按播放次数降序**，取第一条即可，别再自己排。
+     * 电台拿它当种子：这一台电台从这首歌的样子开始。
+     */
+    fun weeklyTopSong(userId: Long): Result<Song> = runCatching {
+        require(userId > 0)
+        decode(nativeWeeklyTopSong(userId.toString())).getOrThrow().song
+            ?: throw IllegalStateException("最近七天没有听歌记录")
+    }
+
+    /**
+     * 插播相似歌曲（`/song/simi/get`）：给一首歌，拿"接着它插下去"的相似歌。
+     *
+     * 🔴 上游**一次只给一首**（官方客户端就是一首一首插），所以 [count] 首是原生层链式要的 ——
+     * 每次拿上一首当种子再问一次。实测同一个种子连问两次会给出不同的歌，链式走下来
+     * 就是一条"越走越像"的流。
+     *
+     * 跟 [similarSongs]（`/simi/song`）不是一回事：那个是整页 5 首、不能分页、也不能续。
+     */
+    fun songSimi(songId: Long, count: Int = 3): Result<List<Song>> = runCatching {
+        require(songId > 0)
+        decode(nativeSongSimiGet(songId.toString(), count)).getOrThrow().songs
     }
 
     /**
@@ -459,6 +488,10 @@ object NcmBridge {
 
     private external fun nativePersonalFm(): String
 
+    private external fun nativeWeeklyTopSong(uid: String): String
+
+    private external fun nativeSongSimiGet(id: String, count: Int): String
+
     private external fun nativePlaylistTracks(id: String, limit: Int, offset: Int): String
 
     private external fun nativeScrobble(id: String, sourceid: String, time: String): String
@@ -510,6 +543,8 @@ private data class BridgeResponse(
     /** `songQuality` 用：这首歌实际存在的档位（高→低），缺哪档就没有哪条。 */
     val levels: List<QualityLevel> = emptyList(),
     val songs: List<Song> = emptyList(),
+    /** `weeklyTopSong` 用：周榜第一条，拿不到就是 null。 */
+    val song: Song? = null,
     val playlists: List<Playlist> = emptyList(),
     val more: Boolean = false,
     val nextOffset: Int = 0,

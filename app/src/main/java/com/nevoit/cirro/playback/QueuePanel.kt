@@ -169,6 +169,8 @@ internal fun QueuePanel(
     }
     val mode = queue.mode
     val shuffle = queue.shuffle
+    // 电台自己决定循环与续拉，随机/循环/无限播放三颗按钮一律禁用（PlaybackConnection 里也拦了一道）。
+    val radio = queue.radio
 
     // 回调按状态 remember：不固定的话每次重组都是新 lambda，LazyColumn 那一堆行的跳过全失效。
     val onToggleShuffle = remember(connection, shuffle) { { connection.setShuffle(!shuffle) } }
@@ -244,6 +246,7 @@ internal fun QueuePanel(
                 iconRes = R.drawable.shuffle,
                 label = "随机播放",
                 active = shuffle,
+                enabled = !radio,
                 onClick = onToggleShuffle,
                 modifier = Modifier.weight(1f),
             )
@@ -251,6 +254,7 @@ internal fun QueuePanel(
                 iconRes = mode.buttonIconRes(),
                 label = mode.buttonLabel(),
                 active = mode != PlayMode.SEQUENTIAL,
+                enabled = !radio,
                 onClick = onCycleLoop,
                 modifier = Modifier.weight(1f),
             )
@@ -258,6 +262,7 @@ internal fun QueuePanel(
                 iconRes = R.drawable.infinity,
                 label = "无限播放",
                 active = queue.infinite,
+                enabled = !radio,
                 onClick = onInfinite,
                 modifier = Modifier.weight(1f),
             )
@@ -839,18 +844,28 @@ private fun PanelButton(
     active: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     Box(
         modifier = modifier
             .fillMaxHeight()
             .clip(Capsule())
-            .drawBackground(color = { Color.White.copy(alpha = if (active) 0.6f else 0.2f) })
-            .clickable(onClick = onClick),
+            .drawBackground(color = {
+                Color.White.copy(
+                    alpha = when {
+                        active -> 0.6f
+                        enabled -> 0.2f
+                        // 禁用态：底色更淡，跟"未激活但可点"分开
+                        else -> 0.1f
+                    }
+                )
+            })
+            .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
             painter = painterResource(iconRes),
-            tint = if (active) Color.Black else Color.White,
+            tint = if (active && enabled) Color.Black else Color.White.copy(alpha = if (enabled) 1f else 0.35f),
             contentDescription = label,
             modifier = Modifier.size(ButtonIconSize),
         )

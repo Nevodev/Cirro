@@ -96,6 +96,14 @@ data class PlaybackQueue(
     val source: QueueSource? = null,
     /** 无限播放和循环互斥，随机仍独立；关闭时移除当前歌曲之后的自动推荐。 */
     val infinite: Boolean = false,
+    /**
+     * 电台模式：整队是一条会自己续下去的流。
+     *
+     * 跟 [infinite] 的区别只在「谁来续」——无限播放续的是心动模式（按当前队列的种子歌），
+     * 电台续的是私人 FM。电台模式下循环 / 随机 / 无限播放三颗按钮**全部禁用**：
+     * 这三件事都由电台自己决定，用户改了也没有意义。
+     */
+    val radio: Boolean = false,
 )
 
 /**
@@ -115,8 +123,11 @@ fun playQueueOf(
     mode: PlayMode = PlayMode.SEQUENTIAL,
     shuffle: Boolean = false,
     infinite: Boolean = false,
+    radio: Boolean = false,
 ): PlaybackQueue {
-    if (songs.isEmpty()) return PlaybackQueue(mode = mode, shuffle = shuffle, infinite = infinite)
+    if (songs.isEmpty()) {
+        return PlaybackQueue(mode = mode, shuffle = shuffle, infinite = infinite, radio = radio)
+    }
     val entries = songs.mapIndexed { i, song ->
         QueueEntry(uid = nextEntryUid(), song = song, source = source, seq = i)
     }
@@ -127,6 +138,7 @@ fun playQueueOf(
         shuffle = shuffle,
         source = source,
         infinite = infinite,
+        radio = radio,
     )
 }
 

@@ -9,6 +9,7 @@ import com.nevoit.cirro.data.HomeRepository
 import com.nevoit.cirro.data.IntelligenceRepository
 import com.nevoit.cirro.data.LibraryRepository
 import com.nevoit.cirro.data.PlayQueueStore
+import com.nevoit.cirro.data.RadioRepository
 import com.nevoit.cirro.data.SessionStore
 import com.nevoit.cirro.data.SongLikeRepository
 import com.nevoit.cirro.ui.SongMenuViewModel
@@ -60,7 +61,8 @@ val appModule = module {
     single { AccountRepository(get(), get(ApplicationScope)) }
 
     single { IntelligenceRepository() }
-    single { PlaybackConnection(androidContext(), get(ApplicationScope), get(), get(), get()) }
+    single { RadioRepository() }
+    single { PlaybackConnection(androidContext(), get(ApplicationScope), get(), get(), get(), get()) }
     single { AudioAnalysisStore() }
 
     // 播放页的展开进度。迷你条和播放页分属两层，要由同一个值驱动，所以由 App 持有。

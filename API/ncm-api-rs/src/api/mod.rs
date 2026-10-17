@@ -259,6 +259,7 @@ mod simi_artist;
 mod simi_mv;
 mod simi_playlist;
 mod simi_song;
+mod song_simi_get;
 mod simi_user;
 
 // ---- 排行榜 ----
