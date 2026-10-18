@@ -819,14 +819,28 @@ pub struct AppleSearchHit {
 ///
 /// ⚠️ 这里**不替调用方挑歌**：返回多少个候选就原样交给 Kotlin 侧打分。匹配是纯计算，
 /// 放在上层才好调（改一次不用重编 `.so`、不用重装 APK）。
-pub async fn artist_video(id: &str, storefront: &str) -> Result<Option<String>, String> {
+#[derive(Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtistHeader {
+    pub video_url: Option<String>,
+    pub name_logo: Option<ArtistNameLogo>,
+}
+
+#[derive(serde::Serialize)]
+pub struct ArtistNameLogo {
+    pub url: String,
+    pub width: i32,
+    pub height: i32,
+}
+
+pub async fn artist_header(id: &str, storefront: &str) -> Result<ArtistHeader, String> {
     if id.is_empty() || !id.bytes().all(|c| c.is_ascii_digit()) {
         return Err("Apple 艺人 id 无效".into());
     }
     let media_token = STATE.lock().unwrap().media_user_token.clone();
     let place = Place::for_storefront(storefront);
     let url = format!(
-        "{AMP_API}/v1/catalog/{}/artists/{id}?extend=editorialVideo",
+        "{AMP_API}/v1/catalog/{}/artists/{id}?extend=editorialVideo,editorialArtwork",
         place.storefront,
     );
     let mut response = get_authorized(&url, media_token.as_deref(), &place.accept_language).await?;
@@ -835,14 +849,17 @@ pub async fn artist_video(id: &str, storefront: &str) -> Result<Option<String>, 
         response = get_authorized(&url, media_token.as_deref(), &place.accept_language).await?;
     }
     if response.status == 404 {
-        return Ok(None);
+        return Ok(ArtistHeader::default());
     }
     if !(200..300).contains(&response.status) {
-        return Err(format!("Apple 艺人视频返回 HTTP {}", response.status));
+        return Err(format!("Apple 艺人资料返回 HTTP {}", response.status));
     }
     let value: Value = serde_json::from_str(&response.body)
         .map_err(|error| format!("Apple 艺人响应不是 JSON: {error}"))?;
-    Ok(parse_artist_video(&value))
+    Ok(ArtistHeader {
+        video_url: parse_artist_video(&value),
+        name_logo: parse_artist_name_logo(&value),
+    })
 }
 
 fn parse_artist_video(value: &Value) -> Option<String> {
@@ -851,6 +868,17 @@ fn parse_artist_video(value: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|url| url.starts_with("https://"))
         .map(str::to_string)
+}
+
+fn parse_artist_name_logo(value: &Value) -> Option<ArtistNameLogo> {
+    let artwork = value.pointer("/data/0/attributes/editorialArtwork/musicContentColorLogoTrimmed")?;
+    let url = artwork.get("url")?.as_str()?.to_string();
+    let width = i32::try_from(artwork.get("width")?.as_u64()?).ok()?;
+    let height = i32::try_from(artwork.get("height")?.as_u64()?).ok()?;
+    if !url.starts_with("https://") || width <= 0 || height <= 0 {
+        return None;
+    }
+    Some(ArtistNameLogo { url, width, height })
 }
 
 pub async fn search(
@@ -1122,13 +1150,38 @@ mod artist_search_tests {
     #[ignore = "Inspects live Apple artist motion artwork"]
     fn live_artist_motion_metadata() {
         crate::engine::RUNTIME.block_on(async {
-            let video = artist_video("1065981054", "us").await.unwrap().unwrap();
+            let header = artist_header("1065981054", "us").await.unwrap();
+            let video = header.video_url.unwrap();
             let response = crate::engine::HTTP.get(&video).send().await.unwrap();
             assert!(response.status().is_success());
             let playlist = response.text().await.unwrap();
             assert!(playlist.starts_with("#EXTM3U"));
             assert!(playlist.contains("RESOLUTION="));
             println!("Square artist video: HLS master playlist available");
+        });
+    }
+
+    #[test]
+    #[ignore = "Inspects live Apple artist name logos"]
+    fn live_artist_name_logo_metadata() {
+        crate::engine::RUNTIME.block_on(async {
+            let header = artist_header("159260351", "us").await.unwrap();
+            let logo = header.name_logo.unwrap();
+            assert!(logo.url.contains("{w}") && logo.url.contains("{h}"));
+            let scale = (480.0 / logo.width as f64).min(160.0 / logo.height as f64).min(1.0);
+            let width = (logo.width as f64 * scale).round() as u32;
+            let height = (logo.height as f64 * scale).round() as u32;
+            let (base, _) = logo.url.rsplit_once('.').unwrap();
+            let image_url = format!("{base}.png").replace("{w}", &width.to_string()).replace("{h}", &height.to_string());
+            let response = crate::engine::HTTP.get(&image_url).send().await.unwrap();
+            assert!(response.status().is_success());
+            let bytes = response.bytes().await.unwrap();
+            assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+            let image_width = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+            let image_height = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
+            assert!(image_width <= 480 && image_height <= 160);
+            println!("Artist name logo: original {}x{}, requested {width}x{height}, PNG {image_width}x{image_height}, {} bytes, color type {}",
+                logo.width, logo.height, bytes.len(), bytes[25]);
         });
     }
 
@@ -1144,6 +1197,28 @@ mod artist_search_tests {
         }}}]});
         assert!(parse_artist_video(&wide_only).is_none());
         assert!(parse_artist_video(&json!({"data":[]})).is_none());
+    }
+
+    #[test]
+    fn parses_trimmed_color_logo_independently_of_video() {
+        let response = json!({"data":[{"attributes":{"editorialArtwork":{
+            "musicContentColorLogoTrimmed": {
+                "url":"https://example.com/logo/{w}x{h}.{f}",
+                "width": 30000, "height": 5000
+            },
+            "musicContentWhiteLogo": {
+                "url":"https://example.com/other.png", "width":100, "height":100
+            }
+        }}}]});
+        let logo = parse_artist_name_logo(&response).unwrap();
+        assert_eq!(logo.width, 30000);
+        assert_eq!(logo.height, 5000);
+        assert_eq!(logo.url, "https://example.com/logo/{w}x{h}.{f}");
+        assert!(parse_artist_video(&response).is_none());
+        let mut invalid = response.clone();
+        invalid["data"][0]["attributes"]["editorialArtwork"]["musicContentColorLogoTrimmed"]["width"] = json!(0);
+        assert!(parse_artist_name_logo(&invalid).is_none());
+        assert!(parse_artist_name_logo(&json!({"data":[]})).is_none());
     }
 
     #[test]

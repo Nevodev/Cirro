@@ -2,6 +2,7 @@ package com.nevoit.cirro.data
 
 import com.nevoit.cirro.data.model.AppleArtistMatch
 import com.nevoit.cirro.data.model.Song
+import com.nevoit.cirro.lyrics.data.AppleArtistHeader
 import com.nevoit.cirro.lyrics.data.AppleSearchResult
 import com.nevoit.cirro.lyrics.data.LyricsBridge
 import kotlinx.coroutines.CancellationException
@@ -25,24 +26,26 @@ class AppleArtistRepository(
         LyricsBridge.appleArtistSearch(term, storefront = storefront)
     },
     private val onFailure: (Throwable) -> Unit = {},
-    private val fetchVideo: (String, String) -> Result<String?> = { id, storefront ->
-        LyricsBridge.appleArtistVideo(id, storefront)
+    private val fetchHeader: (String, String) -> Result<AppleArtistHeader> = { id, storefront ->
+        LyricsBridge.appleArtistHeader(id, storefront)
     },
 ) {
     private val mutex = Mutex()
     private var matches: MutableMap<Long, AppleArtistMatch>? = null
     private val inFlight = mutableMapOf<Long, Deferred<AppleArtistMatch?>>()
-    private val videos = mutableMapOf<Pair<String, String>, Deferred<String?>>()
+    private val headers = mutableMapOf<Pair<String, String>, Deferred<AppleArtistHeader?>>()
 
-    suspend fun video(match: AppleArtistMatch): String? {
+    suspend fun video(match: AppleArtistMatch): String? = header(match)?.videoUrl
+
+    suspend fun header(match: AppleArtistMatch): AppleArtistHeader? {
         val key = match.appleArtistId to match.storefront
         val request = mutex.withLock {
-            videos.getOrPut(key) {
+            headers.getOrPut(key) {
                 scope.async(Dispatchers.IO, start = CoroutineStart.LAZY) {
                     try {
-                        fetchVideo(key.first, key.second).getOrThrow()
+                        fetchHeader(key.first, key.second).getOrThrow()
                     } catch (error: Exception) {
-                        withContext(NonCancellable) { mutex.withLock { videos.remove(key) } }
+                        withContext(NonCancellable) { mutex.withLock { headers.remove(key) } }
                         if (error is CancellationException) throw error
                         onFailure(error)
                         null

@@ -233,8 +233,11 @@ object LyricsBridge {
             AppleSearchResult(body.songs, body.storefront, body.storefrontProbed)
         }
 
+    fun appleArtistHeader(id: String, storefront: String): Result<AppleArtistHeader> =
+        decode(nativeAppleArtistHeader(id, storefront)).map { it.header }
+
     fun appleArtistVideo(id: String, storefront: String): Result<String?> =
-        decode(nativeAppleArtistVideo(id, storefront)).map { it.videoUrl.takeIf(String::isNotBlank) }
+        appleArtistHeader(id, storefront).map { it.videoUrl }
 
     /** lrclib。返回 null 表示查不到。 */
     fun lrclib(
@@ -297,7 +300,7 @@ object LyricsBridge {
 
     private external fun nativeAppleArtistSearch(term: String, limit: String, storefront: String): String
 
-    private external fun nativeAppleArtistVideo(id: String, storefront: String): String
+    private external fun nativeAppleArtistHeader(id: String, storefront: String): String
 
     private external fun nativeLrclib(
         trackName: String,
@@ -335,7 +338,7 @@ private data class BridgeResponse(
     val storefrontProbed: Boolean = false,
     // Apple 搜索
     val songs: List<AppleSongCandidate> = emptyList(),
-    val videoUrl: String = "",
+    val header: AppleArtistHeader = AppleArtistHeader(),
     // lrclib
     val id: Long = 0,
     val trackName: String = "",

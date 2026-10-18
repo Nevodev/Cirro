@@ -4,6 +4,8 @@ import com.nevoit.cirro.data.model.AppleArtistMatch
 import com.nevoit.cirro.data.model.AppleArtistSongMatch
 import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.lyrics.data.AppleArtistCandidate
+import com.nevoit.cirro.lyrics.data.AppleArtistHeader
+import com.nevoit.cirro.lyrics.data.AppleArtistNameLogo
 import com.nevoit.cirro.lyrics.data.AppleSearchResult
 import com.nevoit.cirro.lyrics.data.AppleSongCandidate
 import kotlinx.coroutines.CompletableDeferred
@@ -145,7 +147,7 @@ class AppleArtistRepositoryTest {
     @Test
     fun videoIsLazyAndOnlyCachedInMemory() = runBlocking {
         val match = AppleArtistMatch("100", "cn", emptyList())
-        Fixture(fetchVideo = { _, _ -> Result.success("https://example.com/square.m3u8") }).use { fixture ->
+        Fixture(fetchHeader = { _, _ -> Result.success(AppleArtistHeader(videoUrl = "https://example.com/square.m3u8")) }).use { fixture ->
             assertEquals(0, fixture.videoReads.get())
             repeat(2) { assertEquals("https://example.com/square.m3u8", fixture.repository.video(match)) }
             assertEquals(1, fixture.videoReads.get())
@@ -169,8 +171,8 @@ class AppleArtistRepositoryTest {
     fun videoFailureCanRetryAndStorefrontsRemainSeparate() = runBlocking {
         val match = AppleArtistMatch("100", "cn", emptyList())
         var failed = true
-        Fixture(fetchVideo = { _, storefront ->
-            if (failed) Result.failure(IOException("Offline")) else Result.success("https://example.com/$storefront.m3u8")
+        Fixture(fetchHeader = { _, storefront ->
+            if (failed) Result.failure(IOException("Offline")) else Result.success(AppleArtistHeader(videoUrl = "https://example.com/$storefront.m3u8"))
         }).use { fixture ->
             assertNull(fixture.repository.video(match))
             failed = false
@@ -180,12 +182,26 @@ class AppleArtistRepositoryTest {
         }
     }
 
+    @Test
+    fun logoWithoutVideoUsesTheSameLazyMetadataCache() = runBlocking {
+        val match = AppleArtistMatch("100", "cn", emptyList())
+        val logo = AppleArtistNameLogo("https://example.com/{w}x{h}.png", 30000, 5000)
+        Fixture(fetchHeader = { _, _ -> Result.success(AppleArtistHeader(nameLogo = logo)) }).use { fixture ->
+            assertEquals(0, fixture.videoReads.get())
+            assertNull(fixture.repository.video(match))
+            assertEquals(logo, fixture.repository.header(match)?.nameLogo)
+            assertEquals(1, fixture.videoReads.get())
+            assertEquals(0, fixture.writes.get())
+            assertEquals(0, fixture.searches.get())
+        }
+    }
+
     private inner class Fixture(
         initial: Map<Long, AppleArtistMatch> = emptyMap(),
         save: (Map<Long, AppleArtistMatch>) -> Unit = {},
         beforeSearch: () -> Unit = {},
         failSearch: () -> Boolean = { false },
-        fetchVideo: (String, String) -> Result<String?> = { _, _ -> Result.success(null) },
+        fetchHeader: (String, String) -> Result<AppleArtistHeader> = { _, _ -> Result.success(AppleArtistHeader()) },
     ) : Closeable {
         private val job = SupervisorJob()
         val reads = AtomicInteger()
@@ -209,7 +225,7 @@ class AppleArtistRepositoryTest {
                     ))
                 }
             },
-            fetchVideo = { id, storefront -> videoReads.incrementAndGet(); fetchVideo(id, storefront) },
+            fetchHeader = { id, storefront -> videoReads.incrementAndGet(); fetchHeader(id, storefront) },
         )
 
         override fun close() { job.cancel() }

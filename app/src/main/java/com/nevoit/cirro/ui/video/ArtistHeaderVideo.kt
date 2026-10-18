@@ -3,10 +3,13 @@ package com.nevoit.cirro.ui.video
 import android.util.Log
 import android.view.TextureView
 import androidx.annotation.OptIn
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -56,6 +59,14 @@ internal fun ArtistHeaderVideo(
     var failed by remember(player) { mutableStateOf(false) }
     if (failed) return
 
+    val videoAlpha by key(player) {
+        animateFloatAsState(
+            targetValue = if (firstFrame) 1f else 0f,
+            animationSpec = tween(500),
+            label = "artistVideoAlpha",
+        )
+    }
+
     // LazyColumn 回收头部会连同 TextureView 和首帧状态一起销毁；保留这一项才能在滚回时沿用原画面。
     val pinnableContainer = LocalPinnableContainer.current
     DisposableEffect(pinnableContainer) {
@@ -74,7 +85,7 @@ internal fun ArtistHeaderVideo(
                 player.setVideoTextureView(this)
             }
         },
-        modifier = modifier.graphicsLayer { alpha = if (firstFrame) 1f else 0f },
+        modifier = modifier.graphicsLayer { alpha = videoAlpha },
         onRelease = { player.clearVideoTextureView(it) },
     )
     DisposableEffect(player, lifecycle) {

@@ -2,15 +2,18 @@ package com.nevoit.cirro.detail
 
 import android.content.Intent
 import android.widget.Toast
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.OverscrollEffect
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,6 +29,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberOverscrollEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -41,6 +45,7 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -50,12 +55,16 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import coil3.compose.AsyncImagePainter
+import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import coil3.request.transformations
+import coil3.size.Precision
 import com.kyant.shapes.RoundedRectangle
 import com.nevoit.cirro.R
 import com.nevoit.cirro.data.AccountRepository
@@ -74,6 +83,8 @@ import com.nevoit.cirro.data.model.tracksForAlbum
 import com.nevoit.cirro.home.OpenCollection
 import com.nevoit.cirro.home.Section
 import com.nevoit.cirro.home.dataOrNull
+import com.nevoit.cirro.lyrics.data.AppleArtistHeader
+import com.nevoit.cirro.lyrics.data.AppleArtistNameLogo
 import com.nevoit.cirro.palette.CoverPalette
 import com.nevoit.cirro.palette.CoverSeed
 import com.nevoit.cirro.playback.PlaybackConnection
@@ -125,6 +136,8 @@ private const val HeaderGradientRiseMultiplier = 2f
 
 private const val HeaderCoverCapPx = 1024
 
+private val HeaderLogoMaxHeight = 80.dp
+
 private const val BgToneDark = 30
 
 private const val BgToneLight = 80
@@ -172,23 +185,40 @@ fun ArtistRoute(
     libraryAlbum: Boolean = false,
     likedPlaylist: Boolean = false,
     authorHint: String = "",
+    onPaletteChanged: (CoverSeed?) -> Unit = {},
+) = MaterialTheme(
+    darkTheme = true,
+    specs = MaterialTheme.specs,
+    type = MaterialTheme.type,
 ) {
     val viewModel: CollectionViewModel = koinViewModel {
         parametersOf(kind, id, titleHint)
     }
     val appleArtists = koinInject<AppleArtistRepository>()
     val pageTransition = LocalPageTransitionState.current
-    var artistVideoUrl by remember(id) { mutableStateOf<String?>(null) }
+    var artistHeader by remember(id) { mutableStateOf<AppleArtistHeader?>(null) }
+    var showTitleWhileLoading by remember(id) { mutableStateOf(false) }
     LaunchedEffect(viewModel, appleArtists, pageTransition) {
-        if (kind != CollectionKind.ARTIST) return@LaunchedEffect
-        val match = appleArtists.cached(id) ?: run {
-            val loaded = viewModel.state.first { it.info is Section.Ready && it.songs is Section.Ready }
-            appleArtists.resolve(id, loaded.info.dataOrNull?.title.orEmpty(), loaded.songs.dataOrNull.orEmpty())
+        if (kind != CollectionKind.ARTIST) {
+            showTitleWhileLoading = true
+            return@LaunchedEffect
+        }
+        val cachedMatch = appleArtists.cached(id)
+        showTitleWhileLoading = cachedMatch == null
+        val match = cachedMatch ?: run {
+            val loaded =
+                viewModel.state.first { it.info is Section.Ready && it.songs is Section.Ready }
+            appleArtists.resolve(
+                id,
+                loaded.info.dataOrNull?.title.orEmpty(),
+                loaded.songs.dataOrNull.orEmpty()
+            )
         }
         if (match != null) {
-            val video = appleArtists.video(match)
+            val header = appleArtists.header(match)
             pageTransition?.awaitNearlySettled()
-            artistVideoUrl = video
+            artistHeader = header
+            if (header?.nameLogo == null) showTitleWhileLoading = true
         }
     }
     val playback = koinInject<PlaybackConnection>()
@@ -306,10 +336,15 @@ fun ArtistRoute(
         palette.prefetch(paletteKey)
         seed = palette.seed(paletteKey)
     }
+    SideEffect {
+        onPaletteChanged(seed)
+    }
 
     ArtistScreen(
         state = state,
-        videoUrl = artistVideoUrl,
+        videoUrl = artistHeader?.videoUrl,
+        nameLogo = artistHeader?.nameLogo,
+        showTitleWhileLoading = showTitleWhileLoading,
         likedPlaylist = likedPlaylist,
         incompleteAlbum = incompleteAlbum,
         onShowFullAlbum = { showFullAlbum = true },
@@ -411,6 +446,8 @@ fun ArtistRoute(
 private fun ArtistScreen(
     state: CollectionViewModel.UiState,
     videoUrl: String?,
+    nameLogo: AppleArtistNameLogo?,
+    showTitleWhileLoading: Boolean,
     likedPlaylist: Boolean,
     incompleteAlbum: Boolean,
     onShowFullAlbum: () -> Unit,
@@ -492,6 +529,12 @@ private fun ArtistScreen(
     val overscrollEffect = rememberOverscrollEffect()
 
     val screenWidth = LocalWindowInfo.current.containerDpSize.width
+    // Logo 请求随页面保留，避免 Lazy 头部重建时从加载态再次淡入。
+    val titleContent = rememberArtistTitleContent(
+        logo = nameLogo,
+        showTextWhileLoading = showTitleWhileLoading,
+        maxWidth = (screenWidth - 48.dp).coerceAtLeast(1.dp),
+    )
     val listState = rememberLazyListState()
     val headerVisible by remember(listState) {
         derivedStateOf { listState.layoutInfo.visibleItemsInfo.any { it.key == "header" } }
@@ -524,10 +567,10 @@ private fun ArtistScreen(
                     else -> HeaderBlock(
                         info = info,
                         videoUrl = videoUrl,
+                        titleContent = titleContent,
                         videoVisible = headerVisible,
                         likedPlaylist = likedPlaylist,
                         displayTitle = displayTitle,
-                        authorHint = authorHint,
                         coverUrl = coverUrl,
                         onCoverError = onCoverError,
                         backgroundColor = backgroundColor,
@@ -716,10 +759,10 @@ private fun ArtistScreen(
 private fun HeaderBlock(
     info: CollectionInfo?,
     videoUrl: String?,
+    titleContent: ArtistTitleContent,
     videoVisible: Boolean,
     likedPlaylist: Boolean,
     displayTitle: String,
-    authorHint: String,
     coverUrl: String,
     onCoverError: () -> Unit,
     backgroundColor: Color,
@@ -744,8 +787,11 @@ private fun HeaderBlock(
             modifier = Modifier
                 .graphicsLayer {
                     val overscrollOffset =
-                        (overscrollEffect as? OffsetOverscrollEffect)?.visualOffset?.y?.coerceAtLeast(0f) ?: 0f
-                    val scale = (screenWidthPx + overscrollOffset + risePx) / (screenWidthPx + risePx)
+                        (overscrollEffect as? OffsetOverscrollEffect)?.visualOffset?.y?.coerceAtLeast(
+                            0f
+                        ) ?: 0f
+                    val scale =
+                        (screenWidthPx + overscrollOffset + risePx) / (screenWidthPx + risePx)
                     scaleX = scale
                     scaleY = scale
                     transformOrigin = TransformOrigin(0.5f, 1f)
@@ -792,52 +838,12 @@ private fun HeaderBlock(
                 .padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(
-                text = displayTitle,
-                style = MaterialTheme.type.title4Emphasized,
-                lineHeight = 26.sp,
-                color = Color.White,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.graphicsLayer {
-                    blendMode = BlendMode.Plus
-                }
+            ArtistTitle(
+                title = displayTitle,
+                titleContent = titleContent,
             )
 
-            val author = info?.author ?: authorHint
-            VGap(4.dp)
-            Text(
-                text = author,
-                style = MaterialTheme.type.subHeadline,
-                color = Color.White.copy(alpha = 0.5f),
-                textAlign = TextAlign.Center,
-                minLines = 1,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.graphicsLayer {
-                    blendMode = BlendMode.Plus
-                }
-            )
-
-            val meta =
-                if (likedPlaylist) relativeAddedDay(info?.updateTimeMs ?: 0) else metaLine(info)
-            if (meta.isNotEmpty()) {
-                VGap(4.dp)
-                Text(
-                    text = meta,
-                    style = MaterialTheme.type.footnote,
-                    color = Color.White.copy(alpha = 0.3f),
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.graphicsLayer {
-                        blendMode = BlendMode.Plus
-                    }
-                )
-            }
-
-            VGap(16.dp)
+            VGap(24.dp)
             HeaderActions(
                 canCollect = info != null && info.kind != CollectionKind.DAILY && !likedPlaylist,
                 subscribed = info?.subscribed == true,
@@ -849,6 +855,90 @@ private fun HeaderBlock(
                 onToggleSubscribed = onToggleSubscribed,
                 modifier = Modifier.fillMaxWidth(),
             )
+        }
+    }
+}
+
+private sealed interface ArtistTitleContent {
+    data object Loading : ArtistTitleContent
+    data object Name : ArtistTitleContent
+    data class Logo(val artwork: AppleArtistNameLogo, val painter: Painter) : ArtistTitleContent
+}
+
+@Composable
+private fun rememberArtistTitleContent(
+    logo: AppleArtistNameLogo?,
+    showTextWhileLoading: Boolean,
+    maxWidth: Dp,
+): ArtistTitleContent {
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val thumbnail = remember(logo, maxWidth, density) {
+        with(density) {
+            logo?.thumbnail(
+                maxWidth.roundToPx().coerceIn(1, HeaderCoverCapPx),
+                HeaderLogoMaxHeight.roundToPx().coerceIn(1, HeaderCoverCapPx),
+            )
+        }
+    }
+    return if (thumbnail != null) {
+        val request = remember(context, thumbnail) {
+            ImageRequest.Builder(context)
+                .data(thumbnail.url)
+                .size(thumbnail.width, thumbnail.height)
+                .precision(Precision.EXACT)
+                .build()
+        }
+        val painter = rememberAsyncImagePainter(request)
+        val imageState by painter.state.collectAsState()
+        when (val state = imageState) {
+            is AsyncImagePainter.State.Success -> ArtistTitleContent.Logo(thumbnail, state.painter)
+            is AsyncImagePainter.State.Error -> ArtistTitleContent.Name
+            else -> if (showTextWhileLoading) ArtistTitleContent.Name else ArtistTitleContent.Loading
+        }
+    } else if (showTextWhileLoading || logo != null) {
+        ArtistTitleContent.Name
+    } else {
+        ArtistTitleContent.Loading
+    }
+}
+
+@Composable
+private fun ArtistTitle(
+    title: String,
+    titleContent: ArtistTitleContent,
+) {
+    val density = LocalDensity.current
+    Crossfade(
+        targetState = titleContent,
+        modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
+        animationSpec = tween(500),
+        label = "artistTitle",
+    ) { content ->
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+            when (content) {
+                ArtistTitleContent.Loading -> Unit
+                ArtistTitleContent.Name -> Text(
+                    text = title,
+                    style = MaterialTheme.type.title1Emphasized,
+                    lineHeight = 32.sp,
+                    color = Color.White,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.graphicsLayer { blendMode = BlendMode.Plus },
+                )
+
+                is ArtistTitleContent.Logo -> Image(
+                    painter = content.painter,
+                    contentDescription = title,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.size(
+                        with(density) { content.artwork.width.toDp() },
+                        with(density) { content.artwork.height.toDp() },
+                    ),
+                )
+            }
         }
     }
 }

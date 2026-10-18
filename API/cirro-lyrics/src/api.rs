@@ -123,9 +123,9 @@ pub async fn apple_search(term: String, limit: String, storefront: String) -> Va
     apple_search_request(term, limit, storefront, false).await
 }
 
-pub async fn apple_artist_video(id: String, storefront: String) -> Value {
-    match apple::artist_video(&id, &storefront).await {
-        Ok(video) => json!({"ok": true, "videoUrl": video.unwrap_or_default()}),
+pub async fn apple_artist_header(id: String, storefront: String) -> Value {
+    match apple::artist_header(&id, &storefront).await {
+        Ok(header) => json!({"ok": true, "header": header}),
         Err(error) => fail(error),
     }
 }

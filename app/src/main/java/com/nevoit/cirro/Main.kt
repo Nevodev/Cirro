@@ -23,10 +23,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -82,6 +84,8 @@ import com.nevoit.material.navigation.shape.clipShape
 import com.nevoit.material.navigation.shape.deviceCornerShape
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.local.ProvideContentColor
+import com.nevoit.material.theme.materialColorsFromSeed
+import com.nevoit.material.theme.rememberSystemSeedColor
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
@@ -226,18 +230,30 @@ fun BoxScope.Main() {
             .distinctUntilChanged()
             .collect { value = it }
     }
-    val coverHint = when (val destination = navigator.current.destination) {
+    val artistPageSeeds = remember { mutableStateMapOf<Long, CoverSeed?>() }
+    val currentEntry = navigator.current
+    val coverHint = when (val destination = currentEntry.destination) {
         is MainDestination.Collection -> destination.coverHint
         MainDestination.LibraryLikedSongs -> likedCover
         else -> null
     }
-    val barSeed by produceState<CoverSeed?>(
+    val hintedBarSeed by produceState<CoverSeed?>(
         initialValue = coverHint?.let { palette.cached(it) },
         coverHint
     ) {
         value = coverHint?.let { palette.seed(it) }
     }
-    val barDark = barSeed?.dark == true || MaterialTheme.darkTheme
+    // 常驻 chrome 在导航树外，需要跟艺人页独立的深色主题同步。
+    val artistPage = (currentEntry.destination as? MainDestination.Collection)?.kind == CollectionKind.ARTIST
+    // null 也表示页内的实际状态，不能重新拿入口封面的旧颜色覆盖它。
+    val barSeed = if (artistPage && artistPageSeeds.containsKey(currentEntry.id)) {
+        artistPageSeeds[currentEntry.id]
+    } else hintedBarSeed
+    val barDark = artistPage || barSeed?.dark == true || MaterialTheme.darkTheme
+    val barColors = if (artistPage && !MaterialTheme.darkTheme) {
+        val seedColor = rememberSystemSeedColor()
+        remember(seedColor) { materialColorsFromSeed(seedColor, isDark = true) }
+    } else MaterialTheme.colors
 
     fun barTone(darkTone: Int, lightTone: Int): Color? =
         barSeed?.primaryTone(if (barDark) darkTone else lightTone)?.let(::Color)
@@ -247,12 +263,12 @@ fun BoxScope.Main() {
     // rememberColorProducer 包成 producer 传下去，读取发生在各自的 draw 阶段。
     val barContainerColor = animateColorAsState(
         targetValue = barTone(BarToneDark, BarToneLight)
-            ?: MaterialTheme.colors.cardBackground,
+            ?: barColors.cardBackground,
         animationSpec = tween(durationMillis = 400),
         label = "barContainer",
     )
     val menuActionTone = if (barDark) MenuActionToneDark else MenuActionToneLight
-    val themePrimary = MaterialTheme.colors.primary
+    val themePrimary = barColors.primary
     val menuActionFallback = remember(themePrimary, menuActionTone) {
         val hct = Hct.fromInt(themePrimary.toArgb())
         Color(Hct.from(hct.hue, hct.chroma, menuActionTone.toDouble()).toInt())
@@ -264,38 +280,38 @@ fun BoxScope.Main() {
     )
     val barIndicatorColor = animateColorAsState(
         targetValue = barTone(BarIndicatorToneDark, BarIndicatorToneLight)
-            ?: MaterialTheme.colors.navigationBarIndicator,
+            ?: barColors.navigationBarIndicator,
         animationSpec = tween(durationMillis = 400),
         label = "barIndicator",
     )
     val barActiveIconColor = animateColorAsState(
         targetValue = barTone(BarActiveIconToneDark, BarActiveIconToneLight)
-            ?: MaterialTheme.colors.onNavigationBarIndicator,
+            ?: barColors.onNavigationBarIndicator,
         animationSpec = tween(durationMillis = 400),
         label = "barActiveIcon",
     )
     val barInactiveIconColor = animateColorAsState(
         targetValue = barTone(BarInactiveIconToneDark, BarInactiveIconToneLight)
-            ?: MaterialTheme.colors.navigationBarInactiveIcon,
+            ?: barColors.navigationBarInactiveIcon,
         animationSpec = tween(durationMillis = 400),
         label = "barInactiveIcon",
     )
 
     val miniContentColor = animateColorAsState(
         targetValue = barTone(MiniContentToneDark, MiniContentToneLight)
-            ?: MaterialTheme.colors.content,
+            ?: barColors.content,
         animationSpec = tween(durationMillis = 400),
         label = "miniContent",
     )
     val miniVariantColor = animateColorAsState(
         targetValue = barTone(MiniVariantToneDark, MiniVariantToneLight)
-            ?: MaterialTheme.colors.contentVariant,
+            ?: barColors.contentVariant,
         animationSpec = tween(durationMillis = 400),
         label = "miniVariant",
     )
     val miniPrimaryColor = animateColorAsState(
         targetValue = barTone(MiniPrimaryToneDark, MiniPrimaryToneLight)
-            ?: MaterialTheme.colors.primary,
+            ?: barColors.primary,
         animationSpec = tween(durationMillis = 400),
         label = "miniPrimary",
     )
@@ -390,6 +406,11 @@ fun BoxScope.Main() {
 
                 is MainDestination.Collection -> {
                     if (destination.kind == CollectionKind.ARTIST) {
+                        val pageId = entry.id
+                        // 退出动画中仍可能复用原页面，颜色记录须随页面实际销毁再释放。
+                        DisposableEffect(pageId) {
+                            onDispose { artistPageSeeds.remove(pageId) }
+                        }
                         ArtistRoute(
                             kind = destination.kind,
                             id = destination.id,
@@ -399,6 +420,9 @@ fun BoxScope.Main() {
                             onBack = ::back,
                             onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
                                 navigate(MainDestination.Collection(kind, id, titleHint, coverHint, authorHint = authorHint))
+                            },
+                            onPaletteChanged = { seed ->
+                                artistPageSeeds[pageId] = seed
                             },
                         )
                     } else {

@@ -173,7 +173,7 @@ pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeAppl
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeAppleArtistVideo<'local>(
+pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeAppleArtistHeader<'local>(
     mut env: JNIEnv<'local>,
     _this: JObject<'local>,
     id: JString<'local>,
@@ -181,7 +181,7 @@ pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeAppl
 ) -> jstring {
     let id = jni_in(&mut env, &id);
     let storefront = jni_in(&mut env, &storefront);
-    let value = engine::RUNTIME.block_on(api::apple_artist_video(id, storefront));
+    let value = engine::RUNTIME.block_on(api::apple_artist_header(id, storefront));
     jni_out(&mut env, value)
 }
 
