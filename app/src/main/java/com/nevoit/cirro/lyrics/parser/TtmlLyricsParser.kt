@@ -10,6 +10,7 @@ import com.nevoit.cirro.lyrics.model.LyricTranslatedText
 import com.nevoit.cirro.lyrics.model.Lyrics
 import com.nevoit.cirro.lyrics.model.LyricsSource
 import com.nevoit.cirro.lyrics.model.SyncLevel
+import com.nevoit.cirro.lyrics.parser.TtmlLyricsParser.extractBackgroundTranslation
 import org.xmlpull.v1.XmlPullParser
 import java.io.StringReader
 
@@ -124,6 +125,7 @@ object TtmlLyricsParser {
                         ?: child.attr(NS_ITUNES, "song-part")
                     child.descendantElements("p").forEach { entries += LineEntry(it, songPart) }
                 }
+
                 "p" -> entries += LineEntry(child, null)
             }
         }
@@ -153,6 +155,7 @@ object TtmlLyricsParser {
                     lastPersonIsDuet = agentType == "other"
                     lastPersonIsDuet
                 }
+
                 lastPersonAgentId == agentId -> lastPersonIsDuet
                 else -> {
                     lastPersonAgentId = agentId
@@ -263,7 +266,7 @@ object TtmlLyricsParser {
             }
             val group = groups.first()
             val remainder = normalizeText(
-                content.text.removeRange(group.range.first, group.range.last + 1).toString(),
+                content.text.removeRange(group.range.first, group.range.last + 1),
             )
             val inner = group.groupValues[1].trim()
             // 括号外没有正文（整串就是一句括号），或括号内为空 → 不拆
@@ -899,7 +902,7 @@ internal object XmlTree {
                 XmlPullParser.TEXT,
                 XmlPullParser.CDSECT,
                 XmlPullParser.ENTITY_REF,
-                -> stack.lastOrNull()?.children?.add(XText(parser.text.orEmpty()))
+                    -> stack.lastOrNull()?.children?.add(XText(parser.text.orEmpty()))
             }
             event = parser.next()
         }

@@ -60,6 +60,13 @@ data class AppleSongCandidate(
     val album: String = "",
     val durationMs: Long = 0,
     val hasLyrics: Boolean = false,
+    val artists: List<AppleArtistCandidate> = emptyList(),
+)
+
+@Serializable
+data class AppleArtistCandidate(
+    val id: String,
+    val name: String = "",
 )
 
 /**
@@ -217,6 +224,18 @@ object LyricsBridge {
             )
         }
 
+    fun appleArtistSearch(
+        term: String,
+        limit: Int = 12,
+        storefront: String = "",
+    ): Result<AppleSearchResult> =
+        decode(nativeAppleArtistSearch(term, limit.toString(), storefront)).map { body ->
+            AppleSearchResult(body.songs, body.storefront, body.storefrontProbed)
+        }
+
+    fun appleArtistVideo(id: String, storefront: String): Result<String?> =
+        decode(nativeAppleArtistVideo(id, storefront)).map { it.videoUrl.takeIf(String::isNotBlank) }
+
     /** lrclib。返回 null 表示查不到。 */
     fun lrclib(
         trackName: String,
@@ -276,6 +295,10 @@ object LyricsBridge {
 
     private external fun nativeAppleSearch(term: String, limit: String, storefront: String): String
 
+    private external fun nativeAppleArtistSearch(term: String, limit: String, storefront: String): String
+
+    private external fun nativeAppleArtistVideo(id: String, storefront: String): String
+
     private external fun nativeLrclib(
         trackName: String,
         artistName: String,
@@ -312,6 +335,7 @@ private data class BridgeResponse(
     val storefrontProbed: Boolean = false,
     // Apple 搜索
     val songs: List<AppleSongCandidate> = emptyList(),
+    val videoUrl: String = "",
     // lrclib
     val id: Long = 0,
     val trackName: String = "",

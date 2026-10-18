@@ -50,6 +50,7 @@ import com.nevoit.cirro.data.AccountRepository
 import com.nevoit.cirro.data.LibraryRepository
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.Session
+import com.nevoit.cirro.detail.ArtistRoute
 import com.nevoit.cirro.detail.CollectionRoute
 import com.nevoit.cirro.home.HomeRoute
 import com.nevoit.cirro.library.LibraryRoute
@@ -387,18 +388,34 @@ fun BoxScope.Main() {
                     },
                 )
 
-                is MainDestination.Collection -> CollectionRoute(
-                    kind = destination.kind,
-                    id = destination.id,
-                    titleHint = destination.titleHint,
-                    coverHint = destination.coverHint,
-                    authorHint = destination.authorHint,
-                    libraryAlbum = destination.libraryAlbum,
-                    onBack = ::back,
-                    onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
-                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint, authorHint = authorHint))
-                    },
-                )
+                is MainDestination.Collection -> {
+                    if (destination.kind == CollectionKind.ARTIST) {
+                        ArtistRoute(
+                            kind = destination.kind,
+                            id = destination.id,
+                            titleHint = destination.titleHint,
+                            coverHint = destination.coverHint,
+                            authorHint = destination.authorHint,
+                            onBack = ::back,
+                            onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
+                                navigate(MainDestination.Collection(kind, id, titleHint, coverHint, authorHint = authorHint))
+                            },
+                        )
+                    } else {
+                        CollectionRoute(
+                            kind = destination.kind,
+                            id = destination.id,
+                            titleHint = destination.titleHint,
+                            coverHint = destination.coverHint,
+                            authorHint = destination.authorHint,
+                            libraryAlbum = destination.libraryAlbum,
+                            onBack = ::back,
+                            onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
+                                navigate(MainDestination.Collection(kind, id, titleHint, coverHint, authorHint = authorHint))
+                            },
+                        )
+                    }
+                }
             }
         }
 

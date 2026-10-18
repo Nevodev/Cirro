@@ -157,6 +157,34 @@ pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeAppl
     jni_out(&mut env, value)
 }
 
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeAppleArtistSearch<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    term: JString<'local>,
+    limit: JString<'local>,
+    storefront: JString<'local>,
+) -> jstring {
+    let term = jni_in(&mut env, &term);
+    let limit = jni_in(&mut env, &limit);
+    let storefront = jni_in(&mut env, &storefront);
+    let value = engine::RUNTIME.block_on(api::apple_artist_search(term, limit, storefront));
+    jni_out(&mut env, value)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeAppleArtistVideo<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    id: JString<'local>,
+    storefront: JString<'local>,
+) -> jstring {
+    let id = jni_in(&mut env, &id);
+    let storefront = jni_in(&mut env, &storefront);
+    let value = engine::RUNTIME.block_on(api::apple_artist_video(id, storefront));
+    jni_out(&mut env, value)
+}
+
 /// lrclib。
 #[no_mangle]
 pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeLrclib<'local>(

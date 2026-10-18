@@ -780,6 +780,12 @@ pub struct AppleCandidate {
     /// ⚠️ 只表示"有歌词"，**不保证有逐字**（`syllable-lyrics`）—— 那要真去 [`fetch`]
     /// 一次才知道。所以它只能当一个**加权项**，不能当"有词"的判据。
     pub has_lyrics: bool,
+    pub artists: Vec<AppleArtist>,
+}
+
+pub struct AppleArtist {
+    pub id: String,
+    pub name: String,
 }
 
 /// 一次搜索的结果。
@@ -813,10 +819,61 @@ pub struct AppleSearchHit {
 ///
 /// ⚠️ 这里**不替调用方挑歌**：返回多少个候选就原样交给 Kotlin 侧打分。匹配是纯计算，
 /// 放在上层才好调（改一次不用重编 `.so`、不用重装 APK）。
+pub async fn artist_video(id: &str, storefront: &str) -> Result<Option<String>, String> {
+    if id.is_empty() || !id.bytes().all(|c| c.is_ascii_digit()) {
+        return Err("Apple 艺人 id 无效".into());
+    }
+    let media_token = STATE.lock().unwrap().media_user_token.clone();
+    let place = Place::for_storefront(storefront);
+    let url = format!(
+        "{AMP_API}/v1/catalog/{}/artists/{id}?extend=editorialVideo",
+        place.storefront,
+    );
+    let mut response = get_authorized(&url, media_token.as_deref(), &place.accept_language).await?;
+    if should_refresh_access_token(&response) {
+        invalidate_access_token();
+        response = get_authorized(&url, media_token.as_deref(), &place.accept_language).await?;
+    }
+    if response.status == 404 {
+        return Ok(None);
+    }
+    if !(200..300).contains(&response.status) {
+        return Err(format!("Apple 艺人视频返回 HTTP {}", response.status));
+    }
+    let value: Value = serde_json::from_str(&response.body)
+        .map_err(|error| format!("Apple 艺人响应不是 JSON: {error}"))?;
+    Ok(parse_artist_video(&value))
+}
+
+fn parse_artist_video(value: &Value) -> Option<String> {
+    value
+        .pointer("/data/0/attributes/editorialVideo/motionArtistSquare1x1/video")
+        .and_then(Value::as_str)
+        .filter(|url| url.starts_with("https://"))
+        .map(str::to_string)
+}
+
 pub async fn search(
     term: &str,
     limit: usize,
     storefront: Option<&str>,
+) -> Result<AppleSearchHit, String> {
+    search_catalog(term, limit, storefront, false).await
+}
+
+pub async fn search_with_artists(
+    term: &str,
+    limit: usize,
+    storefront: Option<&str>,
+) -> Result<AppleSearchHit, String> {
+    search_catalog(term, limit, storefront, true).await
+}
+
+async fn search_catalog(
+    term: &str,
+    limit: usize,
+    storefront: Option<&str>,
+    include_artists: bool,
 ) -> Result<AppleSearchHit, String> {
     let media_token = {
         let st = STATE.lock().unwrap();
@@ -831,13 +888,16 @@ pub async fn search(
         },
     };
 
-    let url = format!(
+    let mut url = format!(
         "{AMP_API}/v1/catalog/{}/search?term={}&types=songs&limit={}&l={}",
         place.storefront,
         urlencoding::encode(term),
         limit,
         urlencoding::encode(&place.language),
     );
+    if include_artists {
+        url.push_str("&include[songs]=artists");
+    }
 
     let mut resp = get_authorized(&url, media_token.as_deref(), &place.accept_language).await?;
     if should_refresh_access_token(&resp) {
@@ -894,6 +954,29 @@ fn parse_candidates(value: &Value) -> Vec<AppleCandidate> {
                     .get("hasLyrics")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
+                artists: item
+                    .pointer("/relationships/artists/data")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|artist| {
+                        if artist.get("type").and_then(Value::as_str) != Some("artists") {
+                            return None;
+                        }
+                        let id = artist.get("id").and_then(Value::as_str)?;
+                        if id.is_empty() || !id.bytes().all(|c| c.is_ascii_digit()) {
+                            return None;
+                        }
+                        Some(AppleArtist {
+                            id: id.to_string(),
+                            name: artist
+                                .pointer("/attributes/name")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string(),
+                        })
+                    })
+                    .collect(),
             })
         })
         .collect()
@@ -1028,4 +1111,87 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod artist_search_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    #[ignore = "Inspects live Apple artist motion artwork"]
+    fn live_artist_motion_metadata() {
+        crate::engine::RUNTIME.block_on(async {
+            let video = artist_video("1065981054", "us").await.unwrap().unwrap();
+            let response = crate::engine::HTTP.get(&video).send().await.unwrap();
+            assert!(response.status().is_success());
+            let playlist = response.text().await.unwrap();
+            assert!(playlist.starts_with("#EXTM3U"));
+            assert!(playlist.contains("RESOLUTION="));
+            println!("Square artist video: HLS master playlist available");
+        });
+    }
+
+    #[test]
+    fn only_accepts_square_motion_artwork() {
+        let response = json!({"data":[{"attributes":{"editorialVideo":{
+            "motionArtistWide16x9":{"video":"https://example.com/wide.m3u8"},
+            "motionArtistSquare1x1":{"video":"https://example.com/square.m3u8"}
+        }}}]});
+        assert_eq!(parse_artist_video(&response).as_deref(), Some("https://example.com/square.m3u8"));
+        let wide_only = json!({"data":[{"attributes":{"editorialVideo":{
+            "motionArtistWide16x9":{"video":"https://example.com/wide.m3u8"}
+        }}}]});
+        assert!(parse_artist_video(&wide_only).is_none());
+        assert!(parse_artist_video(&json!({"data":[]})).is_none());
+    }
+
+    #[test]
+    fn preserves_artist_ids_and_names_without_requiring_them_for_lyrics() {
+        let response = json!({"results":{"songs":{"data":[{
+            "id":"100", "attributes":{"name":"Song", "artistName":"Artist"},
+            "relationships":{"artists":{"data":[
+                {"id":"42","type":"artists","attributes":{"name":"Artist"}},
+                {"id":"43","type":"artists"},
+                {"id":"bad","type":"artists"},
+                {"id":"44","type":"albums"}
+            ]}}
+        }, {"id":"101", "attributes":{"name":"Legacy song"}}]}}});
+        let songs = parse_candidates(&response);
+        assert_eq!(songs.len(), 2);
+        assert_eq!(songs[0].artists.len(), 2);
+        assert_eq!(songs[0].artists[0].id, "42");
+        assert_eq!(songs[0].artists[0].name, "Artist");
+        assert_eq!(songs[0].artists[1].name, "");
+        assert!(songs[1].artists.is_empty());
+    }
+
+    #[test]
+    #[ignore = "Queries the live Apple Music catalog"]
+    fn live_search_includes_artist_relationships() {
+        crate::engine::RUNTIME.block_on(async {
+            let mut common = std::collections::HashSet::new();
+            for (index, term) in ["bad guy Billie Eilish", "Happier Than Ever Billie Eilish"]
+                .iter()
+                .enumerate()
+            {
+                let hit = search_with_artists(term, 12, Some("us")).await.unwrap();
+                let artists: std::collections::HashSet<_> = hit
+                    .candidates
+                    .iter()
+                    .flat_map(|song| &song.artists)
+                    .filter(|artist| artist.name == "Billie Eilish")
+                    .map(|artist| artist.id.clone())
+                    .collect();
+                assert!(!artists.is_empty(), "No named artist relationships for {term}");
+                println!("{term}: storefront={}, artist IDs={artists:?}", hit.storefront);
+                common = if index == 0 {
+                    artists
+                } else {
+                    common.intersection(&artists).cloned().collect()
+                };
+            }
+            assert_eq!(common.len(), 1);
+        });
+    }
 }

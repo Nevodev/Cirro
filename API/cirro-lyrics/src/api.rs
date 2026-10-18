@@ -120,6 +120,26 @@ pub async fn apple_ttml(am_id: String) -> Value {
 /// `storefront` 空 = 自动（已登录用账号区域、未登录用默认区域），非空 = 显式指定
 /// （未登录时 `cn` 搜不到够格候选、拿 `us` 兜一次用）。
 pub async fn apple_search(term: String, limit: String, storefront: String) -> Value {
+    apple_search_request(term, limit, storefront, false).await
+}
+
+pub async fn apple_artist_video(id: String, storefront: String) -> Value {
+    match apple::artist_video(&id, &storefront).await {
+        Ok(video) => json!({"ok": true, "videoUrl": video.unwrap_or_default()}),
+        Err(error) => fail(error),
+    }
+}
+
+pub async fn apple_artist_search(term: String, limit: String, storefront: String) -> Value {
+    apple_search_request(term, limit, storefront, true).await
+}
+
+async fn apple_search_request(
+    term: String,
+    limit: String,
+    storefront: String,
+    include_artists: bool,
+) -> Value {
     let limit = limit
         .trim()
         .parse::<usize>()
@@ -132,7 +152,12 @@ pub async fn apple_search(term: String, limit: String, storefront: String) -> Va
         Some(storefront)
     };
 
-    match apple::search(&term, limit, storefront).await {
+    let result = if include_artists {
+        apple::search_with_artists(&term, limit, storefront).await
+    } else {
+        apple::search(&term, limit, storefront).await
+    };
+    match result {
         Ok(hit) => json!({
             "ok": true,
             "storefront": hit.storefront,
@@ -148,6 +173,10 @@ pub async fn apple_search(term: String, limit: String, storefront: String) -> Va
                         "album": c.album,
                         "durationMs": c.duration_ms,
                         "hasLyrics": c.has_lyrics,
+                        "artists": c.artists.iter().map(|artist| json!({
+                            "id": artist.id,
+                            "name": artist.name,
+                        })).collect::<Vec<_>>(),
                     })
                 })
                 .collect::<Vec<_>>(),

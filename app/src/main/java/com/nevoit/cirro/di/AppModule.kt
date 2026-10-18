@@ -2,6 +2,8 @@ package com.nevoit.cirro.di
 
 import android.util.Log
 import com.nevoit.cirro.data.AccountRepository
+import com.nevoit.cirro.data.AppleArtistRepository
+import com.nevoit.cirro.data.AppleArtistStore
 import com.nevoit.cirro.data.AudioQualityStore
 import com.nevoit.cirro.data.CollectionRepository
 import com.nevoit.cirro.data.EncryptedSecretStore
@@ -72,6 +74,14 @@ val appModule = module {
     single { HomeRepository(androidContext(), get(ApplicationScope), get()) }
 
     single { CollectionRepository(get(), get()) }
+
+    single { AppleArtistStore(androidContext()) }
+    single {
+        val store = get<AppleArtistStore>()
+        AppleArtistRepository(get(ApplicationScope), store::read, store::write, onFailure = {
+            Log.w("AppleArtist", "艺人匹配或映射保存失败，下次打开页面时重试", it)
+        })
+    }
 
     single {
         SongLikeRepository(get(ApplicationScope), get<AccountRepository>().session, onFailure = {

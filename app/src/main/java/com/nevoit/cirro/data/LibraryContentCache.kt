@@ -22,14 +22,14 @@ internal class LibraryContentCache {
         val sameLikes = before?.likedSongs == snapshot.likedSongs
         val sameAlbums = before?.albums == snapshot.albums
         val albumIds = if (previous != null && sameAlbums) previous.albumIds
-            else snapshot.albums.map { it.info.id }
+        else snapshot.albums.map { it.info.id }
         val prepared = LibraryContent(
             userId = snapshot.userId,
             playlists = if (previous != null && before?.playlists == snapshot.playlists) previous.playlists
-                else snapshot.playlists.sortedByLibraryName { it.info.title },
+            else snapshot.playlists.sortedByLibraryName { it.info.title },
             artists = if (previous != null && sameLikes && sameAlbums &&
-                before?.artists == snapshot.artists &&
-                before?.artistCovers == snapshot.artistCovers
+                before.artists == snapshot.artists &&
+                before.artistCovers == snapshot.artistCovers
             ) previous.artists else snapshot.libraryArtists().sortedByLibraryName { it.info.title },
             albums = if (previous != null && sameLikes && sameAlbums && before.likedTracks == snapshot.likedTracks)
                 previous.albums else snapshot.recentAlbums().sortedByLibraryName { it.info.title },
