@@ -128,7 +128,6 @@ internal fun LatestReleaseCard(
                     color = contentVariant,
                     maxLines = 1,
                 )
-                VGap(2.dp)
             }
             Text(
                 text = albumDisplayTitle(album.title, album.albumType),
