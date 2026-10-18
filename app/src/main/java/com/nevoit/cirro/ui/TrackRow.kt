@@ -71,6 +71,11 @@ internal fun TrackRow(
     isPlaying: Boolean,
     content: Color,
     contentVariant: Color,
+    /**
+     * 第二行改写成别的东西（艺人页排行要「专辑 · 年份」）。给了就不再显示歌手名，
+     * [showArtist] 只管默认那条。
+     */
+    subtitle: String? = null,
     showStar: Boolean = true,
     starColor: Color = contentVariant,
     onClick: () -> Unit,
@@ -129,9 +134,10 @@ internal fun TrackRow(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (showArtist) {
+                val second = subtitle ?: song.artistText.takeIf { showArtist }
+                if (second != null) {
                     Text(
-                        text = song.artistText,
+                        text = second,
                         style = MaterialTheme.type.subHeadline2,
                         color = contentVariant,
                         maxLines = 1,

@@ -1,6 +1,7 @@
 package com.nevoit.cirro.data
 
 import com.nevoit.cirro.data.model.AudioQuality
+import com.nevoit.cirro.data.model.ArtistVideo
 import com.nevoit.cirro.data.model.CollectionDetail
 import com.nevoit.cirro.data.model.CollectionInfo
 import com.nevoit.cirro.data.model.CollectionKind
@@ -335,6 +336,16 @@ object NcmBridge {
     }
 
     /**
+     * 艺人页「音乐视频」：走 `/api/mlog/artist/video`，原生层顺手把每条 MV 的直链问好
+     * （并发发出去，几百毫秒一起回来）。
+     *
+     * 直链一小时过期，`url` 为空表示这条没拿到，卡片照样出图。
+     */
+    fun artistVideos(id: Long): Result<List<ArtistVideo>> = runCatching {
+        decode(nativeArtistVideos(id.toString())).getOrThrow().videos
+    }
+
+    /**
      * 艺人头像，走 `/api/artist/head/info/get`（约 3 KB），比 [artistDetail] 轻三十倍——
      * 「全部艺人」列表要补几十上百个头像，不能每条都拉一份带 50 首热门歌的详情。
      *
@@ -502,6 +513,8 @@ object NcmBridge {
 
     private external fun nativeAlbumDetail(id: String): String
     private external fun nativeArtistAlbums(id: String): String
+
+    private external fun nativeArtistVideos(id: String): String
     private external fun nativeSimilarSongs(id: String): String
 
     private external fun nativeArtistDetail(id: String): String
@@ -571,6 +584,7 @@ private data class BridgeResponse(
     val primaryArtistId: Long = 0L,
     val primaryArtistName: String = "",
     val albums: List<CollectionInfo> = emptyList(),
+    val videos: List<ArtistVideo> = emptyList(),
 )
 
 /** [NcmBridge.songQuality] 原生层返回的一档：`level` 是 wire 名，`size` 是这一档的体积（字节）。 */

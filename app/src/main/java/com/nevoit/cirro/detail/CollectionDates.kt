@@ -18,3 +18,10 @@ internal fun relativeAddedDay(
         else -> "${days}天前"
     }
 }
+
+/** 「XXXX年X月X日」。时间戳无效给 null，调用方整段省略。详情页与艺人页共用。 */
+internal fun formatDate(ms: Long): String? {
+    if (ms <= 0) return null
+    val date = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault())
+    return "${date.year}年${date.monthValue}月${date.dayOfMonth}日"
+}

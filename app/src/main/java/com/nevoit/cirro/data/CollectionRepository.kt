@@ -1,5 +1,6 @@
 package com.nevoit.cirro.data
 
+import com.nevoit.cirro.data.model.ArtistVideo
 import com.nevoit.cirro.data.model.CollectionInfo
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.Playlist
@@ -39,6 +40,15 @@ class CollectionRepository(
     private val albumSongs = ConcurrentHashMap<Long, List<Song>>()
     private val artistSongs = ConcurrentHashMap<Long, List<Song>>()
 
+    /**
+     * 艺人作品 / 音乐视频，按艺人 id 分槽。
+     *
+     * 与 [artistSongs] 同一个尺度：一次会话里只拉一遍。视频那边原生层要替每条 MV 问一次直链
+     * （一小时过期），退回再进不重拉是值得的——这一区现在还不能播，直链过期了也没人用。
+     */
+    private val artistWorks = ConcurrentHashMap<Long, List<CollectionInfo>>()
+    private val artistVideosCache = ConcurrentHashMap<Long, List<ArtistVideo>>()
+
     data class Change(val userId: Long, val info: CollectionInfo, val subscribed: Boolean)
     private val _changes = MutableSharedFlow<Change>(extraBufferCapacity = 32)
     val changes = _changes.asSharedFlow()
@@ -76,7 +86,17 @@ class CollectionRepository(
         }
 
     suspend fun artistAlbums(artistId: Long): Result<List<CollectionInfo>> =
-        withContext(Dispatchers.IO) { NcmBridge.artistAlbums(artistId) }
+        withContext(Dispatchers.IO) {
+            artistWorks[artistId]?.let { return@withContext Result.success(it) }
+            NcmBridge.artistAlbums(artistId).onSuccess { artistWorks[artistId] = it }
+        }
+
+    /** 艺人页「音乐视频」。条目里的直链是原生层现问的，一小时过期。 */
+    suspend fun artistVideos(artistId: Long): Result<List<ArtistVideo>> =
+        withContext(Dispatchers.IO) {
+            artistVideosCache[artistId]?.let { return@withContext Result.success(it) }
+            NcmBridge.artistVideos(artistId).onSuccess { artistVideosCache[artistId] = it }
+        }
 
     suspend fun similarSongs(songId: Long): Result<List<Song>> =
         withContext(Dispatchers.IO) { NcmBridge.similarSongs(songId) }

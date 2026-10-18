@@ -31,14 +31,14 @@ import com.nevoit.material.theme.tokens.Springs
 import org.koin.compose.koinInject
 
 @Composable
-internal fun RecommendationTitle(title: String, content: Color) {
+internal fun RecommendationTitle(title: String, content: Color, modifier: Modifier = Modifier) {
     Text(
         text = title,
         style = MaterialTheme.type.title4Emphasized,
         color = content,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
-        modifier = Modifier
+        modifier = modifier
             .padding(horizontal = 16.dp),
     )
 }

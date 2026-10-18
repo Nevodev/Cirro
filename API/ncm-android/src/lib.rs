@@ -1280,6 +1280,8 @@ fn flatten_artist_albums(body: &serde_json::Value) -> Result<serde_json::Value, 
             "cover": canon_pic(pick_str(album, &["picUrl"])),
             "updateTimeMs": pick_i64_loose(album, &["publishTime"]),
             "albumType": pick_str(album, &["type"]),
+            // 艺人页「最新发行」卡要显示「n 首歌曲」，这里就是那张专辑的曲目数
+            "trackCount": pick_i64_loose(album, &["size"]),
             "primaryArtistId": artist_id, "primaryArtistName": artist_name,
         })
     }).collect();
@@ -1292,13 +1294,182 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeArtistAlbums<'
 ) -> jstring {
     let id = jni_in(&mut env, &id);
     let client = client_snapshot();
-    let value = match RUNTIME.block_on(client.artist_album(&Query::new().param("id", &id))) {
+    // 艺人页把「专辑」「单曲与EP」「最新发行」都切自这一份列表，30 条不够用：
+    // 接口默认 limit 就是 30，这里一次要到 200（45 张专辑的响应约 65 KB，还好）。
+    let value = match RUNTIME.block_on(client.artist_album(
+        &Query::new().param("id", &id).param("limit", "200").param("offset", "0"),
+    )) {
         Ok(r) => match flatten_artist_albums(&r.body) {
             Ok(value) => value,
             Err(message) => serde_json::json!({"ok": false, "message": message}),
         },
         Err(e) => serde_json::json!({"ok": false, "message": e.to_string()}),
     };
+    jni_out(&mut env, value)
+}
+
+/// 艺人「音乐视频」：`/api/mlog/artist/video`。
+///
+/// 比 `/api/artist/mvs` 多给三样东西，艺人页正好都要：
+///   - `mlogBaseData.videos[]`：每档 mp4 的 `width` / `height` —— 视频的**真实**画面比例
+///   - `mlogBaseData.coverUrl` + `coverWidth` / `coverHeight` —— 缩略图（比例可能跟视频不一样，
+///     竖版视频的封面常被裁成 16:9，所以卡片宽高比优先用视频那档，封面只当兜底）
+///   - `mlogExtVO.playCount`
+///
+/// 直链单独问 `mv/url`：CDN 路径不带签名一律 403（实测），返回的链接一小时过期。
+/// 一条 ~250 ms，八条串起来就是两秒，所以全部并发发出去。
+fn flatten_artist_videos(body: &serde_json::Value) -> Result<Vec<serde_json::Value>, String> {
+    if pick_i64_loose(body, &["code"]) != 200 {
+        let message = pick_str(body, &["message", "msg"]);
+        return Err(if message.is_empty() { "加载音乐视频失败".into() } else { message.into() });
+    }
+    let mut out = Vec::new();
+    let records = body["data"]["records"].as_array().cloned().unwrap_or_default();
+    for record in records {
+        let id = pick_i64_loose(&record, &["id"]);
+        if id <= 0 {
+            continue;
+        }
+        let mlog = &record["resource"]["mlogBaseData"];
+        let cover = canon_pic(pick_str(mlog, &["coverUrl"]));
+        // 没有封面的条目（纯图文动态）整条丢掉：这一区只放有画面的
+        if cover.is_empty() {
+            continue;
+        }
+        // 视频真实比例取最高一档 mp4（m3u8 那几档 width 给 0）
+        let (mut width, mut height) = (0i64, 0i64);
+        if let Some(videos) = mlog["videos"].as_array() {
+            for video in videos {
+                let w = pick_i64_loose(video, &["width"]);
+                let h = pick_i64_loose(video, &["height"]);
+                if w > 0 && h > 0 && h >= height {
+                    width = w;
+                    height = h;
+                }
+            }
+        }
+        if width <= 0 || height <= 0 {
+            width = pick_i64_loose(mlog, &["coverWidth"]);
+            height = pick_i64_loose(mlog, &["coverHeight"]);
+        }
+        out.push(serde_json::json!({
+            "id": id,
+            "title": pick_str(mlog, &["text", "originalTitle"]),
+            "cover": cover,
+            "width": width,
+            "height": height,
+            "durationMs": pick_i64_loose(mlog, &["duration"]),
+            "playCount": pick_i64_loose(&record["resource"]["mlogExtVO"], &["playCount"]),
+            "publishTimeMs": pick_i64_loose(mlog, &["pubTime"]),
+        }));
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod artist_page_tests {
+    use super::{flatten_artist_albums, flatten_artist_videos};
+    use serde_json::json;
+
+    #[test]
+    fn artist_albums_carry_track_count_for_the_latest_release_card() {
+        let result = flatten_artist_albums(&json!({"code": 200, "hotAlbums": [{
+            "id": 1, "name": "work", "type": "EP", "size": 5,
+            "publishTime": 1700000000000i64, "picUrl": "https://p3.music.126.net/cover"
+        }]})).unwrap();
+        assert_eq!(result["albums"][0]["trackCount"], 5);
+        assert_eq!(result["albums"][0]["updateTimeMs"], 1700000000000i64);
+    }
+
+    #[test]
+    fn artist_videos_take_the_aspect_of_the_biggest_tier_and_skip_coverless_records() {
+        let body = json!({"code": 200, "data": {"records": [
+            {
+                "id": "22695250",
+                "resource": {
+                    "mlogBaseData": {
+                        "text": "title", "coverUrl": "http://p4.music.126.net/cover.jpg",
+                        "coverWidth": 426, "coverHeight": 240, "duration": 266000,
+                        "pubTime": 1740377057300i64,
+                        "videos": [
+                            {"height": 720, "width": 0},
+                            {"height": 720, "width": 1280},
+                            {"height": 1080, "width": 1920}
+                        ]
+                    },
+                    "mlogExtVO": {"playCount": 105547}
+                }
+            },
+            {"id": "2", "resource": {"mlogBaseData": {"text": "图文", "coverUrl": ""}}}
+        ]}});
+        let videos = flatten_artist_videos(&body).unwrap();
+        assert_eq!(videos.len(), 1);
+        assert_eq!(videos[0]["width"], 1920);
+        assert_eq!(videos[0]["height"], 1080);
+        assert_eq!(videos[0]["playCount"], 105547);
+        assert_eq!(videos[0]["cover"], "http://p1.music.126.net/cover.jpg");
+    }
+
+    #[test]
+    fn artist_videos_fall_back_to_the_cover_ratio_when_no_tier_has_a_width() {
+        let body = json!({"code": 200, "data": {"records": [{
+            "id": "3",
+            "resource": {"mlogBaseData": {
+                "coverUrl": "http://p4.music.126.net/c.jpg",
+                "coverWidth": 1280, "coverHeight": 800,
+                "videos": [{"height": 720, "width": 0}]
+            }}
+        }]}});
+        let videos = flatten_artist_videos(&body).unwrap();
+        assert_eq!(videos[0]["width"], 1280);
+        assert_eq!(videos[0]["height"], 800);
+    }
+}
+
+async fn fetch_artist_videos(client: ApiClient, artist_id: String) -> serde_json::Value {
+    match client
+        .artist_video(&Query::new().param("id", &artist_id).param("size", "12"))
+        .await
+    {
+        Ok(response) => match flatten_artist_videos(&response.body) {
+            Ok(items) => {
+                let handles: Vec<_> = items
+                    .iter()
+                    .map(|item| {
+                        let client = client.clone();
+                        let video_id = pick_i64_loose(item, &["id"]).to_string();
+                        tokio::spawn(async move {
+                            let query = Query::new().param("id", &video_id).param("r", "1080");
+                            client.mv_url(&query).await
+                        })
+                    })
+                    .collect();
+                let mut videos = Vec::with_capacity(items.len());
+                for (mut item, handle) in items.into_iter().zip(handles) {
+                    // 拿不到直链不是失败：`ok: true` + `url: ""`，卡片照样出图
+                    let url = match handle.await {
+                        Ok(Ok(response)) => {
+                            pick_str(&response.body["data"], &["url"]).to_string()
+                        }
+                        _ => String::new(),
+                    };
+                    item["url"] = serde_json::Value::String(url);
+                    videos.push(item);
+                }
+                serde_json::json!({"ok": true, "videos": videos})
+            }
+            Err(message) => serde_json::json!({"ok": false, "message": message}),
+        },
+        Err(e) => serde_json::json!({"ok": false, "message": e.to_string()}),
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeArtistVideos<'local>(
+    mut env: JNIEnv<'local>, _this: JObject<'local>, id: JString<'local>,
+) -> jstring {
+    let id = jni_in(&mut env, &id);
+    let value = RUNTIME.block_on(fetch_artist_videos(client_snapshot(), id));
     jni_out(&mut env, value)
 }
 

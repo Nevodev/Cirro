@@ -3,6 +3,7 @@ package com.nevoit.cirro.detail
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nevoit.cirro.data.CollectionRepository
+import com.nevoit.cirro.data.model.ArtistVideo
 import com.nevoit.cirro.data.model.CollectionInfo
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.Song
@@ -53,6 +54,10 @@ class CollectionViewModel(
         val songs: Section<List<Song>> = Section.Loading,
         val moreWorks: Section<List<CollectionInfo>> = Section.Loading,
         val similarAlbums: Section<List<CollectionInfo>> = Section.Loading,
+        /** 艺人页：整份作品列表，「最新发行」「专辑」「单曲与EP」三块都切自这一份。 */
+        val artistAlbums: Section<List<CollectionInfo>> = Section.Loading,
+        /** 艺人页：音乐视频（含直链）。 */
+        val artistVideos: Section<List<ArtistVideo>> = Section.Loading,
         /** 收藏切换在途：按钮置灰防连点。 */
         val subBusy: Boolean = false,
     )
@@ -72,6 +77,8 @@ class CollectionViewModel(
     private var tracksJob: Job? = null
     private var moreWorksJob: Job? = null
     private var similarSongsJob: Job? = null
+    private var artistWorksJob: Job? = null
+    private var artistVideosJob: Job? = null
     private var recommendationTracks: List<Song> = emptyList()
 
     /**
@@ -116,6 +123,8 @@ class CollectionViewModel(
         tracksJob?.cancel()
         moreWorksJob?.cancel()
         similarSongsJob?.cancel()
+        artistWorksJob?.cancel()
+        artistVideosJob?.cancel()
         pendingTracks = null
         tracksRevealed = true
         loadInfo()
@@ -128,6 +137,25 @@ class CollectionViewModel(
             val info = retrying { repository.info(kind, id) }
             _state.update { it.copy(info = info.toSection(keep = it.info)) }
             if (kind == CollectionKind.ALBUM) loadMoreWorks()
+            // 艺人页的两块横滑区不等曲目：作品列表和视频各自回来各自亮
+            if (kind == CollectionKind.ARTIST) loadArtistSections()
+        }
+    }
+
+    /**
+     * 艺人页的作品与音乐视频。作品列表一次要全（专辑、单曲与 EP 都从这一份里切）；
+     * 视频那一步原生层会替每条 MV 问一次直链，是这一页最慢的一步，所以单独一个 job。
+     */
+    private fun loadArtistSections() {
+        artistWorksJob?.cancel()
+        artistVideosJob?.cancel()
+        artistWorksJob = viewModelScope.launch {
+            val result = retrying { repository.artistAlbums(id) }
+            _state.update { it.copy(artistAlbums = result.toSection(keep = it.artistAlbums)) }
+        }
+        artistVideosJob = viewModelScope.launch {
+            val result = retrying { repository.artistVideos(id) }
+            _state.update { it.copy(artistVideos = result.toSection(keep = it.artistVideos)) }
         }
     }
 
