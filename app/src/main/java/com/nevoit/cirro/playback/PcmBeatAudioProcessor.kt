@@ -53,7 +53,9 @@ class PcmBeatAudioProcessor(
         replaceOutputBuffer(size).put(inputBuffer).flip()
     }
 
-    override fun onFlush() {
+    // media3 1.11：无参的 `onFlush()` 已废弃，`flush()` 现在走 `onFlush(StreamMetadata)`
+    // （基类那份默认实现只是回落到废弃的那个钩子）。这里不吃流的位置信息，参数忽略。
+    override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) {
         sampleCount = 0
         channelIndex = 0
         audioTimestampNanos = 0L

@@ -167,6 +167,8 @@ internal fun LatestReleaseCard(
 internal fun LazyItemScope.ArtistVideoSection(
     videos: Section<List<ArtistVideo>>,
     content: Color,
+    contentVariant: Color,
+    onOpenAll: (() -> Unit)? = null,
 ) {
     val list = videos.dataOrNull.orEmpty()
     if (list.isEmpty()) return
@@ -177,7 +179,7 @@ internal fun LazyItemScope.ArtistVideoSection(
             .animateItem(tween(200), Springs.crisp(), tween(200))
     ) {
         VGap(36.dp)
-        RecommendationTitle("音乐视频", content)
+        RecommendationTitle("音乐视频", content, contentVariant, onClick = onOpenAll)
         VGap()
         LazyRow(
             contentPadding = PaddingValues(horizontal = 12.dp),

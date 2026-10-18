@@ -16,6 +16,8 @@ import com.nevoit.cirro.data.SessionStore
 import com.nevoit.cirro.data.SongLikeRepository
 import com.nevoit.cirro.ui.SongMenuViewModel
 import com.nevoit.cirro.data.model.CollectionKind
+import com.nevoit.cirro.detail.ArtistShelfSection
+import com.nevoit.cirro.detail.ArtistShelfViewModel
 import com.nevoit.cirro.detail.CollectionViewModel
 import com.nevoit.cirro.home.HomeViewModel
 import com.nevoit.cirro.library.LibraryViewModel
@@ -115,5 +117,10 @@ val appModule = module {
     // 统一详情页：一个页面架构服务三种来源，参数区分是哪一种
     viewModel { (kind: CollectionKind, id: Long, titleHint: String) ->
         CollectionViewModel(get(), kind, id, titleHint)
+    }
+
+    // 艺人页某一块的「全部」页
+    viewModel { (artistId: Long, section: ArtistShelfSection) ->
+        ArtistShelfViewModel(get(), artistId, section)
     }
 }

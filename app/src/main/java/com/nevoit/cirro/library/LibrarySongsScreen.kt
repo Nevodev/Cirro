@@ -182,7 +182,7 @@ fun BoxScope.LibrarySongsRoute(
 }
 
 @Composable
-private fun BottomPopupMenuScope.LibrarySongMenuContent(
+internal fun BottomPopupMenuScope.LibrarySongMenuContent(
     song: Song,
     source: QueueSource,
     playback: PlaybackConnection,

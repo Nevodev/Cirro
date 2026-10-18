@@ -53,6 +53,8 @@ import com.nevoit.cirro.data.LibraryRepository
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.detail.ArtistRoute
+import com.nevoit.cirro.detail.ArtistShelfRoute
+import com.nevoit.cirro.detail.ArtistShelfSection
 import com.nevoit.cirro.detail.CollectionRoute
 import com.nevoit.cirro.home.HomeRoute
 import com.nevoit.cirro.library.LibraryRoute
@@ -191,6 +193,18 @@ sealed interface MainDestination {
         val coverHint: String = "",
         val libraryAlbum: Boolean = false,
         val authorHint: String = "",
+    ) : MainDestination
+
+    /**
+     * 艺人页某一块的「全部」页：歌曲排行 / 专辑 / 单曲与EP / 音乐视频。
+     *
+     * [artistName] 从艺人页带过来，当页头那行小字。
+     */
+    @Serializable
+    data class ArtistShelf(
+        val artistId: Long,
+        val section: ArtistShelfSection,
+        val artistName: String = "",
     ) : MainDestination
 }
 
@@ -421,6 +435,15 @@ fun BoxScope.Main() {
                             onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
                                 navigate(MainDestination.Collection(kind, id, titleHint, coverHint, authorHint = authorHint))
                             },
+                            onOpenShelf = { section, artistName ->
+                                navigate(
+                                    MainDestination.ArtistShelf(
+                                        artistId = destination.id,
+                                        section = section,
+                                        artistName = artistName,
+                                    )
+                                )
+                            },
                             onPaletteChanged = { seed ->
                                 artistPageSeeds[pageId] = seed
                             },
@@ -440,6 +463,16 @@ fun BoxScope.Main() {
                         )
                     }
                 }
+
+                is MainDestination.ArtistShelf -> ArtistShelfRoute(
+                    artistId = destination.artistId,
+                    artistName = destination.artistName,
+                    section = destination.section,
+                    onBack = ::back,
+                    onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
+                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint, authorHint = authorHint))
+                    },
+                )
             }
         }
 

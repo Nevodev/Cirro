@@ -127,6 +127,7 @@ fun ArtistRoute(
     coverHint: String,
     onBack: () -> Unit,
     onOpenCollection: OpenCollection,
+    onOpenShelf: (section: ArtistShelfSection, artistName: String) -> Unit,
     modifier: Modifier = Modifier,
     libraryAlbum: Boolean = false,
     likedPlaylist: Boolean = false,
@@ -315,6 +316,7 @@ fun ArtistRoute(
         },
         onRetryMoreWorks = viewModel::loadMoreWorks,
         onRetrySimilarSongs = viewModel::loadSimilarSongs,
+        onOpenShelf = onOpenShelf,
         songMenuContent = { song ->
             SongMenuContent(
                 song = song,
@@ -407,6 +409,7 @@ private fun ArtistScreen(
     onOpenAlbum: (CollectionInfo) -> Unit,
     onRetryMoreWorks: () -> Unit,
     onRetrySimilarSongs: () -> Unit,
+    onOpenShelf: (section: ArtistShelfSection, artistName: String) -> Unit,
     songMenuContent: @Composable BottomPopupMenuScope.(Song) -> Unit,
     onToggleSubscribed: () -> Unit,
     onInfo: () -> Unit,
@@ -530,13 +533,17 @@ private fun ArtistScreen(
                 }
             }
             if (artist) {
+                // 这几块标题都能点进「全部」页；名字和封面从这一页带过去（页头 + 取色种子都要）
+                val openShelf = { section: ArtistShelfSection ->
+                    onOpenShelf(section, displayTitle)
+                }
                 val works = state.artistAlbums.dataOrNull.orEmpty()
                 val ranking = state.songs.dataOrNull.orEmpty().take(ArtistRankingSize)
                 // 这几块必须**同一帧**出现，而且跟专辑/歌单页一个节奏：等进场动画收尾才放行。
                 // 曲目本来就要等 `revealTracks()`，作品列表走的是另一条请求，谁先到谁先画就会在
                 // 动画期间把下面已经画好的块挤走一次。
                 val settled = revealed &&
-                    state.artistAlbums !is Section.Loading && state.songs !is Section.Loading
+                        state.artistAlbums !is Section.Loading && state.songs !is Section.Loading
                 val latest = works.filter { it.updateTimeMs > 0 }.maxByOrNull { it.updateTimeMs }
                 if (settled && latest != null) {
                     item(key = "artist-latest") {
@@ -562,12 +569,13 @@ private fun ArtistScreen(
                         val albumsById = remember(works) { works.associateBy { it.id } }
                         VGap(36.dp)
                         RecommendationTitle(
-                            "歌曲排行", contentColor,
+                            "歌曲排行", contentColor, contentVariantColor,
                             modifier = Modifier.animateItem(
                                 tween(200),
                                 Springs.crisp(),
                                 tween(200)
-                            )
+                            ),
+                            onClick = { openShelf(ArtistShelfSection.SONGS) },
                         )
                         VGap()
                         ranking.forEachIndexed { index, song ->
@@ -600,6 +608,7 @@ private fun ArtistScreen(
                         content = contentColor,
                         contentVariant = contentVariantColor,
                         onOpenAlbum = onOpenAlbum,
+                        onOpenAll = { openShelf(ArtistShelfSection.ALBUMS) },
                         onRetry = onRetry,
                     )
                 }
@@ -610,6 +619,7 @@ private fun ArtistScreen(
                         content = contentColor,
                         contentVariant = contentVariantColor,
                         onOpenAlbum = onOpenAlbum,
+                        onOpenAll = { openShelf(ArtistShelfSection.SINGLES) },
                         onRetry = onRetry,
                     )
                 }
@@ -619,6 +629,8 @@ private fun ArtistScreen(
                     ArtistVideoSection(
                         videos = state.artistVideos,
                         content = contentColor,
+                        contentVariant = contentVariantColor,
+                        onOpenAll = { openShelf(ArtistShelfSection.VIDEOS) },
                     )
                 }
             }
