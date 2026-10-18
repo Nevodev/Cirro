@@ -134,7 +134,7 @@ internal fun LatestReleaseCard(
                 text = albumDisplayTitle(album.title, album.albumType),
                 style = MaterialTheme.type.body,
                 color = content,
-                maxLines = 2,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             if (album.trackCount > 0) {
