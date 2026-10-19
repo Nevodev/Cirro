@@ -16,13 +16,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberOverscrollEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -65,13 +63,14 @@ import com.nevoit.cirro.data.model.PlayMode
 import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.data.model.canMoveEntry
 import com.nevoit.cirro.data.model.entriesFromCurrent
+import com.nevoit.kinetic.layout.KineticLazyColumn
+import com.nevoit.kinetic.layout.overscroll.OverscrollVisualOffset
+import com.nevoit.kinetic.layout.overscroll.rememberOffsetOverscrollEffect
 import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
 import com.nevoit.material.core.interaction.AlphaIndication
-import com.nevoit.material.core.interaction.overscroll.OffsetOverscrollEffect
-import com.nevoit.material.core.interaction.rememberFlingBehavior
 import com.nevoit.material.core.modifier.drawBackground
 import com.nevoit.material.theme.MaterialTheme
 import sh.calvin.reorderable.ReorderableItem
@@ -218,7 +217,7 @@ internal fun QueuePanel(
         }
         previousCurrentUid = currentUid
     }
-    val overscrollEffect = rememberOverscrollEffect()
+    val overscrollEffect = rememberOffsetOverscrollEffect(listState)
     val latestReady = rememberUpdatedState(onContentReady)
     val readyReported = remember { booleanArrayOf(false) }
 
@@ -273,7 +272,7 @@ internal fun QueuePanel(
                 .weight(1f)
                 .fillMaxWidth()
         ) {
-            LazyColumn(
+            KineticLazyColumn(
                 state = listState,
                 modifier = Modifier
                     .fillMaxSize()
@@ -284,8 +283,8 @@ internal fun QueuePanel(
                             latestReady.value()
                         }
                     },
-                flingBehavior = rememberFlingBehavior(),
                 overscrollEffect = overscrollEffect,
+                scrollIndicator = null,
             ) {
                 if (history.isNotEmpty()) {
                     stickyHeader(key = HistoryHeaderKey) {
@@ -436,7 +435,7 @@ private fun QueueNotice(
 }
 
 private val OverscrollEffect?.visualOffsetY: Float
-    get() = (this as? OffsetOverscrollEffect)?.visualOffset?.y ?: 0f
+    get() = (this as? OverscrollVisualOffset)?.visualOffset?.y ?: 0f
 
 private fun Modifier.headerEdgeFade(
     listState: LazyListState,

@@ -54,11 +54,11 @@ import androidx.compose.ui.semantics.verticalScrollAxisRange
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.nevoit.kinetic.layout.rememberKineticFlingBehavior
 import com.nevoit.cirro.lyrics.ui.composable.list.LyricsLazyListState
 import com.nevoit.cirro.lyrics.ui.composable.list.LyricsListItem
 import com.nevoit.cirro.lyrics.ui.composable.list.LyricsScrollChain
 import com.nevoit.cirro.lyrics.ui.internal.diagnostics.traceLyrics
-import com.nevoit.material.core.interaction.rememberFlingBehavior
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -162,7 +162,7 @@ fun LyricsLazyColumn(
                     enabled = userScrollEnabled,
                     reverseDirection = true,
                     interactionSource = state.interactionSource,
-                    flingBehavior = rememberFlingBehavior()
+                    flingBehavior = rememberKineticFlingBehavior()
                 )
                 .semantics {
                     isTraversalGroup = true

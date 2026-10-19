@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.runtime.Composable
@@ -22,8 +21,11 @@ import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.data.model.forSession
 import com.nevoit.cirro.ui.BottomShade
 import com.nevoit.cirro.ui.TopShade
+import com.nevoit.kinetic.layout.KineticLazyVerticalGrid
+import com.nevoit.kinetic.layout.overscroll.rememberOffsetOverscrollEffect
+import com.nevoit.material.core.layout.rememberNavigationTailPadding
+import com.nevoit.material.core.layout.rememberOverlayScrollIndicatorSpec
 import com.nevoit.material.core.component.PageHeader
-import com.nevoit.material.core.interaction.rememberFlingBehavior
 import com.nevoit.material.theme.MaterialTheme
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
@@ -44,14 +46,18 @@ fun BoxScope.LibraryAlbumsRoute(
     val albums = content?.albums.orEmpty()
     val listState = rememberLazyGridState()
 
-    LazyVerticalGrid(
+    val overscrollEffect = rememberOffsetOverscrollEffect(listState)
+    val scrollIndicator = rememberOverlayScrollIndicatorSpec(rememberNavigationTailPadding())
+
+    KineticLazyVerticalGrid(
         state = listState,
         columns = GridCells.Adaptive(AlbumGridMinSize),
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colors.pageBackground),
         contentPadding = AlbumGridPadding,
-        flingBehavior = rememberFlingBehavior()
+        overscrollEffect = overscrollEffect,
+        scrollIndicator = scrollIndicator,
     ) {
         item(key = "title", span = { GridItemSpan(maxLineSpan) }) {
             PageHeader(title = "专辑", modifier = Modifier.padding(horizontal = 2.dp))

@@ -44,7 +44,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -61,8 +60,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
@@ -736,8 +735,11 @@ private fun PlayerOverlay(
         }
     }
 
-    // 标题行的竖直中心（窗口坐标）。小封面要对齐到这一行，只有量出来才知道它落在哪。
-    var metaCenterY by remember { mutableFloatStateOf(0f) }
+    // 标题行的坐标。小封面要落到这一行左侧那一格，而它跟封面不在同一棵子树里（封面在舞台 Box、
+    // 标题行是 Column 的第二个孩子），只能拿坐标换算。
+    // 🔴 交给封面的是**坐标本身**，不是算好的窗口坐标差 —— 窗口坐标里含着播放页自己的开合位移，
+    // 而这两处采样时刻不同，一相减就会把「页面走了多少」错算进收起的位移里。见 `PlayerCover`。
+    var metaRow by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
     Box(
         modifier = modifier
@@ -858,7 +860,7 @@ private fun PlayerOverlay(
                             .padding(24.dp),
                         cover = cover,
                         collapse = collapseCover,
-                        metaCenterY = metaCenterY,
+                        metaRow = metaRow,
                     )
                 }
 
@@ -866,10 +868,7 @@ private fun PlayerOverlay(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = ContentPadding)
-                        .onGloballyPositioned { coords ->
-                            val position = coords.positionInWindow()
-                            metaCenterY = position.y + coords.size.height / 2f
-                        },
+                        .onGloballyPositioned { metaRow = it },
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Spacer(
@@ -1066,7 +1065,7 @@ private fun PlayerStage(
     modifier: Modifier = Modifier,
     cover: String,
     collapse: State<Float>,
-    metaCenterY: Float,
+    metaRow: LayoutCoordinates?,
 ) {
     // 修饰符固定住，否则每次都是新实例，跳过就失效了
     val stageModifier = remember {
@@ -1082,7 +1081,7 @@ private fun PlayerStage(
             cover = cover,
             side = side,
             collapse = collapse,
-            metaCenterY = metaCenterY,
+            metaRow = metaRow,
         )
     }
 }
@@ -1102,7 +1101,7 @@ private fun PlayerCover(
     cover: String,
     side: Dp,
     collapse: State<Float>,
-    metaCenterY: Float,
+    metaRow: LayoutCoordinates?,
 ) {
     val target = cover.takeIf { it.isNotEmpty() }
     val painter = rememberAsyncImagePainter(model = target, contentScale = ContentScale.Crop)
@@ -1116,32 +1115,55 @@ private fun PlayerCover(
         if (target == null) front = null else if (loaded != null) front = loaded.painter
     }
 
-    // 封面自己这一块的中心在窗口里的位置。收起时就是拿它跟目标中心相减，得到 graphicsLayer
-    // 要走的位移。位置是**量**出来的——封面不参与任何布局搬家，整段收起只有这一层在重画。
-    var center by remember { mutableStateOf(Offset.Zero) }
+    // 收起目标：**标题行左缘中点，换算进封面自己的坐标系**。收起时就是拿它跟封面自己的中心
+    // （`size/2`）相减，得到 graphicsLayer 要走的位移。封面不参与任何布局搬家，整段收起只有
+    // 这一层在重画。
+    //
+    // 🔴 为什么不用两次 `positionInWindow` 相减（原来的写法）：窗口坐标里含着**播放页自己**的
+    // 开合位移（外层 `Box` 的 `translationY`），而两个值不是同一时刻采的 ——
+    //   · 标题行只在重排时刷新；
+    //   · 封面自己的图层每帧都在变（收起弹簧一帧一个 translation，而 `NodeCoordinator` 发现
+    //     图层位移变了会**主动**给它这张节点重发 `onGloballyPositioned`），所以收起动画期间它
+    //     一帧采一次。
+    // 于是页面一平移，「两次采样之间页面走了多少」就被算进取起位移里：封面跟着页面动的同时又被
+    // 这层误差推了一把，看起来就是「封面收起来之后，页面下移时封面的移动又多套了一层动画」。
+    // 换算进封面坐标系后，两个坐标系的共同祖先（也就是那一整段页面位移）在换算中直接抵消，
+    // 采样时刻就不再有任何影响。
+    val self = remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var anchor by remember { mutableStateOf<Offset?>(null) }
+
+    fun resample(coords: LayoutCoordinates) {
+        val row = metaRow ?: return
+        if (!coords.isAttached || !row.isAttached) return
+        self.value = coords
+        // 只取左缘中点：x 加半个小方块就是收起后那一格的中心。
+        // ⚠️ 不用再加 `ContentPadding` —— 标题行那个 `onGloballyPositioned` 挂在 `.padding()` 的**里面**，
+        // 拿到的已经是正文内容区的左缘（边距已经被吃掉了），再加一次就整整右移一个 24dp。
+        anchor = coords.localPositionOf(row, Offset(0f, row.size.height / 2f))
+    }
+
+    // 标题行的坐标比封面晚到（首帧顺序不保证）时补采一次。
+    LaunchedEffect(metaRow) {
+        val coords = self.value ?: return@LaunchedEffect
+        resample(coords)
+    }
 
     Box(
         modifier = Modifier
-            .onGloballyPositioned { coords ->
-                val position = coords.positionInWindow()
-                center = Offset(
-                    position.x + coords.size.width / 2f,
-                    position.y + coords.size.height / 2f,
-                )
-            }
+            .onGloballyPositioned { resample(it) }
             .size(side)
             .graphicsLayer {
                 // 收起：绕自身中心缩到 [CollapsedCoverSize]，再把中心从「舞台正中」平移到
                 // 「标题行左侧那一格」。跟参考实现的封面一样，`scale` 和 `translation` 都按
                 // 同一个进度插值，所以整段是匀速滑过去而不是先缩后移。
                 val progress = collapse.value
-                if (progress > 0f && center != Offset.Zero) {
+                val collapseTarget = anchor
+                if (progress > 0f && collapseTarget != null) {
                     val targetSidePx = CollapsedCoverSize.toPx()
                     scaleX = lerp(1f, targetSidePx / size.width, progress)
                     scaleY = scaleX
-                    translationX =
-                        (ContentPadding.toPx() + targetSidePx / 2f - center.x) * progress
-                    translationY = (metaCenterY - center.y) * progress
+                    translationX = (collapseTarget.x + targetSidePx / 2f - size.width / 2f) * progress
+                    translationY = (collapseTarget.y - size.height / 2f) * progress
                 }
             }
             .clip(RoundedRectangle(16.dp))

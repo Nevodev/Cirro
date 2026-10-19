@@ -3,6 +3,7 @@ package com.nevoit.cirro.detail
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.snapping.SnapPosition
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,8 +16,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyItemScope
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -40,10 +41,12 @@ import com.nevoit.cirro.data.model.albumDisplayTitle
 import com.nevoit.cirro.home.Section
 import com.nevoit.cirro.home.dataOrNull
 import com.nevoit.cirro.ui.rememberCoverRequest
+import com.nevoit.kinetic.layout.KineticLazyRow
+import com.nevoit.kinetic.layout.overscroll.rememberOffsetOverscrollEffect
+import com.nevoit.kinetic.layout.snap.rememberKineticSnapFlingBehavior
 import com.nevoit.material.core.component.CircleIconButton
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
-import com.nevoit.material.core.interaction.rememberFlingBehavior
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.tokens.Springs
 
@@ -170,6 +173,8 @@ internal fun LazyItemScope.ArtistVideoSection(
     onOpenAll: (() -> Unit)? = null,
 ) {
     val list = videos.dataOrNull.orEmpty()
+    // remember 必须在提前 return 之前：条件调用会让槽位错位。
+    val rowState = rememberLazyListState()
     if (list.isEmpty()) return
 
     Column(
@@ -180,10 +185,16 @@ internal fun LazyItemScope.ArtistVideoSection(
         VGap(36.dp)
         RecommendationTitle("音乐视频", content, contentVariant, onClick = onOpenAll)
         VGap()
-        LazyRow(
+        KineticLazyRow(
+            state = rowState,
             contentPadding = PaddingValues(horizontal = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
-            flingBehavior = rememberFlingBehavior(),
+            flingBehavior = rememberKineticSnapFlingBehavior(
+                rowState,
+                snapPosition = SnapPosition.Start,
+            ),
+            overscrollEffect = rememberOffsetOverscrollEffect(rowState),
+            scrollIndicator = null,
         ) {
             items(list, key = { it.id }) { video ->
                 VideoCard(video = video, content = content)

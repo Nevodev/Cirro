@@ -169,7 +169,6 @@ fun BoxScope.LibrarySongsRoute(
                 if (index < songs.lastIndex) VGap(4.dp)
             }
         }
-        item(key = "footer") { LibraryFooter() }
     }
     TopShade(
         color = MaterialTheme.colors.pageBackground,

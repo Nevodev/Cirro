@@ -20,8 +20,8 @@ import com.nevoit.cirro.detail.CollectionRoute
 import com.nevoit.cirro.home.OpenCollection
 import com.nevoit.cirro.home.LoginCard
 import com.nevoit.cirro.ui.BottomShade
+import com.nevoit.kinetic.layout.rememberKineticFlingBehavior
 import com.nevoit.material.core.component.PageHeader
-import com.nevoit.material.core.interaction.rememberFlingBehavior
 import com.nevoit.material.theme.MaterialTheme
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
@@ -52,7 +52,7 @@ fun BoxScope.LibraryLikedSongsRoute(
     } else {
         LazyColumn(
             modifier = Modifier.fillMaxSize().background(MaterialTheme.colors.pageBackground),
-            flingBehavior = rememberFlingBehavior(),
+            flingBehavior = rememberKineticFlingBehavior(),
         ) {
             item(key = "title") {
                 PageHeader(title = "喜爱歌曲", modifier = Modifier.padding(horizontal = 12.dp))

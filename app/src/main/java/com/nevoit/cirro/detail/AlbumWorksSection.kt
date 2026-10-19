@@ -2,6 +2,7 @@ package com.nevoit.cirro.detail
 
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.snapping.SnapPosition
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -11,8 +12,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyItemScope
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
@@ -29,11 +30,13 @@ import com.nevoit.cirro.home.dataOrNull
 import com.nevoit.cirro.palette.CoverPalette
 import com.nevoit.cirro.ui.CollectionCard
 import com.nevoit.cirro.ui.rememberCoverRequest
+import com.nevoit.kinetic.layout.KineticLazyRow
+import com.nevoit.kinetic.layout.overscroll.rememberOffsetOverscrollEffect
+import com.nevoit.kinetic.layout.snap.rememberKineticSnapFlingBehavior
 import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
 import com.nevoit.material.core.interaction.AlphaIndication
-import com.nevoit.material.core.interaction.rememberFlingBehavior
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.tokens.Springs
 import org.koin.compose.koinInject
@@ -92,6 +95,8 @@ internal fun LazyItemScope.AlbumWorksSection(
     onOpenAll: (() -> Unit)? = null,
 ) {
     val works = albums.dataOrNull.orEmpty()
+    // remember 必须在提前 return 之前：条件调用会让槽位错位。
+    val rowState = rememberLazyListState()
     if (works.isEmpty() && albums !is Section.Failed || albums is Section.Failed) return
 
     Column(
@@ -102,10 +107,16 @@ internal fun LazyItemScope.AlbumWorksSection(
         VGap(36.dp)
         RecommendationTitle(title, content, contentVariant, onClick = onOpenAll)
         VGap()
-        LazyRow(
+        KineticLazyRow(
+            state = rowState,
             contentPadding = PaddingValues(horizontal = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
-            flingBehavior = rememberFlingBehavior(),
+            flingBehavior = rememberKineticSnapFlingBehavior(
+                rowState,
+                snapPosition = SnapPosition.Start,
+            ),
+            overscrollEffect = rememberOffsetOverscrollEffect(rowState),
+            scrollIndicator = null,
         ) {
             items(works, key = { it.id }) { album ->
                 // 卡上的封面就是点进去那张专辑的头部封面：图一露头就把主色取了（跟首页横滑区、

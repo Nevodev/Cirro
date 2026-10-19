@@ -58,7 +58,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import com.nevoit.material.core.interaction.rememberFlingBehavior
+import com.nevoit.kinetic.layout.rememberKineticFlingBehavior
 import com.nevoit.material.core.utility.rememberColorProducer
 import com.nevoit.material.navigation.shape.deviceCornerShape
 import com.nevoit.material.theme.MaterialTheme
@@ -335,7 +335,7 @@ private fun BottomPopupMenuLayer(
                                     .fillMaxWidth()
                                     .verticalScroll(
                                         state = rememberScrollState(),
-                                        flingBehavior = rememberFlingBehavior(),
+                                        flingBehavior = rememberKineticFlingBehavior(),
                                         overscrollEffect = rememberOverscrollEffect()
                                     )
                             ) {

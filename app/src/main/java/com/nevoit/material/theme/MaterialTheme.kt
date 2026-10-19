@@ -1,13 +1,11 @@
 package com.nevoit.material.theme
 
 import androidx.compose.foundation.LocalIndication
-import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import com.nevoit.material.core.interaction.DimIndication
-import com.nevoit.material.core.interaction.overscroll.rememberOffsetOverscrollFactory
 import com.nevoit.material.theme.local.LocalColors
 import com.nevoit.material.theme.local.LocalContentColor
 import com.nevoit.material.theme.local.LocalDarkTheme
@@ -48,7 +46,6 @@ object MaterialTheme {
         type: MaterialType = MaterialTypeStandard,
         content: @Composable () -> Unit
     ) {
-        val overscrollFactory = rememberOffsetOverscrollFactory()
         CompositionLocalProvider(
             LocalColors provides colors,
             LocalSpecs provides specs,
@@ -56,8 +53,7 @@ object MaterialTheme {
             LocalTextStyle provides type.body,
             LocalContentColor provides colors.content,
             LocalDarkTheme provides darkTheme,
-            LocalIndication provides DimIndication(),
-            LocalOverscrollFactory provides overscrollFactory
+            LocalIndication provides DimIndication()
         ) {
             content()
         }

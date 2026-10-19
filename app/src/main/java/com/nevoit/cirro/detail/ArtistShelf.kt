@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -64,12 +63,15 @@ import com.nevoit.cirro.ui.TrackRow
 import com.nevoit.cirro.ui.rememberCoverRequest
 import com.nevoit.cirro.ui.resolvePosition
 import com.nevoit.cirro.ui.roundedShape
+import com.nevoit.kinetic.layout.KineticLazyVerticalGrid
+import com.nevoit.kinetic.layout.overscroll.rememberOffsetOverscrollEffect
+import com.nevoit.material.core.layout.rememberNavigationTailPadding
+import com.nevoit.material.core.layout.rememberOverlayScrollIndicatorSpec
 import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.PageHeader
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
 import com.nevoit.material.core.interaction.DimIndication
-import com.nevoit.material.core.interaction.rememberFlingBehavior
 import com.nevoit.material.core.layout.VerticalStack
 import com.nevoit.material.theme.MaterialTheme
 import kotlinx.coroutines.async
@@ -311,7 +313,6 @@ private fun BoxScope.SongShelf(
             )
             if (index < songs.lastIndex) VGap(4.dp)
         }
-        item(key = "footer") { LibraryFooter() }
     }
     TopShade(
         color = background,
@@ -338,14 +339,18 @@ private fun BoxScope.AlbumShelf(
     val gridState = rememberLazyGridState()
     val palette = koinInject<CoverPalette>()
 
-    LazyVerticalGrid(
+    val overscrollEffect = rememberOffsetOverscrollEffect(gridState)
+    val scrollIndicator = rememberOverlayScrollIndicatorSpec(rememberNavigationTailPadding())
+
+    KineticLazyVerticalGrid(
         state = gridState,
         columns = GridCells.Adaptive(AlbumGridMinSize),
         modifier = Modifier
             .fillMaxSize()
             .background(background),
         contentPadding = AlbumGridPadding,
-        flingBehavior = rememberFlingBehavior(),
+        overscrollEffect = overscrollEffect,
+        scrollIndicator = scrollIndicator,
     ) {
         item(key = "title", span = { GridItemSpan(maxLineSpan) }) {
             PageHeader(
@@ -442,7 +447,6 @@ private fun BoxScope.VideoShelf(
             )
             if (index < list.lastIndex) VGap(4.dp)
         }
-        item(key = "footer") { LibraryFooter() }
     }
     TopShade(
         color = background,

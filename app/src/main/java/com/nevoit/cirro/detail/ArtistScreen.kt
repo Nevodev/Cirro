@@ -7,7 +7,6 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.OverscrollEffect
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -22,7 +21,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberOverscrollEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -90,11 +88,10 @@ import com.nevoit.material.core.component.BottomPopupMenuScope
 import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
-import com.nevoit.material.core.interaction.overscroll.OffsetOverscrollEffect
+import com.nevoit.material.core.layout.LocalOverscrollVisualOffset
 import com.nevoit.material.core.layout.VerticalStack
 import com.nevoit.material.core.layout.isScrolledPast
 import com.nevoit.material.core.modifier.smoothGradient
-import com.nevoit.material.core.utility.NavigationBarSpacer
 import com.nevoit.material.navigation.LocalPageTransitionState
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.local.ProvideContentColor
@@ -474,7 +471,6 @@ private fun ArtistScreen(
     )
 
     val description = state.info.dataOrNull?.description.orEmpty().trim()
-    val overscrollEffect = rememberOverscrollEffect()
 
     val screenWidth = LocalWindowInfo.current.containerDpSize.width
     // Logo 请求随页面保留，避免 Lazy 头部重建时从加载态再次淡入。
@@ -502,10 +498,11 @@ private fun ArtistScreen(
         VerticalStack(
             state = listState,
             modifier = Modifier.fillMaxSize(),
-            overscrollEffect = overscrollEffect
         ) {
             item(key = "header") {
                 val info = state.info.dataOrNull
+                // 过冲位移由 VerticalStack 通过 Local 提供，这一页不自己建 effect
+                val overscrollVisual = LocalOverscrollVisualOffset.current
                 when {
                     state.info is Section.Failed && info == null -> InfoFailure(
                         onRetry = onRetry,
@@ -528,7 +525,9 @@ private fun ArtistScreen(
                         onPlay = { onPlay(0) },
                         onInfo = onInfo,
                         onToggleSubscribed = onToggleSubscribed,
-                        overscrollEffect = overscrollEffect,
+                        overscrollOffsetY = {
+                            overscrollVisual?.let { it.visualOffset.y.coerceAtLeast(0f) } ?: 0f
+                        },
                     )
                 }
             }
@@ -772,13 +771,6 @@ private fun ArtistScreen(
                     )
                 }
             }
-
-            // 尾距垫住常驻的 MiniPlayer + 底栏（数字跟首页同一个约定）
-            item(key = "bottom") {
-                VGap(36.dp)
-                VGap(144.dp)
-                NavigationBarSpacer()
-            }
         }
 
         TopShade(
@@ -822,7 +814,7 @@ private fun HeaderBlock(
     onPlay: () -> Unit,
     onInfo: () -> Unit,
     onToggleSubscribed: () -> Unit,
-    overscrollEffect: OverscrollEffect?,
+    overscrollOffsetY: () -> Float,
     modifier: Modifier = Modifier,
 ) {
     val screenWidth = LocalWindowInfo.current.containerDpSize.width
@@ -836,10 +828,7 @@ private fun HeaderBlock(
         Box(
             modifier = Modifier
                 .graphicsLayer {
-                    val overscrollOffset =
-                        (overscrollEffect as? OffsetOverscrollEffect)?.visualOffset?.y?.coerceAtLeast(
-                            0f
-                        ) ?: 0f
+                    val overscrollOffset = overscrollOffsetY()
                     val scale =
                         (screenWidthPx + overscrollOffset + risePx) / (screenWidthPx + risePx)
                     scaleX = scale

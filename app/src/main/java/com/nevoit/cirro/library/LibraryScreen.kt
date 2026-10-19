@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -37,12 +37,15 @@ import com.nevoit.cirro.ui.roundedShape
 import com.nevoit.cirro.home.LoginCard
 import com.nevoit.cirro.home.SectionTitle
 import com.nevoit.cirro.palette.CoverPalette
+import com.nevoit.kinetic.layout.KineticLazyVerticalGrid
+import com.nevoit.kinetic.layout.overscroll.rememberOffsetOverscrollEffect
+import com.nevoit.material.core.layout.rememberNavigationTailPadding
+import com.nevoit.material.core.layout.rememberOverlayScrollIndicatorSpec
 import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.PageHeader
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
-import com.nevoit.material.core.interaction.rememberFlingBehavior
 import com.nevoit.material.theme.MaterialTheme
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
@@ -77,11 +80,17 @@ fun BoxScope.LibraryRoute(
     LaunchedEffect(recent) { recent.take(24).forEach { palette.prefetch(it.info.cover) } }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refresh() }
 
-    LazyVerticalGrid(
+    val gridState = rememberLazyGridState()
+    val overscrollEffect = rememberOffsetOverscrollEffect(gridState)
+    val scrollIndicator = rememberOverlayScrollIndicatorSpec(rememberNavigationTailPadding())
+
+    KineticLazyVerticalGrid(
         columns = GridCells.Adaptive(AlbumGridMinSize),
+        state = gridState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = AlbumGridPadding,
-        flingBehavior = rememberFlingBehavior(),
+        overscrollEffect = overscrollEffect,
+        scrollIndicator = scrollIndicator,
     ) {
         item(key = "title", span = { GridItemSpan(maxLineSpan) }) {
             PageHeader(

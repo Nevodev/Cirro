@@ -1,4 +1,4 @@
-package com.nevoit.material.core.interaction.overscroll
+package com.nevoit.kinetic.layout.overscroll
 
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.AnimationState
@@ -21,9 +21,9 @@ import androidx.compose.ui.node.LayoutModifierNode
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.util.fastRoundToInt
-import com.nevoit.material.core.interaction.overscroll.util.NoOpShape
-import com.nevoit.material.core.interaction.overscroll.util.ProgressConverter
-import com.nevoit.material.core.interaction.overscroll.util.singleRelativeLayoutWithLayer
+import com.nevoit.kinetic.layout.overscroll.util.NoOpShape
+import com.nevoit.kinetic.layout.overscroll.util.ProgressConverter
+import com.nevoit.kinetic.layout.overscroll.util.singleRelativeLayoutWithLayer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.android.awaitFrame
@@ -31,57 +31,79 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.sign
-
-class RubberBandState {
-    /** Raw overscroll distance in pixels, before the visual resistance curve. */
-    var offset: Offset by mutableStateOf(Offset.Zero)
-        internal set
-}
+import kotlin.math.ln1p
 
 class OffsetOverscrollEffect(
-    private val rubberBandState: RubberBandState? = null,
-    private val onRelease: ((Offset) -> Unit)? = null,
     private val animationScope: CoroutineScope,
     private val animationSpec: AnimationSpec<Float>,
     private val maxFraction: Float,
-) : OverscrollEffect {
+) : OverscrollEffect, OverscrollVisualOffset {
 
     private var offset by mutableStateOf(Offset.Zero)
-
-    private fun updateOffset(value: Offset) {
-        offset = value
-        rubberBandState?.offset = value
-    }
     private var axis = Axis.None
-    private var maxWidth = 0f
-    private var maxHeight = 0f
     private var springJob: Job? = null
-    private var flingToScrollOffset = Offset.Zero
+    private var dragging = false
+    private var rebasing = false
+    internal val hasStretch: Boolean get() = offset != Offset.Zero
+    private var viewportWidth = 0f
+    private var viewportHeight = 0f
 
-    // Rendered offset after the resistance curve; read from a graphicsLayer/draw block for parallax, stretch, etc.
-    internal val visualOffset: Offset
+    // Coordinate transfer only; real input still goes through performScroll.
+    internal var scrollForRebase: ((Offset) -> Offset)? = null
+
+    val displayedOffset: Offset
         get() {
-            val maxDistance = when (axis) {
-                Axis.Horizontal -> maxWidth
-                Axis.Vertical -> maxHeight
-                Axis.None -> 0f
-            }
-            val overscrollDistance = offset.toFloat()
-            if (maxDistance <= 0f || overscrollDistance == 0f) return Offset.Zero
-            return computeOffset(overscrollDistance, maxDistance)
-                .fastRoundToInt()
-                .toFloat()
-                .toOffset()
+            // Read the raw offset unconditionally. While the axis is still undecided this getter
+            // returns zero, and a caller that only observes the result (a graphicsLayer block or
+            // snapshotFlow) would never record a dependency on it — the first stretch would then
+            // stay invisible until the layer is recreated for some unrelated reason.
+            val raw = offset
+            val distance = if (axis == Axis.Vertical) viewportHeight else viewportWidth
+            return if (distance > 0f && axis != Axis.None) {
+                computeOffset(raw.toFloat(), distance).fastRoundToInt().toFloat().toOffset()
+            } else Offset.Zero
         }
 
-    override val isInProgress: Boolean get() = offset != Offset.Zero
+    /** The scroll indicator reads this in draw; it must stay snapshot-observable. */
+    override val visualOffset: Offset
+        get() = displayedOffset
+
+    internal fun updateViewport(width: Float, height: Float) {
+        viewportWidth = width
+        viewportHeight = height
+    }
+
+    /** Preserve visual position by converting existing stretch into actual scrolling. */
+    internal fun rebaseToScroll() {
+        if (rebasing || !dragging || offset == Offset.Zero) return
+        val scroll = scrollForRebase ?: return
+        val displayed = displayedOffset.toFloat()
+        if (displayed == 0f) return
+        rebasing = true
+        try {
+            val consumed = scroll(displayed.toOffset()).toFloat()
+            if (consumed == 0f) return
+            val remaining = displayed - consumed
+            val distance = if (axis == Axis.Vertical) viewportHeight else viewportWidth
+            // Inverse of Cresto's original exponential resistance, applied to DISPLAY pixels.
+            val raw = if (remaining == 0f) 0f else {
+                -distance / maxFraction * ln1p(-abs(remaining / distance).coerceAtMost(0.99999994f)) * remaining.sign
+            }
+            offset = offset.copyWith(raw)
+        } finally {
+            rebasing = false
+        }
+    }
+    private var flingToScrollOffset = Offset.Zero
+
+    override val isInProgress: Boolean = false
 
     override fun applyToScroll(
         delta: Offset,
         source: NestedScrollSource,
         performScroll: (Offset) -> Offset
     ): Offset {
-        if (axis == Axis.None) {
+        if (axis == Axis.None && delta != Offset.Zero) {
             axis = if (abs(delta.y) >= abs(delta.x)) Axis.Vertical else Axis.Horizontal
         }
 
@@ -89,25 +111,22 @@ class OffsetOverscrollEffect(
         if (isUserInput) {
             springJob?.cancel()
             springJob = null
+            dragging = true
+            // Covers MOVE arriving after remeasurement but before the observer resumes.
+            rebaseToScroll()
         }
 
         var unconsumed = delta + flingToScrollOffset
         flingToScrollOffset = Offset.Zero
 
+        // Preserve upstream drag policy once coordinates have been reconciled.
         if (offset != Offset.Zero) {
             unconsumed -= consumeOffset(unconsumed)
-            if (unconsumed == Offset.Zero) return delta
         }
-
         unconsumed -= performScroll(unconsumed)
-        if (unconsumed == Offset.Zero) return delta
-
-        if (source == NestedScrollSource.UserInput) {
+        if (isUserInput && unconsumed.toFloat() != 0f) {
             unconsumed -= consumeOffset(unconsumed)
         }
-//        else {
-//            consumeOffset(unconsumed)
-//        }
 
         return delta - unconsumed
     }
@@ -116,11 +135,8 @@ class OffsetOverscrollEffect(
         velocity: Velocity,
         performFling: suspend (Velocity) -> Velocity
     ) {
+        dragging = false
         var unconsumed = velocity
-        val releasedOffset = offset
-        if (releasedOffset != Offset.Zero) {
-            onRelease?.invoke(releasedOffset)
-        }
 
         if (offset != Offset.Zero) {
             springJob = CoroutineScope(currentCoroutineContext()).launch {
@@ -156,18 +172,16 @@ class OffsetOverscrollEffect(
         if (unconsumed.toFloat() != 0f) {
             springJob = CoroutineScope(currentCoroutineContext()).launch {
                 if (offset.toFloat() == 0f) {
-                    updateOffset(
-                        animationSpec.vectorize(Float.VectorConverter).getValueFromNanos(
-                            frameTimeNanos,
-                            AnimationVector(0f),
-                            AnimationVector(0f),
-                            AnimationVector(unconsumed.toFloat())
-                        ).value.toOffset()
-                    )
+                    offset = animationSpec.vectorize(Float.VectorConverter).getValueFromNanos(
+                        frameTimeNanos,
+                        AnimationVector(0f),
+                        AnimationVector(0f),
+                        AnimationVector(unconsumed.toFloat())
+                    ).value.toOffset()
                 }
                 AnimationState(offset.toFloat(), unconsumed.toFloat())
                     .animateTo(0f, animationSpec) {
-                        updateOffset(offset.copyWith(value))
+                        offset = offset.copyWith(value)
                     }
             }
             springJob?.join()
@@ -184,15 +198,29 @@ class OffsetOverscrollEffect(
             constraints: Constraints
         ): MeasureResult {
             val placeable = measurable.measure(constraints)
-            maxWidth = constraints.maxWidth.toFloat()
-            maxHeight = constraints.maxHeight.toFloat()
+            val maxWidth = constraints.maxWidth.toFloat()
+            val maxHeight = constraints.maxHeight.toFloat()
+            updateViewport(maxWidth, maxHeight)
 
             return singleRelativeLayoutWithLayer(placeable) {
                 shape = NoOpShape
 
-                val renderedOffset = visualOffset
-                translationX = renderedOffset.x
-                translationY = renderedOffset.y
+                val currentAxis = axis
+                val maxDistance = when (currentAxis) {
+                    Axis.Horizontal -> maxWidth
+                    Axis.Vertical -> maxHeight
+                    Axis.None -> 0f
+                }
+
+                val overscrollDistance = offset.toFloat()
+                if (currentAxis != Axis.None && maxDistance > 0f && overscrollDistance != 0f) {
+                    val offsetPx = computeOffset(overscrollDistance, maxDistance).fastRoundToInt()
+                    when (currentAxis) {
+                        Axis.Horizontal -> translationX = offsetPx.toFloat()
+                        Axis.Vertical -> translationY = offsetPx.toFloat()
+                        Axis.None -> Unit
+                    }
+                }
             }
         }
     }
@@ -211,7 +239,7 @@ class OffsetOverscrollEffect(
             } else {
                 -oldOffset
             }
-        updateOffset(offset.copyWith(oldOffset + consumed))
+        offset = offset.copyWith(oldOffset + consumed)
         return consumed.toOffset()
     }
 
@@ -261,7 +289,7 @@ class OffsetOverscrollEffect(
         Horizontal
     }
 
-    internal companion object {
+    companion object {
 
         val DefaultAnimationSpec = spring(1f, 150f, 0.5f)
     }

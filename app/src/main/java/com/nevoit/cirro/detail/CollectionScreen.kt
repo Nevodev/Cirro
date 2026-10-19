@@ -5,7 +5,6 @@ import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.OverscrollEffect
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -17,10 +16,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberOverscrollEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -76,11 +73,10 @@ import com.nevoit.material.core.component.BottomPopupMenuScope
 import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
-import com.nevoit.material.core.interaction.overscroll.OffsetOverscrollEffect
+import com.nevoit.material.core.layout.LocalOverscrollVisualOffset
 import com.nevoit.material.core.layout.VerticalStack
 import com.nevoit.material.core.layout.isScrolledPast
 import com.nevoit.material.core.modifier.smoothGradient
-import com.nevoit.material.core.utility.NavigationBarSpacer
 import com.nevoit.material.navigation.LocalPageTransitionState
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.local.ProvideContentColor
@@ -412,7 +408,6 @@ private fun CollectionScreen(
     )
 
     val description = state.info.dataOrNull?.description.orEmpty().trim()
-    val overscrollEffect = rememberOverscrollEffect()
 
     val screenWidth = LocalWindowInfo.current.containerDpSize.width
     val listState = rememberLazyListState()
@@ -422,7 +417,6 @@ private fun CollectionScreen(
         animationSpec = tween(durationMillis = 200),
         label = "topShadeAlpha",
     )
-
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -431,10 +425,11 @@ private fun CollectionScreen(
         VerticalStack(
             state = listState,
             modifier = Modifier.fillMaxSize(),
-            overscrollEffect = overscrollEffect
         ) {
             item(key = "header") {
                 val info = state.info.dataOrNull
+                // 过冲位移由 VerticalStack 通过 Local 提供，这一页不自己建 effect
+                val overscrollVisual = LocalOverscrollVisualOffset.current
                 when {
                     state.info is Section.Failed && info == null -> InfoFailure(
                         onRetry = onRetry,
@@ -455,7 +450,9 @@ private fun CollectionScreen(
                         onPlay = { onPlay(0) },
                         onShuffle = onShuffle,
                         onToggleSubscribed = onToggleSubscribed,
-                        overscrollEffect = overscrollEffect,
+                        overscrollOffsetY = {
+                            overscrollVisual?.visualOffset?.y?.coerceAtLeast(0f) ?: 0f
+                        },
                     )
                 }
             }
@@ -597,13 +594,6 @@ private fun CollectionScreen(
                     )
                 }
             }
-
-            // 尾距垫住常驻的 MiniPlayer + 底栏（数字跟首页同一个约定）
-            item(key = "bottom") {
-                VGap(36.dp)
-                VGap(144.dp)
-                NavigationBarSpacer()
-            }
         }
 
         TopShade(
@@ -645,7 +635,7 @@ private fun HeaderBlock(
     onPlay: () -> Unit,
     onShuffle: () -> Unit,
     onToggleSubscribed: () -> Unit,
-    overscrollEffect: OverscrollEffect?,
+    overscrollOffsetY: () -> Float,
     modifier: Modifier = Modifier,
 ) {
     val screenWidth = LocalWindowInfo.current.containerDpSize.width
@@ -664,11 +654,7 @@ private fun HeaderBlock(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .graphicsLayer {
-                        val overscrollOffset =
-                            (overscrollEffect as? OffsetOverscrollEffect)?.visualOffset?.y?.coerceAtLeast(
-                                0f
-                            )
-                                ?: 0f
+                        val overscrollOffset = overscrollOffsetY()
                         val scale =
                             (screenWidthPx + overscrollOffset + risePx) / (screenWidthPx + risePx)
                         scaleX = scale

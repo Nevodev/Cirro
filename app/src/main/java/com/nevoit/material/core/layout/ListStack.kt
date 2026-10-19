@@ -38,12 +38,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kyant.shapes.RoundedRectangle
 import com.kyant.shapes.UnevenRoundedRectangle
+import com.nevoit.kinetic.layout.rememberKineticFlingBehavior
 import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.InternalIcons
 import com.nevoit.material.core.component.Switch
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.interaction.DimIndication
-import com.nevoit.material.core.interaction.rememberFlingBehavior
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.local.LocalColors
 import com.nevoit.material.theme.local.LocalContentColor
@@ -377,7 +377,7 @@ fun ListStack(
         modifier = modifier.background(resolvedColors.background),
         state = state,
         contentPadding = contentPadding,
-        flingBehavior = rememberFlingBehavior()
+        flingBehavior = rememberKineticFlingBehavior()
     ) {
         ListScope(
             lazyListScope = this,

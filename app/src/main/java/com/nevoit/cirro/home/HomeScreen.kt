@@ -7,6 +7,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.snapping.SnapPosition
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -23,7 +24,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyItemScope
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -77,15 +77,16 @@ import com.nevoit.cirro.playback.rememberIsCurrentSong
 import com.nevoit.cirro.ui.CollectionCard
 import com.nevoit.cirro.ui.ReflectionTransformation
 import com.nevoit.cirro.ui.rememberCoverRequest
+import com.nevoit.kinetic.layout.KineticLazyRow
+import com.nevoit.kinetic.layout.overscroll.rememberOffsetOverscrollEffect
+import com.nevoit.kinetic.layout.snap.rememberKineticSnapFlingBehavior
 import com.nevoit.material.core.component.CircleIconButton
 import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.PageHeader
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
-import com.nevoit.material.core.interaction.rememberFlingBehavior
 import com.nevoit.material.core.layout.VerticalStack
 import com.nevoit.material.core.modifier.smoothGradient
-import com.nevoit.material.core.utility.NavigationBarSpacer
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.tokens.Springs
 import org.koin.androidx.compose.koinViewModel
@@ -179,11 +180,19 @@ fun BoxScope.HomeRoute(
 
         if (state != null) {
             item(key = "home_entries") {
-                LazyRow(
+                val rowState = rememberLazyListState()
+                KineticLazyRow(
+                    state = rowState,
                     modifier = Modifier.fillMaxWidth(),
                     contentPadding = PaddingValues(horizontal = ShelfPadding),
                     horizontalArrangement = Arrangement.spacedBy(ShelfPadding),
-                    flingBehavior = rememberFlingBehavior(),
+                    // 松手后吸附到卡片起点；滚动条本来就没有，关掉别让 kinetic 画一条
+                    flingBehavior = rememberKineticSnapFlingBehavior(
+                        rowState,
+                        snapPosition = SnapPosition.Start,
+                    ),
+                    overscrollEffect = rememberOffsetOverscrollEffect(rowState),
+                    scrollIndicator = null,
                 ) {
                     // 卡片是一个列表，界面只负责按类型分发：加新卡种不用动这里。
                     items(state.cards, key = { it.key }) { card ->
@@ -243,12 +252,6 @@ fun BoxScope.HomeRoute(
                     },
                     onRetry = onRetry
                 )
-            }
-
-            item(key = "home_footer") {
-                VGap(36.dp)
-                VGap(144.dp)
-                NavigationBarSpacer()
             }
         }
     }
@@ -513,12 +516,17 @@ private fun PlaylistShelf(
 ) {
     val listState = rememberLazyListState()
     Box {
-        LazyRow(
+        KineticLazyRow(
             state = listState,
             modifier = Modifier.fillMaxWidth(),
             contentPadding = PaddingValues(horizontal = ShelfPadding),
             horizontalArrangement = Arrangement.spacedBy(ShelfPadding),
-            flingBehavior = rememberFlingBehavior(),
+            flingBehavior = rememberKineticSnapFlingBehavior(
+                listState,
+                snapPosition = SnapPosition.Start,
+            ),
+            overscrollEffect = rememberOffsetOverscrollEffect(listState),
+            scrollIndicator = null,
         ) {
             items(shelf.dataOrNull.orEmpty(), key = { it.id }) { card ->
                 PlaylistCard(
@@ -577,11 +585,18 @@ private fun StyleShelf(
         modifier = Modifier
             .fillMaxWidth()
     ) {
-        LazyRow(
+        val rowState = rememberLazyListState()
+        KineticLazyRow(
+            state = rowState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = ShelfPadding),
             horizontalArrangement = Arrangement.spacedBy(ShelfPadding),
-            flingBehavior = rememberFlingBehavior(),
+            flingBehavior = rememberKineticSnapFlingBehavior(
+                rowState,
+                snapPosition = SnapPosition.Start,
+            ),
+            overscrollEffect = rememberOffsetOverscrollEffect(rowState),
+            scrollIndicator = null,
         ) {
             itemsIndexed(columns) { index, column ->
                 // 整块是一个队列，所以点第几列第几首要换算成这批歌里的第几首。
