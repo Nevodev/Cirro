@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
+import com.nevoit.kinetic.layout.internal.indicator.rememberScrollIndicatorMetrics
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlin.time.Duration.Companion.milliseconds
@@ -150,6 +151,10 @@ fun Modifier.drawKineticScrollIndicator(
  * to a translated content layer. [overscroll] is a lazy read of the actual content translation in
  * px: +down/right, -up/left; containers supply it automatically.
  *
+ * A [LazyListState] or [LazyGridState] reports accumulated offsets (measured line sizes cached as
+ * they scroll past) instead of the platform's visible-average estimate; other states keep their own
+ * metrics.
+ *
  * [reverseScrolling] is auto-detected for the four lazy states; pass an explicit value for a custom
  * ScrollableState whose positive deltas decrease the normalized offset.
  */
@@ -176,6 +181,7 @@ fun Modifier.kineticScrollIndicator(
     val latestReverse by rememberUpdatedState(reverseScrolling)
     val latestDragging by rememberUpdatedState(onDraggingChanged)
     val latestOverscroll by rememberUpdatedState(overscroll)
+    val metrics = rememberScrollIndicatorMetrics(state)
     val alpha = rememberScrollIndicatorAlpha(
         isActive = { dragState.active || state.isScrollInProgress || latestOverscroll() != 0f },
         autoHideMillis = spec.autoHideMillis,
@@ -184,6 +190,7 @@ fun Modifier.kineticScrollIndicator(
     )
     val interactive = if (!spec.draggable) this else dragKineticScrollIndicator(
         state = state,
+        metrics = metrics,
         dragState = dragState,
         vertical = orientation == Orientation.Vertical,
         rtl = rtl,
@@ -196,7 +203,7 @@ fun Modifier.kineticScrollIndicator(
         onDraggingChanged = { latestDragging(it) },
     )
     return interactive.drawKineticScrollIndicator(
-        metrics = state.scrollIndicatorState,
+        metrics = metrics,
         orientation = orientation,
         spec = spec,
         overscroll = overscroll,

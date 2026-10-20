@@ -89,6 +89,7 @@ internal suspend fun runScrollIndicatorDrag(
  */
 internal fun Modifier.dragKineticScrollIndicator(
     state: ScrollableState,
+    metrics: ScrollIndicatorState?,
     dragState: ScrollIndicatorDragState,
     vertical: Boolean,
     rtl: Boolean,
@@ -99,7 +100,7 @@ internal fun Modifier.dragKineticScrollIndicator(
     reverseScrolling: () -> Boolean,
     haptic: HapticFeedback,
     onDraggingChanged: (Boolean) -> Unit,
-): Modifier = pointerInput(state, vertical, rtl, spec) {
+): Modifier = pointerInput(state, metrics, vertical, rtl, spec) {
     val direction = if (rtl) LayoutDirection.Rtl else LayoutDirection.Ltr
     val insets = spec.resolveInsets(this, direction, vertical)
     val left = insets.left
@@ -116,12 +117,12 @@ internal fun Modifier.dragKineticScrollIndicator(
     fun track() = extent() - axisStart.coerceAtLeast(0f) - axisEnd.coerceAtLeast(0f)
     fun hit(position: Offset): Boolean {
         if (alpha() <= 0f) return false
-        val metrics = state.scrollIndicatorState ?: return false
-        if (metrics.viewportSize == Int.MAX_VALUE || metrics.contentSize == Int.MAX_VALUE ||
-            metrics.scrollOffset == Int.MAX_VALUE ||
-            kotlin.math.abs(metrics.viewportSize - extent()) > 1f) return false
-        val bar = calculateScrollIndicator(extent(), metrics.contentSize.toFloat(),
-            metrics.scrollOffset.toFloat(), overscroll(), density, axisStart, axisEnd, !vertical && rtl)
+        val current = metrics ?: return false
+        if (current.viewportSize == Int.MAX_VALUE || current.contentSize == Int.MAX_VALUE ||
+            current.scrollOffset == Int.MAX_VALUE ||
+            kotlin.math.abs(current.viewportSize - extent()) > 1f) return false
+        val bar = calculateScrollIndicator(extent(), current.contentSize.toFloat(),
+            current.scrollOffset.toFloat(), overscroll(), density, axisStart, axisEnd, !vertical && rtl)
         if (!bar.isVisible) return false
         val width = normalWidth + (expandedWidth - normalWidth) * expansion().coerceIn(0f, 1f)
         if (!width.isFinite() || width <= 0f || !slop.isFinite()) return false
@@ -149,7 +150,7 @@ internal fun Modifier.dragKineticScrollIndicator(
             val positions = Channel<Float>(Channel.CONFLATED)
             val token = Any()
             val worker = workerScope.launch(start = CoroutineStart.UNDISPATCHED) {
-                runScrollIndicatorDrag(state, positions, axis(press.position), { state.scrollIndicatorState },
+                runScrollIndicatorDrag(state, positions, axis(press.position), { metrics },
                     { track() }, { (!vertical && rtl) xor reverseScrolling() },
                     onStarted = {
                         dragState.start(token)
