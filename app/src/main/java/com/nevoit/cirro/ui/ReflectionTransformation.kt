@@ -1,5 +1,6 @@
 package com.nevoit.cirro.ui
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -41,6 +42,8 @@ import kotlin.math.roundToInt
  * 代价是原图底部那 [bleedDp] 确实会被糊到一点 —— 这是刻意的。
  */
 class ReflectionTransformation(
+    /** 用来起离屏 GL 上下文（着色器在 assets 里）。 */
+    private val context: Context,
     /** 封面本体的边长。其余尺寸都按它折算。 */
     private val squareDp: Float = 192f,
     /** 下方接出的倒影高度。 */
@@ -67,11 +70,29 @@ class ReflectionTransformation(
     override suspend fun transform(input: Bitmap, size: Size): Bitmap {
         if (input.width == 0 || input.height == 0) return input
 
+        // 先试 GPU：一次离屏渲染，不碰 CPU 模糊那几个 IntArray。失败（没有 GLES3 上下文、
+        // 着色器编译不过、设备上就是跑不起来）就落到下面那条 CPU 路径，观感一样，只是慢一点。
+        // 半径不在这儿传：GPU 版对齐的是艺人页视频那个值（见 GlReflection.VideoRadiusPx），
+        // 暂时和下面 [blurDp] 不同，好在截图里分出走的哪条路。
+        if (squareDp > 0f) {
+            GlReflection.render(
+                context = context,
+                input = input,
+                riseRatio = riseDp / squareDp,
+                // 两条路径的模糊起点共用同一个值：这里已经是 cpu 版算 bleed 用的那个参数。
+                bleedRatio = if (riseDp > 0f) bleedDp / riseDp else 0.5f,
+            )?.let { return it }
+        }
+
+        return transformOnCpu(input)
+    }
+
+    private fun transformOnCpu(input: Bitmap): Bitmap {
         val source = input.asSoftware()
         val width = source.width
         val rise = (width * riseDp / squareDp).roundToInt().coerceAtLeast(1)
         val strip = (width * stripDp / squareDp).roundToInt().coerceIn(1, width)
-        val bleed = (width * bleedDp / squareDp).roundToInt().coerceAtLeast(1)
+        val bleed = (width * bleedDp / squareDp).roundToInt().coerceIn(0, width)
 
         // 源图居中裁成正方形，这样非正方形的图也不会被拉变形。
         val side = minOf(source.width, source.height)

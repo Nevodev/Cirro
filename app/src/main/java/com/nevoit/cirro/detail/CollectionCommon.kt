@@ -19,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -26,6 +27,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import coil3.request.ImageRequest
+import coil3.request.allowHardware
 import coil3.request.crossfade
 import coil3.request.transformations
 import com.kyant.shapes.RoundedRectangle
@@ -58,6 +60,15 @@ internal val TrackCorner = 8.dp
 internal val HeaderRise = 128.dp
 
 internal const val HeaderGradientRiseMultiplier = 2f
+
+/**
+ * 详情页倒影的模糊带往上**溢进封面**的高度，按倒影带高度算。
+ *
+ * 艺人页视频那边是 `rise / 2`（[com.nevoit.cirro.ui.video.ArtistReflectionGeometry] 的默认值）：
+ * 画面一直在动，溢一截反而看不出接缝。详情页是静止封面，溢到一半会把封面底部一大块糊掉，
+ * 所以这里只留四分之一。设成 0 就是起点正好落在接缝上，封面一点都不被糊到。
+ */
+internal const val HeaderBleedRatio = 0.35f
 
 internal const val HeaderCoverCapPx = 1024
 
@@ -101,8 +112,8 @@ internal fun HeaderActions(
     leadingIconRes: Int,
     leadingLabel: String,
     onLeading: () -> Unit,
-    buttonColor: Color,
-    buttonIconColor: Color,
+    buttonColor: ColorProducer,
+    buttonIconColor: ColorProducer,
     onPlay: () -> Unit,
     onToggleSubscribed: () -> Unit,
     modifier: Modifier = Modifier,
@@ -174,8 +185,8 @@ internal fun HeaderActions(
 internal fun FloatingBar(
     onBack: () -> Unit,
     onShare: () -> Unit,
-    background: Color,
-    tint: Color,
+    background: ColorProducer,
+    tint: ColorProducer,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -281,13 +292,17 @@ internal fun headerCoverModel(url: String, widthDp: Int): Any? {
             ImageRequest.Builder(context)
                 .data(it)
                 .size(side, side + risePx)
+                // 变换要读像素，硬件位图读不了——放它进来就得先拷一张 5.5MB 的软件副本
+                // （`ReflectionTransformation.asSoftware`）。直接要软件位图，少一次整图拷贝。
+                .allowHardware(false)
                 .transformations(
                     ReflectionTransformation(
+                        context = context,
                         squareDp = side.toFloat(),
                         stripDp = side * riseRatio / 3,
                         riseDp = side * riseRatio,
-                        bleedDp = side * riseRatio / 2,
-                        blurDp = 96f
+                        bleedDp = side * riseRatio * HeaderBleedRatio,
+                        blurDp = 48f
                     )
                 )
                 .crossfade(true)

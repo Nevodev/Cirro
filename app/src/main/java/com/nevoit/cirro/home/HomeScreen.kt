@@ -70,7 +70,6 @@ import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.login.LoginActivity
 import com.nevoit.cirro.palette.CoverPalette
-import com.nevoit.cirro.palette.CoverSeed
 import com.nevoit.cirro.playback.PlaybackConnection
 import com.nevoit.cirro.playback.PlayingCoverIndicator
 import com.nevoit.cirro.playback.rememberIsCurrentSong
@@ -433,7 +432,8 @@ private fun RadioCard(
                 .graphicsLayer { alpha = gate.value }
                 .drawBehind {
                     val topColor = seed?.let { Color(it.primaryTone(RadioTopTone)) } ?: fallback
-                    val bottomColor = seed?.let { Color(it.primaryTone(RadioBottomTone)) } ?: fallback
+                    val bottomColor =
+                        seed?.let { Color(it.primaryTone(RadioBottomTone)) } ?: fallback
                     drawRect(Brush.verticalGradient(listOf(topColor, bottomColor)))
                 },
         ) {
@@ -443,10 +443,14 @@ private fun RadioCard(
                 }
             }
             guests.getOrNull(0)?.let { url ->
-                RadioCircle(url, size = 80.dp, x = 120.dp, y = 88.dp) { settled = settled + "guest0" }
+                RadioCircle(url, size = 80.dp, x = 120.dp, y = 88.dp) {
+                    settled = settled + "guest0"
+                }
             }
             guests.getOrNull(1)?.let { url ->
-                RadioCircle(url, size = 64.dp, x = 56.dp, y = 136.dp) { settled = settled + "guest1" }
+                RadioCircle(url, size = 64.dp, x = 56.dp, y = 136.dp) {
+                    settled = settled + "guest1"
+                }
             }
         }
 
@@ -769,8 +773,10 @@ private fun coverModel(url: String?): Any? {
                 .size(width, height)
                 .transformations(
                     ReflectionTransformation(
+                        context = context,
                         squareDp = CardWidth.value,
                         riseDp = CardRise.value,
+                        bleedDp = CardRise.value * 0.5f
                     )
                 )
                 .crossfade(true)

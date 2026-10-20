@@ -93,6 +93,7 @@ import com.nevoit.material.core.layout.VerticalStack
 import com.nevoit.material.core.layout.isScrolledPast
 import com.nevoit.material.core.modifier.smoothGradient
 import com.nevoit.material.navigation.LocalPageTransitionState
+import com.nevoit.material.core.utility.rememberColorProducer
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.local.ProvideContentColor
 import com.nevoit.material.theme.tokens.Springs
@@ -783,8 +784,8 @@ private fun ArtistScreen(
         FloatingBar(
             onBack = onBack,
             onShare = onShare,
-            background = circleColor,
-            tint = circleIconColor,
+            background = rememberColorProducer(circleColor),
+            tint = rememberColorProducer(circleIconColor),
             modifier = Modifier.align(Alignment.TopCenter),
         )
     }
@@ -891,8 +892,8 @@ private fun HeaderBlock(
                 leadingIconRes = R.drawable.info_circle,
                 leadingLabel = "艺人资料",
                 onLeading = onInfo,
-                buttonColor = buttonColor,
-                buttonIconColor = buttonIconColor,
+                buttonColor = rememberColorProducer(buttonColor),
+                buttonIconColor = rememberColorProducer(buttonIconColor),
                 onPlay = onPlay,
                 onToggleSubscribed = onToggleSubscribed,
                 modifier = Modifier.fillMaxWidth(),

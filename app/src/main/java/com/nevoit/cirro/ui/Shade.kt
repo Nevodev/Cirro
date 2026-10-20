@@ -19,11 +19,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.nevoit.material.core.layout.isScrolledPast
 import com.nevoit.material.core.modifier.smoothGradient
+import com.nevoit.material.core.utility.rememberColorProducer
 
 /** 常驻层（MiniPlayer + 底栏 + 上下留白）在导航条 inset 之外占的高度。 */
 private val BottomShadeContentHeight = 156.dp
@@ -36,7 +38,7 @@ private val BottomShadeContentHeight = 156.dp
  */
 @Composable
 fun BoxScope.BottomShade(
-    color: Color,
+    color: ColorProducer,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -56,8 +58,14 @@ fun BoxScope.BottomShade(
 }
 
 @Composable
-fun BoxScope.TopShade(
+fun BoxScope.BottomShade(
     color: Color,
+    modifier: Modifier = Modifier,
+) = BottomShade(color = rememberColorProducer(color), modifier = modifier)
+
+@Composable
+fun BoxScope.TopShade(
+    color: ColorProducer,
     alpha: () -> Float = { 1f },
     modifier: Modifier = Modifier,
 ) {
@@ -78,6 +86,13 @@ fun BoxScope.TopShade(
             .then(modifier)
     )
 }
+
+@Composable
+fun BoxScope.TopShade(
+    color: Color,
+    alpha: () -> Float = { 1f },
+    modifier: Modifier = Modifier,
+) = TopShade(color = rememberColorProducer(color), alpha = alpha, modifier = modifier)
 
 @Composable
 fun BoxScope.TopShade(

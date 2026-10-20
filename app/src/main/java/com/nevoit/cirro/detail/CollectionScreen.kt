@@ -5,7 +5,6 @@ import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -78,7 +78,9 @@ import com.nevoit.material.core.layout.VerticalStack
 import com.nevoit.material.core.layout.isScrolledPast
 import com.nevoit.material.core.layout.rememberNavigationTailPadding
 import com.nevoit.material.core.layout.rememberOverlayScrollIndicatorSpec
+import com.nevoit.material.core.modifier.drawBackground
 import com.nevoit.material.core.modifier.smoothGradient
+import com.nevoit.material.core.utility.rememberColorProducer
 import com.nevoit.material.navigation.LocalPageTransitionState
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.local.ProvideContentColor
@@ -89,6 +91,9 @@ import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import org.koin.core.parameter.parametersOf
+
+/** 这一页主题色的补间时长（种子落地时底色/按钮/文字一起走过去）。 */
+private const val PageColorMs = 500
 
 /**
  * 统一详情页（歌单 / 专辑 / 每日推荐 / 艺术家热门歌曲）。
@@ -355,57 +360,49 @@ private fun CollectionScreen(
     modifier: Modifier = Modifier,
 ) {
     val dark = seed?.dark == true || MaterialTheme.darkTheme
-    val backgroundColor by animateColorAsState(
-        targetValue = seed?.primaryTone(if (dark) BgToneDark else BgToneLight)?.let { Color(it) }
+    // 颜色在这里只"起个头"：animateColorAsState 建出 State，立刻包成 ColorProducer 往下传，
+    // 全程不读 `.value`。读了就是组合期读数——种子落地（缓存没命中时正好落在进场动画中间）
+    // 那 500ms 会每帧把这一整页连同头部、每一行、每一行里的文字全部重组一遍。
+    // 真正读值的只有两类地方：绘制段（背景 / 渐变 / 按钮 / 图标）和叶子文字。
+    val backgroundColor = rememberPageColor(
+        seed?.primaryTone(if (dark) BgToneDark else BgToneLight)?.let { Color(it) }
             ?: MaterialTheme.colors.pageBackground,
-        animationSpec = tween(durationMillis = 500),
         label = "collectionBackground",
     )
 
     val contentColor = if (dark) Color.White else Color.Black
+    val contentColorProducer = rememberColorProducer(contentColor)
 
     fun poleTone(darkTone: Double, lightTone: Double): Color? =
         seed?.primaryTone((if (dark) darkTone else lightTone).toInt())?.let(::Color)
 
-    val contentVariantColor by animateColorAsState(
-        targetValue = poleTone(VariantToneDark, VariantToneLight)
-            ?: MaterialTheme.colors.contentVariant,
-        animationSpec = tween(durationMillis = 500),
+    val contentVariantColor = rememberPageColor(
+        poleTone(VariantToneDark, VariantToneLight) ?: MaterialTheme.colors.contentVariant,
         label = "contentVariant",
     )
 
-    val buttonColor by animateColorAsState(
-        targetValue = poleTone(ButtonToneDark, ButtonToneLight)
-            ?: MaterialTheme.colors.cardBackground,
-        animationSpec = tween(durationMillis = 500),
+    val buttonColor = rememberPageColor(
+        poleTone(ButtonToneDark, ButtonToneLight) ?: MaterialTheme.colors.cardBackground,
         label = "buttonColor",
     )
 
-    val buttonIconColor by animateColorAsState(
-        targetValue = poleTone(ButtonIconToneDark, ButtonIconToneLight)
-            ?: MaterialTheme.colors.content,
-        animationSpec = tween(durationMillis = 500),
+    val buttonIconColor = rememberPageColor(
+        poleTone(ButtonIconToneDark, ButtonIconToneLight) ?: MaterialTheme.colors.content,
         label = "buttonIcon",
     )
 
-    val itemBgColor by animateColorAsState(
-        targetValue = poleTone(ItemBgToneDark, ItemBgToneLight)
-            ?: MaterialTheme.colors.cardBackground,
-        animationSpec = tween(durationMillis = 500),
+    val itemBgColor = rememberPageColor(
+        poleTone(ItemBgToneDark, ItemBgToneLight) ?: MaterialTheme.colors.cardBackground,
         label = "itemBg",
     )
 
-    val circleColor by animateColorAsState(
-        targetValue = poleTone(CircleToneDark, CircleToneLight)
-            ?: MaterialTheme.colors.iconButtonBackground,
-        animationSpec = tween(durationMillis = 500),
+    val circleColor = rememberPageColor(
+        poleTone(CircleToneDark, CircleToneLight) ?: MaterialTheme.colors.iconButtonBackground,
         label = "circleColor",
     )
 
-    val circleIconColor by animateColorAsState(
-        targetValue = poleTone(CircleIconToneDark, CircleIconToneLight)
-            ?: MaterialTheme.colors.onIconButton,
-        animationSpec = tween(durationMillis = 500),
+    val circleIconColor = rememberPageColor(
+        poleTone(CircleIconToneDark, CircleIconToneLight) ?: MaterialTheme.colors.onIconButton,
         label = "circleIcon",
     )
 
@@ -422,7 +419,7 @@ private fun CollectionScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(backgroundColor)
+            .drawBackground(backgroundColor)
     ) {
         // 底色跟着封面种子走，可能跟主题反着来（浅色主题 + 深色封面），滚动条得跟这一页的明暗，
         // 不能只看主题的 content 色。
@@ -442,7 +439,7 @@ private fun CollectionScreen(
                 when {
                     state.info is Section.Failed && info == null -> InfoFailure(
                         onRetry = onRetry,
-                        contentVariant = contentVariantColor,
+                        contentVariant = contentVariantColor(),
                     )
 
                     else -> HeaderBlock(
@@ -474,7 +471,7 @@ private fun CollectionScreen(
                         style = MaterialTheme.type.subHeadline,
                         lineHeight = 20.sp,
                         letterSpacing = 0.1.sp,
-                        color = contentVariantColor,
+                        color = contentVariantColor(),
                         maxLines = if (expanded) Int.MAX_VALUE else 2,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier
@@ -494,7 +491,7 @@ private fun CollectionScreen(
                     item(key = "tracks-failed") {
                         ListHint(
                             text = "加载失败 · 点按重试",
-                            contentVariant = contentVariantColor,
+                            contentVariant = contentVariantColor(),
                             onClick = onRetry,
                         )
                     }
@@ -515,7 +512,7 @@ private fun CollectionScreen(
                                 } else null,
                                 position = resolvePosition(songs.size, index),
                                 isPlaying = song.id == playingId,
-                                content = contentColor,
+                                content = contentColorProducer,
                                 contentVariant = contentVariantColor,
                                 // 喜爱歌单整份都是「已喜爱」：行行亮着星星没有信息量，
                                 // 顺带省掉每行一条喜欢态订阅（见 TrackRow 的 showStar）
@@ -542,7 +539,7 @@ private fun CollectionScreen(
                                     text = footer,
                                     style = MaterialTheme.type.subHeadline,
                                     lineHeight = 20.sp,
-                                    color = contentVariantColor,
+                                    color = contentVariantColor(),
                                     modifier = Modifier
                                         .animateItem(tween(200), Springs.crisp(), tween(200))
                                         .fillMaxWidth()
@@ -557,7 +554,7 @@ private fun CollectionScreen(
             if (incompleteAlbum && state.songs is Section.Ready) {
                 item(key = "show-full-album") {
                     VGap()
-                    ProvideContentColor(contentVariantColor) {
+                    ProvideContentColor(contentVariantColor()) {
                         Row(
                             modifier = Modifier
                                 .animateItem(tween(200), Springs.crisp(), tween(200))
@@ -586,7 +583,7 @@ private fun CollectionScreen(
                             title = "更多${info.primaryArtistName}的作品",
                             albums = state.moreWorks,
                             content = contentColor,
-                            contentVariant = contentVariantColor,
+                            contentVariant = contentVariantColor(),
                             onOpenAlbum = onOpenAlbum,
                             onRetry = onRetryMoreWorks,
                         )
@@ -597,7 +594,7 @@ private fun CollectionScreen(
                         title = "你可能也喜欢",
                         albums = state.similarAlbums,
                         content = contentColor,
-                        contentVariant = contentVariantColor,
+                        contentVariant = contentVariantColor(),
                         onOpenAlbum = onOpenAlbum,
                         onRetry = onRetrySimilarSongs,
                     )
@@ -637,9 +634,9 @@ private fun HeaderBlock(
     authorHint: String,
     coverUrl: String,
     onCoverError: () -> Unit,
-    backgroundColor: Color,
-    buttonColor: Color,
-    buttonIconColor: Color,
+    backgroundColor: ColorProducer,
+    buttonColor: ColorProducer,
+    buttonIconColor: ColorProducer,
     subBusy: Boolean,
     onPlay: () -> Unit,
     onShuffle: () -> Unit,
@@ -757,3 +754,21 @@ private fun HeaderBlock(
         }
     }
 }
+
+/**
+ * 这一页的主题色补间，**直接包成** [ColorProducer]。
+ *
+ * 要点是全程不读 `.value`：`animateColorAsState` 只负责建出 State，值留给绘制段
+ * （`color()`）或者叶子文字去读。写成 `by animateColorAsState` 就等于在组合期读数，
+ * 颜色每动一帧就把这一整页重组一次——而种子是异步取回来的，缓存没命中时它正好在
+ * 进场动画的中间落地，那 500ms 里导航位移、头部封面、整张列表会全部跟着逐帧重来。
+ */
+@Composable
+private fun rememberPageColor(target: Color, label: String): ColorProducer =
+    rememberColorProducer(
+        animateColorAsState(
+            targetValue = target,
+            animationSpec = tween(durationMillis = PageColorMs),
+            label = label,
+        )
+    )
