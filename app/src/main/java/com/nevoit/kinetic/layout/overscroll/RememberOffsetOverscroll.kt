@@ -1,17 +1,22 @@
 package com.nevoit.kinetic.layout.overscroll
 
 import androidx.compose.animation.core.AnimationSpec
-import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.ScrollableState
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState
-import androidx.compose.runtime.*
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
-import kotlinx.coroutines.flow.collect
 import kotlin.math.abs
 
 /** Item key and main-axis layout offset, BEFORE reverseLayout / horizontal RTL placement. */
@@ -63,7 +68,12 @@ fun rememberOffsetOverscrollEffect(
         override val layoutInfo get() = state.layoutInfo
         override fun visibleAnchors() = state.layoutInfo.visibleItemsInfo
             .filter { it.row != -1 && it.column != -1 }
-            .map { OffsetOverscrollAnchor(it.key, if (orientation == Orientation.Vertical) it.offset.y else it.offset.x) }
+            .map {
+                OffsetOverscrollAnchor(
+                    it.key,
+                    if (orientation == Orientation.Vertical) it.offset.y else it.offset.x
+                )
+            }
     }
 }, animationSpec, maxFraction)
 
@@ -80,7 +90,10 @@ fun rememberOffsetOverscrollEffect(
         override val reverseLayout get() = state.layoutInfo.reverseLayout
         override val layoutInfo get() = state.layoutInfo
         override fun visibleAnchors() = state.layoutInfo.visibleItemsInfo.map {
-            OffsetOverscrollAnchor(it.key, if (orientation == Orientation.Vertical) it.offset.y else it.offset.x)
+            OffsetOverscrollAnchor(
+                it.key,
+                if (orientation == Orientation.Vertical) it.offset.y else it.offset.x
+            )
         }
     }
 }, animationSpec, maxFraction)
@@ -97,7 +110,8 @@ fun rememberOffsetOverscrollEffect(
         override val orientation get() = state.layoutInfo.orientation
         override val reverseLayout get() = state.layoutInfo.reverseLayout
         override val layoutInfo get() = state.layoutInfo
-        override fun visibleAnchors() = state.layoutInfo.visiblePagesInfo.map { OffsetOverscrollAnchor(it.key, it.offset) }
+        override fun visibleAnchors() =
+            state.layoutInfo.visiblePagesInfo.map { OffsetOverscrollAnchor(it.key, it.offset) }
     }
 }, animationSpec, maxFraction)
 
@@ -106,23 +120,33 @@ fun rememberOffsetOverscrollEffect(
 fun rememberOffsetOverscrollEffect(
     binding: OffsetOverscrollBinding,
     animationSpec: AnimationSpec<Float> = OffsetOverscrollEffect.DefaultAnimationSpec,
-    maxFraction: Float = 0.65f,
+    maxFraction: Float = 0.55f,
 ): OffsetOverscrollEffect {
     require(maxFraction > 0f && maxFraction.isFinite())
     val scope = rememberCoroutineScope()
     val layoutDirection = LocalLayoutDirection.current
     val orientation by remember(binding) { derivedStateOf { binding.orientation } }
     val reverseLayout by remember(binding) { derivedStateOf { binding.reverseLayout } }
-    val effect = remember(binding, orientation, reverseLayout, layoutDirection, scope, animationSpec, maxFraction) {
+    val effect = remember(
+        binding,
+        orientation,
+        reverseLayout,
+        layoutDirection,
+        scope,
+        animationSpec,
+        maxFraction
+    ) {
         OffsetOverscrollEffect(scope, animationSpec, maxFraction).also { effect ->
             effect.scrollForRebase = { visual ->
                 val horizontal = binding.orientation == Orientation.Horizontal
-                val reversed = binding.reverseLayout xor (horizontal && layoutDirection == LayoutDirection.Rtl)
+                val reversed =
+                    binding.reverseLayout xor (horizontal && layoutDirection == LayoutDirection.Rtl)
                 val direction = if (reversed) 1f else -1f
                 val requested = (if (horizontal) visual.x else visual.y) * direction
                 val state = binding.state
                 if ((requested > 0f && !state.canScrollForward) ||
-                    (requested < 0f && !state.canScrollBackward) || requested == 0f) {
+                    (requested < 0f && !state.canScrollBackward) || requested == 0f
+                ) {
                     Offset.Zero
                 } else {
                     // Coordinate migration must not cancel the held gesture or redistribute
@@ -133,9 +157,13 @@ fun rememberOffsetOverscrollEffect(
                     // Prefer the scrolling item closest to reported movement, rather than
                     // accidentally using a pinned header (whose offset may stay fixed).
                     val actual = anchors.mapNotNull { old ->
-                        after.firstOrNull { it.key == old.key }?.let { (old.offset - it.offset).toFloat() }
+                        after.firstOrNull { it.key == old.key }
+                            ?.let { (old.offset - it.offset).toFloat() }
                     }.minByOrNull { abs(it - reported) } ?: reported
-                    if (horizontal) Offset(actual * direction, 0f) else Offset(0f, actual * direction)
+                    if (horizontal) Offset(actual * direction, 0f) else Offset(
+                        0f,
+                        actual * direction
+                    )
                 }
             }
         }
