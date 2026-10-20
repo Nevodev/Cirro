@@ -59,6 +59,8 @@ internal fun ClickThroughLazyStaggeredGrid(
     userScrollEnabled: Boolean = true,
     /** The overscroll effect to render and dispatch events to */
     overscrollEffect: OverscrollEffect?,
+    /** Whether content shorter than the viewport still dispatches overscroll */
+    alwaysOverscroll: Boolean = true,
     /** The vertical spacing for items/lines. */
     mainAxisSpacing: Dp = 0.dp,
     /** The horizontal spacing for items/lines. */
@@ -118,6 +120,7 @@ internal fun ClickThroughLazyStaggeredGrid(
                     flingBehavior = flingBehavior,
                     interactionSource = state.mutableInteractionSource,
                     overscrollEffect = overscrollEffect,
+                    alwaysOverscroll = alwaysOverscroll,
                 ),
         prefetchState = state.prefetchState,
         itemProvider = itemProviderLambda,

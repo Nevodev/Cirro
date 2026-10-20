@@ -92,6 +92,8 @@ fun KineticLazyHorizontalPager(
         PagerDefaults.pageNestedScrollConnection(state, Orientation.Horizontal),
     snapPosition: SnapPosition = SnapPosition.Start,
     overscrollEffect: OverscrollEffect? = rememberOverscrollEffect(),
+    /** Content shorter than the viewport still stretches; false restores the Foundation behavior. */
+    alwaysOverscroll: Boolean = true,
     scrollIndicator: ScrollIndicatorSpec? = ScrollIndicatorSpec.Default,
     clickVelocityThreshold: Dp = 40.dp,
     pageContent: @Composable PagerScope.(page: Int) -> Unit,
@@ -122,6 +124,7 @@ fun KineticLazyHorizontalPager(
             pageNestedScrollConnection = pageNestedScrollConnection,
             snapPosition = snapPosition,
             overscrollEffect = overscrollEffect,
+            alwaysOverscroll = alwaysOverscroll,
             pageContent = pageContent,
         )
     }
@@ -144,6 +147,8 @@ fun KineticLazyVerticalPager(
         PagerDefaults.pageNestedScrollConnection(state, Orientation.Vertical),
     snapPosition: SnapPosition = SnapPosition.Start,
     overscrollEffect: OverscrollEffect? = rememberOverscrollEffect(),
+    /** Content shorter than the viewport still stretches; false restores the Foundation behavior. */
+    alwaysOverscroll: Boolean = true,
     scrollIndicator: ScrollIndicatorSpec? = ScrollIndicatorSpec.Default,
     clickVelocityThreshold: Dp = 40.dp,
     pageContent: @Composable PagerScope.(page: Int) -> Unit,
@@ -174,6 +179,7 @@ fun KineticLazyVerticalPager(
             pageNestedScrollConnection = pageNestedScrollConnection,
             snapPosition = snapPosition,
             overscrollEffect = overscrollEffect,
+            alwaysOverscroll = alwaysOverscroll,
             pageContent = pageContent,
         )
     }

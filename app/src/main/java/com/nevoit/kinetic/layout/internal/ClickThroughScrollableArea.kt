@@ -108,6 +108,7 @@ fun Modifier.clickThroughScrollableArea(
     flingBehavior: FlingBehavior? = null,
     interactionSource: MutableInteractionSource? = null,
     bringIntoViewSpec: BringIntoViewSpec? = null,
+    alwaysOverscroll: Boolean = true,
 ): Modifier {
     return clipScrollableContainer(orientation)
         .then(
@@ -121,6 +122,7 @@ fun Modifier.clickThroughScrollableArea(
                 bringIntoViewSpec = bringIntoViewSpec,
                 useLocalOverscrollFactory = true,
                 overscrollEffect = null,
+                alwaysOverscroll = alwaysOverscroll,
             )
         )
 }
@@ -197,6 +199,7 @@ fun Modifier.clickThroughScrollableArea(
     flingBehavior: FlingBehavior? = null,
     interactionSource: MutableInteractionSource? = null,
     bringIntoViewSpec: BringIntoViewSpec? = null,
+    alwaysOverscroll: Boolean = true,
 ): Modifier {
     return clipScrollableContainer(orientation)
         .then(
@@ -210,6 +213,7 @@ fun Modifier.clickThroughScrollableArea(
                 bringIntoViewSpec = bringIntoViewSpec,
                 useLocalOverscrollFactory = false,
                 overscrollEffect = overscrollEffect,
+                alwaysOverscroll = alwaysOverscroll,
             )
         )
 }
@@ -229,6 +233,7 @@ private class ClickThroughScrollableAreaElement(
     private val bringIntoViewSpec: BringIntoViewSpec?,
     private val useLocalOverscrollFactory: Boolean,
     private val overscrollEffect: OverscrollEffect?,
+    private val alwaysOverscroll: Boolean,
 ) : ModifierNodeElement<ClickThroughScrollableAreaNode>() {
     override fun create(): ClickThroughScrollableAreaNode {
         return ClickThroughScrollableAreaNode(
@@ -241,6 +246,7 @@ private class ClickThroughScrollableAreaElement(
             bringIntoViewSpec = bringIntoViewSpec,
             useLocalOverscrollFactory = useLocalOverscrollFactory,
             userProvidedOverscrollEffect = overscrollEffect,
+            alwaysOverscroll = alwaysOverscroll,
         )
     }
 
@@ -255,6 +261,7 @@ private class ClickThroughScrollableAreaElement(
             flingBehavior = flingBehavior,
             interactionSource = interactionSource,
             bringIntoViewSpec = bringIntoViewSpec,
+            alwaysOverscroll = alwaysOverscroll,
         )
     }
 
@@ -270,6 +277,7 @@ private class ClickThroughScrollableAreaElement(
         properties["flingBehavior"] = flingBehavior
         properties["interactionSource"] = interactionSource
         properties["bringIntoViewSpec"] = bringIntoViewSpec
+        properties["alwaysOverscroll"] = alwaysOverscroll
     }
 
     override fun equals(other: Any?): Boolean {
@@ -287,6 +295,7 @@ private class ClickThroughScrollableAreaElement(
         if (bringIntoViewSpec != other.bringIntoViewSpec) return false
         if (useLocalOverscrollFactory != other.useLocalOverscrollFactory) return false
         if (overscrollEffect != other.overscrollEffect) return false
+        if (alwaysOverscroll != other.alwaysOverscroll) return false
 
         return true
     }
@@ -301,6 +310,7 @@ private class ClickThroughScrollableAreaElement(
         result = 31 * result + (bringIntoViewSpec?.hashCode() ?: 0)
         result = 31 * result + useLocalOverscrollFactory.hashCode()
         result = 31 * result + (overscrollEffect?.hashCode() ?: 0)
+        result = 31 * result + alwaysOverscroll.hashCode()
         return result
     }
 }
@@ -315,6 +325,7 @@ private class ClickThroughScrollableAreaNode(
     private var bringIntoViewSpec: BringIntoViewSpec?,
     private var useLocalOverscrollFactory: Boolean,
     private var userProvidedOverscrollEffect: OverscrollEffect?,
+    private var alwaysOverscroll: Boolean,
 ) : DelegatingNode(), CompositionLocalConsumerModifierNode, ObserverModifierNode {
     override val shouldAutoInvalidate = false
     private var scrollableNode: ClickThroughScrollableNode? = null
@@ -345,6 +356,7 @@ private class ClickThroughScrollableAreaNode(
                         shouldReverseDirection,
                         interactionSource,
                         bringIntoViewSpec,
+                        alwaysOverscroll,
                     )
                 )
         }
@@ -368,6 +380,7 @@ private class ClickThroughScrollableAreaNode(
                 flingBehavior,
                 interactionSource,
                 bringIntoViewSpec,
+                alwaysOverscroll,
             )
         }
     }
@@ -382,9 +395,11 @@ private class ClickThroughScrollableAreaNode(
         flingBehavior: FlingBehavior?,
         interactionSource: MutableInteractionSource?,
         bringIntoViewSpec: BringIntoViewSpec?,
+        alwaysOverscroll: Boolean,
     ) {
         this.state = state
         this.orientation = orientation
+        this.alwaysOverscroll = alwaysOverscroll
         var useLocalOverscrollFactoryChanged = false
         if (this.useLocalOverscrollFactory != useLocalOverscrollFactory) {
             useLocalOverscrollFactoryChanged = true
@@ -421,6 +436,7 @@ private class ClickThroughScrollableAreaNode(
             flingBehavior,
             interactionSource,
             bringIntoViewSpec,
+            alwaysOverscroll,
         )
     }
 
@@ -477,6 +493,7 @@ private class ClickThroughScrollableAreaNode(
                 flingBehavior,
                 interactionSource,
                 bringIntoViewSpec,
+                alwaysOverscroll,
             )
         }
     }

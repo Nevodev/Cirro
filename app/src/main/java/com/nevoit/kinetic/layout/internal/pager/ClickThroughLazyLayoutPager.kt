@@ -90,6 +90,8 @@ internal fun ClickThroughPager(
     userScrollEnabled: Boolean,
     /** The overscroll effect to render and dispatch events to */
     overscrollEffect: OverscrollEffect?,
+    /** Whether content shorter than the viewport still dispatches overscroll */
+    alwaysOverscroll: Boolean = true,
     /** Number of pages to compose and layout before and after the visible pages */
     beyondViewportPageCount: Int = PagerDefaults.BeyondViewportPageCount,
     /** Space between pages */
@@ -194,6 +196,7 @@ internal fun ClickThroughPager(
                     interactionSource = state.internalInteractionSource,
                     overscrollEffect = overscrollEffect,
                     bringIntoViewSpec = pagerBringIntoViewSpec,
+                    alwaysOverscroll = alwaysOverscroll,
                 )
                 .dragDirectionDetector(state)
                 .nestedScroll(pageNestedScrollConnection),

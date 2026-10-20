@@ -385,7 +385,6 @@ fun ListStack(
             colors = resolvedColors,
             cornerRadius = cornerRadius
         ).content()
-        paddingItem(state)
     }
 }
 

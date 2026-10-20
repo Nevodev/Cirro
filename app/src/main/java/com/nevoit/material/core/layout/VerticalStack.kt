@@ -15,7 +15,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import com.nevoit.kinetic.layout.KineticLazyColumn
 import com.nevoit.kinetic.layout.indicator.ScrollIndicatorSpec
 import com.nevoit.kinetic.layout.overscroll.OverscrollVisualOffset
@@ -42,6 +41,8 @@ fun VerticalStack(
     horizontalAlignment: Alignment.Horizontal = Alignment.Start,
     userScrollEnabled: Boolean = true,
     overscrollEffect: OverscrollEffect? = null,
+    /** 内容不够长也允许 overscroll（iOS 手感）；false 回到上游行为。 */
+    alwaysOverscroll: Boolean = true,
     /** 传 null 用默认（轨道让开顶栏与尾距）。 */
     scrollIndicator: ScrollIndicatorSpec? = null,
     content: LazyListScope.() -> Unit
@@ -70,10 +71,10 @@ fun VerticalStack(
             horizontalAlignment = horizontalAlignment,
             userScrollEnabled = userScrollEnabled,
             overscrollEffect = effect,
+            alwaysOverscroll = alwaysOverscroll,
             scrollIndicator = scrollIndicator ?: defaultScrollIndicator,
         ) {
             content()
-            paddingItem(state)
         }
     }
 }

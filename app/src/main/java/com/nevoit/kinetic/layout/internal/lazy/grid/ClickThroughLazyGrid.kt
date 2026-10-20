@@ -81,6 +81,8 @@ internal fun ClickThroughLazyGrid(
     userScrollEnabled: Boolean,
     /** The overscroll effect to render and dispatch events to */
     overscrollEffect: OverscrollEffect?,
+    /** Whether content shorter than the viewport still dispatches overscroll */
+    alwaysOverscroll: Boolean = true,
     /** The vertical arrangement for items/lines. */
     verticalArrangement: Arrangement.Vertical,
     /** The horizontal arrangement for items/lines. */
@@ -153,6 +155,7 @@ internal fun ClickThroughLazyGrid(
                     interactionSource = state.internalInteractionSource,
                     overscrollEffect = overscrollEffect,
                     bringIntoViewSpec = bringIntoViewSpec,
+                    alwaysOverscroll = alwaysOverscroll,
                 ),
         prefetchState = state.prefetchState,
         measurePolicy = measurePolicy,

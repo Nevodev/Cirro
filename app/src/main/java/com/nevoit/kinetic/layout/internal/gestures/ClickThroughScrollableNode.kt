@@ -83,6 +83,7 @@ import androidx.compose.ui.node.currentValueOf
 import com.nevoit.kinetic.layout.FlingVelocityProvider
 import com.nevoit.kinetic.layout.LocalLowSpeedClickThreshold
 import com.nevoit.kinetic.layout.canClickThroughFling
+import com.nevoit.kinetic.layout.internal.OverscrollableScrollableState
 import com.nevoit.kinetic.layout.kineticDefaultFlingBehavior
 import kotlinx.coroutines.CoroutineStart
 
@@ -96,6 +97,7 @@ internal class ClickThroughScrollableNode(
     reverseDirection: Boolean,
     interactionSource: MutableInteractionSource?,
     bringIntoViewSpec: BringIntoViewSpec?,
+    alwaysOverscroll: Boolean,
 ) :
     AbstractScrollableNode(
         overscrollEffect = overscrollEffect,
@@ -158,9 +160,12 @@ internal class ClickThroughScrollableNode(
     // instance is complete right away instead of waiting for a density update.
     override val defaultFlingBehavior = kineticDefaultFlingBehavior()
 
+    // One wrapper for the node's whole lifetime; update() swaps the real state inside it.
+    private val overscrollableState = OverscrollableScrollableState(state, alwaysOverscroll)
+
     override val scrollLogic =
         ScrollingLogic(
-            scrollableState = state,
+            scrollableState = overscrollableState,
             orientation = orientation,
             overscrollEffect = overscrollEffect,
             reverseDirection = reverseDirection,
@@ -272,6 +277,7 @@ internal class ClickThroughScrollableNode(
         flingBehavior: FlingBehavior?,
         interactionSource: MutableInteractionSource?,
         bringIntoViewSpec: BringIntoViewSpec?,
+        alwaysOverscroll: Boolean,
     ) {
         update(
             enabled = enabled,
@@ -281,15 +287,19 @@ internal class ClickThroughScrollableNode(
 
         // a new fling behavior was set, change the resolved one.
         val resolvedFlingBehavior = flingBehavior ?: defaultFlingBehavior
+        // The wrapper instance never changes, so a swapped real state has to ask for the reset.
+        val stateChanged = overscrollableState.inner !== state
+        overscrollableState.inner = state
+        overscrollableState.alwaysOverscroll = alwaysOverscroll
         val resetPointerInputHandling =
             scrollLogic.update(
-                scrollableState = state,
+                scrollableState = overscrollableState,
                 orientation = orientation,
                 overscrollEffect = overscrollEffect,
                 reverseDirection = reverseDirection,
                 flingBehavior = resolvedFlingBehavior,
                 nestedScrollDispatcher = nestedScrollDispatcher,
-            )
+            ) || stateChanged
         contentInViewNode.update(orientation, reverseDirection, bringIntoViewSpec)
 
         // update DragGestureNode

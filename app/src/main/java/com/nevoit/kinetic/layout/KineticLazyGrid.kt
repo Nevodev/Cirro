@@ -58,6 +58,8 @@ fun KineticLazyVerticalGrid(
     flingBehavior: FlingBehavior = rememberKineticFlingBehavior(),
     userScrollEnabled: Boolean = true,
     overscrollEffect: OverscrollEffect? = rememberOverscrollEffect(),
+    /** Content shorter than the viewport still stretches; false restores the Foundation behavior. */
+    alwaysOverscroll: Boolean = true,
     scrollIndicator: ScrollIndicatorSpec? = ScrollIndicatorSpec.Default,
     clickVelocityThreshold: Dp = 40.dp,
     content: LazyGridScope.() -> Unit,
@@ -83,6 +85,7 @@ fun KineticLazyVerticalGrid(
             flingBehavior = flingBehavior,
             userScrollEnabled = userScrollEnabled,
             overscrollEffect = overscrollEffect,
+            alwaysOverscroll = alwaysOverscroll,
             content = content,
         )
     }
@@ -101,6 +104,8 @@ fun KineticLazyHorizontalGrid(
     flingBehavior: FlingBehavior = rememberKineticFlingBehavior(),
     userScrollEnabled: Boolean = true,
     overscrollEffect: OverscrollEffect? = rememberOverscrollEffect(),
+    /** Content shorter than the viewport still stretches; false restores the Foundation behavior. */
+    alwaysOverscroll: Boolean = true,
     scrollIndicator: ScrollIndicatorSpec? = ScrollIndicatorSpec.Default,
     clickVelocityThreshold: Dp = 40.dp,
     content: LazyGridScope.() -> Unit,
@@ -126,6 +131,7 @@ fun KineticLazyHorizontalGrid(
             flingBehavior = flingBehavior,
             userScrollEnabled = userScrollEnabled,
             overscrollEffect = overscrollEffect,
+            alwaysOverscroll = alwaysOverscroll,
             content = content,
         )
     }

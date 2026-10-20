@@ -69,6 +69,8 @@ fun KineticLazyColumn(
     flingBehavior: FlingBehavior = rememberKineticFlingBehavior(),
     userScrollEnabled: Boolean = true,
     overscrollEffect: OverscrollEffect? = rememberOverscrollEffect(),
+    /** Content shorter than the viewport still stretches; false restores the Foundation behavior. */
+    alwaysOverscroll: Boolean = true,
     scrollIndicator: ScrollIndicatorSpec? = ScrollIndicatorSpec.Default,
     clickVelocityThreshold: Dp = 40.dp,
     content: LazyListScope.() -> Unit,
@@ -92,6 +94,7 @@ fun KineticLazyColumn(
             flingBehavior = flingBehavior,
             userScrollEnabled = userScrollEnabled,
             overscrollEffect = overscrollEffect,
+            alwaysOverscroll = alwaysOverscroll,
             horizontalAlignment = horizontalAlignment,
             verticalArrangement = verticalArrangement,
             content = content,
@@ -112,6 +115,8 @@ fun KineticLazyRow(
     flingBehavior: FlingBehavior = rememberKineticFlingBehavior(),
     userScrollEnabled: Boolean = true,
     overscrollEffect: OverscrollEffect? = rememberOverscrollEffect(),
+    /** Content shorter than the viewport still stretches; false restores the Foundation behavior. */
+    alwaysOverscroll: Boolean = true,
     scrollIndicator: ScrollIndicatorSpec? = ScrollIndicatorSpec.Default,
     clickVelocityThreshold: Dp = 40.dp,
     content: LazyListScope.() -> Unit,
@@ -135,6 +140,7 @@ fun KineticLazyRow(
             flingBehavior = flingBehavior,
             userScrollEnabled = userScrollEnabled,
             overscrollEffect = overscrollEffect,
+            alwaysOverscroll = alwaysOverscroll,
             verticalAlignment = verticalAlignment,
             horizontalArrangement = horizontalArrangement,
             content = content,

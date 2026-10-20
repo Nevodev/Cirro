@@ -59,6 +59,8 @@ fun KineticLazyVerticalStaggeredGrid(
     flingBehavior: FlingBehavior = rememberKineticFlingBehavior(),
     userScrollEnabled: Boolean = true,
     overscrollEffect: OverscrollEffect? = rememberOverscrollEffect(),
+    /** Content shorter than the viewport still stretches; false restores the Foundation behavior. */
+    alwaysOverscroll: Boolean = true,
     scrollIndicator: ScrollIndicatorSpec? = ScrollIndicatorSpec.Default,
     clickVelocityThreshold: Dp = 40.dp,
     content: LazyStaggeredGridScope.() -> Unit,
@@ -83,6 +85,7 @@ fun KineticLazyVerticalStaggeredGrid(
             flingBehavior = flingBehavior,
             userScrollEnabled = userScrollEnabled,
             overscrollEffect = overscrollEffect,
+            alwaysOverscroll = alwaysOverscroll,
             slots = rememberColumnSlots(columns, horizontalArrangement, contentPadding),
             content = content,
         )
@@ -101,6 +104,8 @@ fun KineticLazyHorizontalStaggeredGrid(
     flingBehavior: FlingBehavior = rememberKineticFlingBehavior(),
     userScrollEnabled: Boolean = true,
     overscrollEffect: OverscrollEffect? = rememberOverscrollEffect(),
+    /** Content shorter than the viewport still stretches; false restores the Foundation behavior. */
+    alwaysOverscroll: Boolean = true,
     scrollIndicator: ScrollIndicatorSpec? = ScrollIndicatorSpec.Default,
     clickVelocityThreshold: Dp = 40.dp,
     content: LazyStaggeredGridScope.() -> Unit,
@@ -125,6 +130,7 @@ fun KineticLazyHorizontalStaggeredGrid(
             flingBehavior = flingBehavior,
             userScrollEnabled = userScrollEnabled,
             overscrollEffect = overscrollEffect,
+            alwaysOverscroll = alwaysOverscroll,
             slots = rememberRowSlots(rows, verticalArrangement, contentPadding),
             content = content,
         )

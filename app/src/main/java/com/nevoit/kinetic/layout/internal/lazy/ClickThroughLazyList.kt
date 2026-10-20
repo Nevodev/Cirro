@@ -77,6 +77,8 @@ internal fun ClickThroughLazyList(
     userScrollEnabled: Boolean,
     /** The overscroll effect to render and dispatch events to */
     overscrollEffect: OverscrollEffect?,
+    /** Whether content shorter than the viewport still dispatches overscroll */
+    alwaysOverscroll: Boolean = true,
     /** Number of items to layout before and after the visible items */
     beyondBoundsItemCount: Int = defaultLazyListBeyondBoundsItemCount(),
     /** The alignment to align items horizontally. Required when isVertical is true */
@@ -160,6 +162,7 @@ internal fun ClickThroughLazyList(
                     interactionSource = state.internalInteractionSource,
                     overscrollEffect = overscrollEffect,
                     bringIntoViewSpec = bringIntoViewSpec,
+                    alwaysOverscroll = alwaysOverscroll,
                 ),
         prefetchState = state.prefetchState,
         measurePolicy = measurePolicy,
