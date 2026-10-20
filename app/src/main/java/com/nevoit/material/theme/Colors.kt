@@ -3,8 +3,8 @@ package com.nevoit.material.theme
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import com.materialkolor.dynamiccolor.DynamicScheme
 import com.materialkolor.hct.Hct
-import com.materialkolor.scheme.DynamicScheme
 import com.materialkolor.scheme.SchemeTonalSpot
 import com.nevoit.material.theme.utility.purify
 import com.nevoit.material.theme.utility.umamify

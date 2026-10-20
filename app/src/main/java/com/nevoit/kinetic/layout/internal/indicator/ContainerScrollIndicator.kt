@@ -38,5 +38,6 @@ internal fun Modifier.attachKineticScrollIndicator(
         spec = spec,
         reverseScrolling = reverseLayout,
         overscroll = overscroll,
+        overscrollEffect = overscrollEffect,
     )
 }

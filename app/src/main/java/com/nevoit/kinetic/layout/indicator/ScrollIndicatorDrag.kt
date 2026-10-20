@@ -1,6 +1,7 @@
 package com.nevoit.kinetic.layout.indicator
 
 import androidx.compose.foundation.MutatePriority
+import androidx.compose.foundation.OverscrollEffect
 import androidx.compose.foundation.ScrollIndicatorState
 import androidx.compose.foundation.gestures.ScrollableState
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -12,16 +13,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.Velocity
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Mutable only at gesture boundaries. Ownership prevents an old cancellation resetting a new drag. */
 internal class ScrollIndicatorDragState {
@@ -53,7 +58,16 @@ internal class ScrollIndicatorDragMapping(private var lastPosition: Float) {
     }
 }
 
-/** Holds the public ScrollableState mutation for the entire drag; no raw-delta bypass or release fling. */
+/**
+ * Holds the public ScrollableState mutation for the entire drag. No raw-delta bypass and no
+ * release fling, except the release that lets [overscrollEffect] spring the stretch back.
+ *
+ * With an [overscrollEffect] the delta goes through it instead of straight into `scrollBy`, so a
+ * bar drag keeps pulling past either end exactly like a finger would: whatever the content cannot
+ * take becomes stretch. [reverse] is the same flag that maps the pointer onto the bar, and the
+ * framework's own `reverseDirection` is its negation, so it also converts between the two delta
+ * spaces.
+ */
 internal suspend fun runScrollIndicatorDrag(
     state: ScrollableState,
     positions: ReceiveChannel<Float>,
@@ -61,6 +75,8 @@ internal suspend fun runScrollIndicatorDrag(
     metrics: () -> ScrollIndicatorState?,
     track: () -> Float,
     reverse: () -> Boolean,
+    vertical: Boolean,
+    overscrollEffect: OverscrollEffect?,
     onStarted: () -> Unit,
     onFinished: () -> Unit,
 ) {
@@ -74,18 +90,48 @@ internal suspend fun runScrollIndicatorDrag(
                 val current = metrics()
                 val delta = mapping.delta(position, current?.contentSize ?: Int.MAX_VALUE,
                     current?.viewportSize ?: Int.MAX_VALUE, track(), reverse())
-                if (delta != 0f) scrollBy(delta)
+                if (delta == 0f) continue
+                if (overscrollEffect == null) {
+                    scrollBy(delta)
+                    continue
+                }
+                // applyToScroll takes the gesture's own direction, which is the opposite of the
+                // bar's: dragging the bar down moves the content up, like a finger moving up.
+                val flip = if (reverse()) 1f else -1f
+                overscrollEffect.applyToScroll(
+                    offsetOf(delta * flip, vertical),
+                    NestedScrollSource.UserInput,
+                ) { available ->
+                    val consumed = scrollBy(axisValue(available, vertical) * flip)
+                    offsetOf(consumed * flip, vertical)
+                }
             }
         }
     } finally {
         if (started) onFinished()
+        // Release outside the mutation: the spring must not block the next scroll. Runs on a
+        // cancelled drag too, so an interrupted stretch cannot outlive the gesture.
+        if (started && overscrollEffect != null) {
+            withContext(NonCancellable) {
+                overscrollEffect.applyToFling(Velocity.Zero) { Velocity.Zero }
+            }
+        }
     }
 }
+
+private fun offsetOf(value: Float, vertical: Boolean): Offset =
+    if (vertical) Offset(0f, value) else Offset(value, 0f)
+
+private fun axisValue(offset: Offset, vertical: Boolean): Float =
+    if (vertical) offset.y else offset.x
 
 /**
  * Reserve only the visible bar (plus [ScrollIndicatorSpec.dragHitSlop]) at the Initial pass, so the
  * item under the finger never also clicks. Below the long-press threshold the press is handed back
  * to the list's own drag. After activation the ScrollableState mutation is owned until release.
+ *
+ * [overscrollEffect] is the container's own effect: when supplied, dragging the bar past either end
+ * stretches the content instead of stopping dead.
  */
 internal fun Modifier.dragKineticScrollIndicator(
     state: ScrollableState,
@@ -97,10 +143,11 @@ internal fun Modifier.dragKineticScrollIndicator(
     expansion: () -> Float,
     alpha: () -> Float,
     overscroll: () -> Float,
+    overscrollEffect: OverscrollEffect?,
     reverseScrolling: () -> Boolean,
     haptic: HapticFeedback,
     onDraggingChanged: (Boolean) -> Unit,
-): Modifier = pointerInput(state, metrics, vertical, rtl, spec) {
+): Modifier = pointerInput(state, metrics, vertical, rtl, spec, overscrollEffect) {
     val direction = if (rtl) LayoutDirection.Rtl else LayoutDirection.Ltr
     val insets = spec.resolveInsets(this, direction, vertical)
     val left = insets.left
@@ -151,7 +198,8 @@ internal fun Modifier.dragKineticScrollIndicator(
             val token = Any()
             val worker = workerScope.launch(start = CoroutineStart.UNDISPATCHED) {
                 runScrollIndicatorDrag(state, positions, axis(press.position), { metrics },
-                    { track() }, { (!vertical && rtl) xor reverseScrolling() },
+                    { track() }, { (!vertical && rtl) xor reverseScrolling() }, vertical,
+                    overscrollEffect,
                     onStarted = {
                         dragState.start(token)
                         onDraggingChanged(true)

@@ -4,6 +4,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.OverscrollEffect
 import androidx.compose.foundation.ScrollIndicatorState
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.ScrollableState
@@ -157,6 +158,9 @@ fun Modifier.drawKineticScrollIndicator(
  *
  * [reverseScrolling] is auto-detected for the four lazy states; pass an explicit value for a custom
  * ScrollableState whose positive deltas decrease the normalized offset.
+ *
+ * [overscrollEffect] is the one the container scrolls with. Passing it makes a bar drag behave like
+ * a finger: past either end the content keeps stretching instead of the drag hitting a wall.
  */
 @Composable
 fun Modifier.kineticScrollIndicator(
@@ -165,6 +169,7 @@ fun Modifier.kineticScrollIndicator(
     spec: ScrollIndicatorSpec = ScrollIndicatorSpec.Default,
     reverseScrolling: Boolean? = null,
     overscroll: () -> Float = { 0f },
+    overscrollEffect: OverscrollEffect? = null,
     onDraggingChanged: (Boolean) -> Unit = {},
 ): Modifier {
     val dragState = remember(state) { ScrollIndicatorDragState() }
@@ -198,6 +203,7 @@ fun Modifier.kineticScrollIndicator(
         expansion = { expansion.value },
         alpha = { alpha.value },
         overscroll = { latestOverscroll() },
+        overscrollEffect = overscrollEffect,
         reverseScrolling = { latestReverse ?: defaultReverseScrolling(state) },
         haptic = haptic,
         onDraggingChanged = { latestDragging(it) },
