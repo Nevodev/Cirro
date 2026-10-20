@@ -40,14 +40,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import coil3.compose.AsyncImage
-import com.materialkolor.hct.Hct
 import com.nevoit.cirro.data.AccountRepository
 import com.nevoit.cirro.data.LibraryRepository
 import com.nevoit.cirro.data.model.CollectionKind
@@ -86,8 +84,7 @@ import com.nevoit.material.navigation.shape.clipShape
 import com.nevoit.material.navigation.shape.deviceCornerShape
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.local.ProvideContentColor
-import com.nevoit.material.theme.materialColorsFromSeed
-import com.nevoit.material.theme.rememberSystemSeedColor
+import com.nevoit.material.theme.paletteColors
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
@@ -265,8 +262,7 @@ fun BoxScope.Main() {
     } else hintedBarSeed
     val barDark = artistPage || barSeed?.dark == true || MaterialTheme.darkTheme
     val barColors = if (artistPage && !MaterialTheme.darkTheme) {
-        val seedColor = rememberSystemSeedColor()
-        remember(seedColor) { materialColorsFromSeed(seedColor, isDark = true) }
+        remember { paletteColors(isDark = true) }
     } else MaterialTheme.colors
 
     fun barTone(darkTone: Int, lightTone: Int): Color? =
@@ -281,16 +277,26 @@ fun BoxScope.Main() {
         animationSpec = tween(durationMillis = 400),
         label = "barContainer",
     )
-    val menuActionTone = if (barDark) MenuActionToneDark else MenuActionToneLight
-    val themePrimary = barColors.primary
-    val menuActionFallback = remember(themePrimary, menuActionTone) {
-        val hct = Hct.fromInt(themePrimary.toArgb())
-        Color(Hct.from(hct.hue, hct.chroma, menuActionTone.toDouble()).toInt())
-    }
+    // 弹出菜单是浮起来的一层，默认底色走 elevatedCardBackground（深色下比卡片再亮一档）；
+    // 有封面种子时仍吃底栏那档 tone。
+    val menuContainerColor = animateColorAsState(
+        targetValue = barTone(BarToneDark, BarToneLight)
+            ?: barColors.elevatedCardBackground,
+        animationSpec = tween(durationMillis = 400),
+        label = "menuContainer",
+    )
+    // 菜单顶部三颗按钮：底色/前景都跟背景走，有种子时按 tone 档拉开。
     val menuActionContainerColor = animateColorAsState(
-        targetValue = barTone(MenuActionToneDark, MenuActionToneLight) ?: menuActionFallback,
+        targetValue = barTone(MenuActionToneDark, MenuActionToneLight)
+            ?: barColors.menuActionBackground,
         animationSpec = tween(durationMillis = 400),
         label = "menuActionContainer",
+    )
+    val menuActionContentColor = animateColorAsState(
+        targetValue = barTone(MiniContentToneDark, MiniContentToneLight)
+            ?: barColors.onMenuAction,
+        animationSpec = tween(durationMillis = 400),
+        label = "menuActionContent",
     )
     val barIndicatorColor = animateColorAsState(
         targetValue = barTone(BarIndicatorToneDark, BarIndicatorToneLight)
@@ -335,10 +341,11 @@ fun BoxScope.Main() {
 
     BottomPopupMenuHost(
         modifier = Modifier.fillMaxSize(),
-        containerColor = rememberColorProducer(barContainerColor),
+        containerColor = rememberColorProducer(menuContainerColor),
         contentColor = rememberColorProducer(miniContentColor),
         contentVariantColor = rememberColorProducer(miniVariantColor),
         actionContainerColor = rememberColorProducer(menuActionContainerColor),
+        actionContentColor = rememberColorProducer(menuActionContentColor),
     ) {
         NavigationHost(
             navigator = navigator,
@@ -595,7 +602,7 @@ private fun BoxScope.MainTabs(
             .fillMaxWidth()
             .height(48.dp)
     ) {
-        ProvideContentColor(MaterialTheme.colors.onSecondaryContainer) {
+        ProvideContentColor(MaterialTheme.colors.onIconButton) {
             Row(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
@@ -604,14 +611,14 @@ private fun BoxScope.MainTabs(
                     modifier = Modifier
                         .clip(CircleShape)
                         .size(48.dp)
-                        .background(MaterialTheme.colors.secondaryContainer),
+                        .background(MaterialTheme.colors.iconButtonBackground),
                     contentAlignment = Alignment.Center
                 ) {
                     val avatarUrl = (session as? Session.LoggedIn)?.profile?.avatarUrl
                     if (avatarUrl.isNullOrEmpty()) {
                         Icon(
                             painter = painterResource(R.drawable.person),
-                            tint = MaterialTheme.colors.onSecondaryContainer,
+                            tint = MaterialTheme.colors.onIconButton,
                             contentDescription = "我的"
                         )
                     } else {
@@ -628,7 +635,7 @@ private fun BoxScope.MainTabs(
                     modifier = Modifier
                         .clip(CircleShape)
                         .size(48.dp)
-                        .background(MaterialTheme.colors.secondaryContainer)
+                        .background(MaterialTheme.colors.iconButtonBackground)
                         .clickable {
                             context.startActivity(
                                 Intent(context, AppleMusicLoginActivity::class.java)

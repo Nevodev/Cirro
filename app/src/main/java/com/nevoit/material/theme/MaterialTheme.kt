@@ -4,7 +4,6 @@ import androidx.compose.foundation.LocalIndication
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
-import androidx.compose.ui.graphics.Color
 import com.nevoit.kinetic.layout.indicator.LocalScrollIndicatorColor
 import com.nevoit.material.core.interaction.DimIndication
 import com.nevoit.material.theme.local.LocalColors
@@ -27,22 +26,11 @@ object MaterialTheme {
     val darkTheme: Boolean
         @Composable get() = LocalDarkTheme.current
 
-    /**
-     * Applies the theme: one seed colour in, the whole palette out.
-     *
-     * The palette is generated from [seedColor] — by default the system accent, see
-     * [rememberSystemSeedColor] — so the app follows the device theme rather than shipping colours of
-     * its own. Everything downstream reads it through [colors], including the components in
-     * `com.nevoit.material.core.component`. Passing [colors] explicitly overrides the generator,
-     * which keeps a preview or a test able to pin colours without replacing it.
-     */
+    // Fixed palette from [paletteColors]; pass [colors] to pin a different one.
     @Composable
     operator fun invoke(
         darkTheme: Boolean = resolveDarkTheme(ThemeMode.SYSTEM),
-        seedColor: Color = rememberSystemSeedColor(),
-        colors: MaterialColors = remember(seedColor, darkTheme) {
-            materialColorsFromSeed(seedColor, darkTheme)
-        },
+        colors: MaterialColors = remember(darkTheme) { paletteColors(darkTheme) },
         specs: MaterialSpecs = MaterialSpecsStandard,
         type: MaterialType = MaterialTypeStandard,
         content: @Composable () -> Unit

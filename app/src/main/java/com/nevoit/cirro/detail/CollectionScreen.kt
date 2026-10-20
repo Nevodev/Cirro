@@ -397,14 +397,14 @@ private fun CollectionScreen(
 
     val circleColor by animateColorAsState(
         targetValue = poleTone(CircleToneDark, CircleToneLight)
-            ?: MaterialTheme.colors.secondaryContainer,
+            ?: MaterialTheme.colors.iconButtonBackground,
         animationSpec = tween(durationMillis = 500),
         label = "circleColor",
     )
 
     val circleIconColor by animateColorAsState(
         targetValue = poleTone(CircleIconToneDark, CircleIconToneLight)
-            ?: MaterialTheme.colors.onSecondaryContainer,
+            ?: MaterialTheme.colors.onIconButton,
         animationSpec = tween(durationMillis = 500),
         label = "circleIcon",
     )

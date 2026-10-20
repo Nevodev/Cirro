@@ -76,8 +76,8 @@ internal fun BoxScope.LibraryBackButton(onBack: () -> Unit) {
         CircleIconButton(
             iconRes = R.drawable.chevron_left_nav,
             label = "返回资料库",
-            background = MaterialTheme.colors.secondaryContainer,
-            tint = MaterialTheme.colors.onSecondaryContainer,
+            background = MaterialTheme.colors.iconButtonBackground,
+            tint = MaterialTheme.colors.onIconButton,
             onClick = onBack,
         )
     }

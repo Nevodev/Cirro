@@ -2,6 +2,7 @@ package com.nevoit.material.theme
 
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.toArgb
 import com.materialkolor.dynamiccolor.DynamicScheme
 import com.materialkolor.hct.Hct
@@ -84,6 +85,23 @@ data class MaterialColors(
     val navigationBarActiveLabel: Color,
     val navigationBarInactiveIcon: Color,
     val navigationBarInactiveLabel: Color,
+
+    // the floating round buttons in the page corners (back, share, more, account)
+    val iconButtonBackground: Color = cardBackground,
+    val onIconButton: Color = primary,
+
+    // filled buttons, split by weight rather than by size: `primary` is the accent fill,
+    // `secondary` is the quiet one that sits on a card and keeps the accent for its glyph
+    val primaryButtonBackground: Color = primary,
+    val onPrimaryButton: Color = onPrimary,
+    val secondaryButtonBackground: Color = cardBackground,
+    val onSecondaryButton: Color = primary,
+
+    // the row of primary actions at the top of the song popup menu (play / like / share).
+    // Opaque on purpose: the bar animates these colours and a translucent start value drags the
+    // alpha through the transition, which reads as mud over a menu that is also animating.
+    val menuActionBackground: Color = secondaryContainer,
+    val onMenuAction: Color = onSecondaryContainer,
 
     val shadow: Color
 )
@@ -190,6 +208,14 @@ fun materialColorsFromScheme(scheme: DynamicScheme, isDark: Boolean): MaterialCo
         navigationBarActiveLabel = Color(scheme.onSurface),
         navigationBarInactiveIcon = Color(scheme.onSurfaceVariant),
         navigationBarInactiveLabel = Color(scheme.onSurfaceVariant),
+        iconButtonBackground = cardBackground,
+        onIconButton = Color(scheme.primary),
+        primaryButtonBackground = Color(scheme.primary),
+        onPrimaryButton = Color(scheme.onPrimary),
+        secondaryButtonBackground = cardBackground,
+        onSecondaryButton = Color(scheme.primary),
+        menuActionBackground = scrimNormal.compositeOver(cardBackgroundElevated),
+        onMenuAction = Color(scheme.primary),
         shadow = Color.Black
     )
 }
@@ -198,9 +224,9 @@ fun materialColorsFromScheme(scheme: DynamicScheme, isDark: Boolean): MaterialCo
  * What the composition locals fall back to when a component is read outside [MaterialTheme].
  *
  * The vendored components take their colours from `compositionLocalOf` rather than from parameters,
- * and their defaults cannot be `null`, so they need some complete palette. Generating it from the
- * same baseline seed the theme falls back to keeps the answer consistent: reaching this value means
- * the theme was not applied, not that a second palette exists.
+ * and their defaults cannot be `null`, so they need some complete palette. Generating it with
+ * [paletteColors] keeps the answer consistent: reaching this value means the theme was not applied,
+ * not that a second palette exists.
  *
  * **Lazy, and that is not a detail.** A top-level `val` is initialised when its file is first touched,
  * and [materialColorsFromSeed] is in this file — so as an eager `val` this generated a whole second
@@ -210,5 +236,5 @@ fun materialColorsFromScheme(scheme: DynamicScheme, isDark: Boolean): MaterialCo
  * really is drawn outside the theme.
  */
 internal val MaterialColorsDefault: MaterialColors by lazy {
-    materialColorsFromSeed(FallbackSeedColor, isDark = false)
+    paletteColors(isDark = false)
 }

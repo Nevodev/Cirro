@@ -52,12 +52,13 @@ private fun LibraryPlaybackButton(
     modifier: Modifier,
 ) {
     val shape = remember { Capsule() }
-    val content = MaterialTheme.colors.onPrimaryContainer
+    val background = MaterialTheme.colors.secondaryButtonBackground
+    val content = MaterialTheme.colors.onSecondaryButton
     Row(
         modifier
             .heightIn(min = 56.dp)
             .clip(shape)
-            .background(MaterialTheme.colors.primaryContainer)
+            .background(background)
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.Center,

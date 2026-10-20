@@ -72,6 +72,7 @@ class BottomPopupMenuScope internal constructor(
     val contentColor: ColorProducer,
     val contentVariantColor: ColorProducer,
     val actionContainerColor: ColorProducer,
+    val actionContentColor: ColorProducer,
 ) {
     fun dismiss() = onDismiss()
 }
@@ -165,7 +166,8 @@ fun BottomPopupMenuHost(
     containerColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.elevatedCardBackground),
     contentColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.content),
     contentVariantColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.contentVariant),
-    actionContainerColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.secondaryContainer),
+    actionContainerColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.menuActionBackground),
+    actionContentColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.onMenuAction),
     content: @Composable BoxScope.() -> Unit,
 ) {
     val state = remember { BottomPopupMenuHostState() }
@@ -186,6 +188,7 @@ fun BottomPopupMenuHost(
                         contentColor = contentColor,
                         contentVariantColor = contentVariantColor,
                         actionContainerColor = actionContainerColor,
+                        actionContentColor = actionContentColor,
                         onDismiss = { state.dismiss(request.owner) },
                         onClosed = { state.finishDismiss(request) },
                     )
@@ -204,6 +207,7 @@ private fun BottomPopupMenuLayer(
     contentColor: ColorProducer,
     contentVariantColor: ColorProducer,
     actionContainerColor: ColorProducer,
+    actionContentColor: ColorProducer,
     onDismiss: () -> Unit,
     onClosed: () -> Unit,
 ) {
@@ -215,10 +219,24 @@ private fun BottomPopupMenuLayer(
     var viewportSize by remember { mutableStateOf(IntSize.Zero) }
     var viewportPosition by remember { mutableStateOf(Offset.Zero) }
 
-    val menuScope = remember(onDismiss, contentColor, contentVariantColor, actionContainerColor) {
-        BottomPopupMenuScope(onDismiss, contentColor, contentVariantColor, actionContainerColor)
+    val menuScope = remember(
+        onDismiss,
+        contentColor,
+        contentVariantColor,
+        actionContainerColor,
+        actionContentColor,
+    ) {
+        BottomPopupMenuScope(
+            onDismiss,
+            contentColor,
+            contentVariantColor,
+            actionContainerColor,
+            actionContentColor,
+        )
     }
-    LaunchedEffect(expanded, menuSize) {
+    // Keyed on "has a size" rather than on the size itself: the content can change size while the
+    // menu closes, and re-keying here would cancel and relaunch the exit animation mid-flight.
+    LaunchedEffect(expanded, menuSize != IntSize.Zero) {
         if (menuSize == IntSize.Zero) {
             if (!expanded) onClosed()
             return@LaunchedEffect
@@ -294,7 +312,7 @@ private fun BottomPopupMenuLayer(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
-                        .onSizeChanged { menuSize = it }
+                        .onSizeChanged { if (expanded) menuSize = it }
                         .graphicsLayer {
                             val scale = scaleProgress.value
                             val translation = bottomPopupMenuTranslation(
@@ -345,7 +363,18 @@ private fun BottomPopupMenuLayer(
                     },
                 ) { measurables, constraints ->
                     val menu = measurables.single().measure(constraints)
-                    layout(menu.width, menu.height) {
+                    // The exit draws the snapshot recorded while expanded, so the node has to report
+                    // that snapshot's size as well: measuring the live content can give a different
+                    // height (a like resolving, a submenu collapsing on the closing frame) and
+                    // `drawLayer` anchors at the top-left, so the excess shows up as a blank strip
+                    // at the bottom. Unplaced children cannot intercept taps — that is exactly why
+                    // the exit never places them — so nothing is lost by ignoring the measured size.
+                    val snapshot = menuLayer.size
+                    val useSnapshot = !expanded && snapshot.width > 0
+                    layout(
+                        width = if (useSnapshot) snapshot.width else menu.width,
+                        height = if (useSnapshot) snapshot.height else menu.height,
+                    ) {
                         // Exit keeps the recorded drawing, but unplaced children cannot intercept taps.
                         if (expanded) menu.place(0, 0)
                     }

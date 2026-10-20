@@ -157,7 +157,7 @@ fun BottomPopupMenuScope.SongMenuContent(
                 SongMenuAction(
                     "播放",
                     R.drawable.play,
-                    contentColor,
+                    actionContentColor,
                     backgroundColor = actionContainerColor
                 ) {
                     onPlay()
@@ -166,7 +166,7 @@ fun BottomPopupMenuScope.SongMenuContent(
                 SongMenuAction(
                     text = if (liked == true) "取消喜爱" else "喜爱",
                     icon = if (liked == true) R.drawable.star_fill else R.drawable.star,
-                    color = contentColor,
+                    color = actionContentColor,
                     backgroundColor = actionContainerColor,
                     selected = liked == true,
                     enabled = state.pendingLike == null && (userId == null || knownLike != null)
@@ -174,7 +174,7 @@ fun BottomPopupMenuScope.SongMenuContent(
                 SongMenuAction(
                     "分享",
                     R.drawable.share,
-                    contentColor,
+                    actionContentColor,
                     backgroundColor = actionContainerColor
                 ) {
                     onShare()

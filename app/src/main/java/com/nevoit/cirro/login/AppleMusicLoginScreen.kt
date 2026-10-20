@@ -229,7 +229,7 @@ private fun LoadingPanel(progress: () -> Float) {
 
 @Composable
 private fun BoxScope.CloseButton(onClick: () -> Unit) {
-    ProvideContentColor(MaterialTheme.colors.onSecondaryContainer) {
+    ProvideContentColor(MaterialTheme.colors.onIconButton) {
         Box(
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -237,13 +237,13 @@ private fun BoxScope.CloseButton(onClick: () -> Unit) {
                 .padding(12.dp)
                 .clip(CircleShape)
                 .size(48.dp)
-                .background(MaterialTheme.colors.secondaryContainer)
+                .background(MaterialTheme.colors.iconButtonBackground)
                 .clickable(onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 painter = painterResource(R.drawable.chevron_left_nav),
-                tint = MaterialTheme.colors.onSecondaryContainer,
+                tint = MaterialTheme.colors.onIconButton,
                 contentDescription = "返回",
                 modifier = Modifier.size(22.dp),
             )

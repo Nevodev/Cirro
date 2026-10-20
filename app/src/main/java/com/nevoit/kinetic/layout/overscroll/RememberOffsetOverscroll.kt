@@ -42,7 +42,7 @@ interface OffsetOverscrollBinding {
 fun rememberOffsetOverscrollEffect(
     state: LazyListState,
     animationSpec: AnimationSpec<Float> = OffsetOverscrollEffect.DefaultAnimationSpec,
-    maxFraction: Float = 0.65f,
+    maxFraction: Float = 0.55f,
 ): OffsetOverscrollEffect = rememberOffsetOverscrollEffect(remember(state) {
     object : OffsetOverscrollBinding {
         override val state: ScrollableState = state
@@ -59,7 +59,7 @@ fun rememberOffsetOverscrollEffect(
 fun rememberOffsetOverscrollEffect(
     state: LazyGridState,
     animationSpec: AnimationSpec<Float> = OffsetOverscrollEffect.DefaultAnimationSpec,
-    maxFraction: Float = 0.65f,
+    maxFraction: Float = 0.55f,
 ): OffsetOverscrollEffect = rememberOffsetOverscrollEffect(remember(state) {
     object : OffsetOverscrollBinding {
         override val state: ScrollableState = state
@@ -82,7 +82,7 @@ fun rememberOffsetOverscrollEffect(
 fun rememberOffsetOverscrollEffect(
     state: LazyStaggeredGridState,
     animationSpec: AnimationSpec<Float> = OffsetOverscrollEffect.DefaultAnimationSpec,
-    maxFraction: Float = 0.65f,
+    maxFraction: Float = 0.55f,
 ): OffsetOverscrollEffect = rememberOffsetOverscrollEffect(remember(state) {
     object : OffsetOverscrollBinding {
         override val state: ScrollableState = state
@@ -103,7 +103,7 @@ fun rememberOffsetOverscrollEffect(
 fun rememberOffsetOverscrollEffect(
     state: PagerState,
     animationSpec: AnimationSpec<Float> = OffsetOverscrollEffect.DefaultAnimationSpec,
-    maxFraction: Float = 0.65f,
+    maxFraction: Float = 0.55f,
 ): OffsetOverscrollEffect = rememberOffsetOverscrollEffect(remember(state) {
     object : OffsetOverscrollBinding {
         override val state: ScrollableState = state

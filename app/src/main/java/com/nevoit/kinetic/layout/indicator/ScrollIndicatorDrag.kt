@@ -27,6 +27,7 @@ import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 
 /** Mutable only at gesture boundaries. Ownership prevents an old cancellation resetting a new drag. */
 internal class ScrollIndicatorDragState {
@@ -41,20 +42,35 @@ internal class ScrollIndicatorDragState {
     }
 }
 
+/** Content pixels a bar movement is worth, plus the pointer pixels that produced it. */
+internal class ScrollIndicatorDragSample(val scroll: Float, val pointer: Float)
+
 /**
  * Translation * contentExtent / indicatorTrackExtent, applied incrementally. Absolute pointer
  * samples may be conflated without losing movement. Changes to estimated content size affect only
  * subsequent movement, never move the content beneath a stationary finger.
  */
 internal class ScrollIndicatorDragMapping(private var lastPosition: Float) {
-    fun delta(position: Float, content: Int, viewport: Int, track: Float, reverse: Boolean): Float {
+    /** null when the sample cannot be used at all; [ScrollIndicatorDragSample.scroll] is 0 when there is nothing to scroll. */
+    fun sample(
+        position: Float,
+        content: Int,
+        viewport: Int,
+        track: Float,
+        reverse: Boolean,
+    ): ScrollIndicatorDragSample? {
         val previous = lastPosition
         lastPosition = position
-        if (!position.isFinite() || !previous.isFinite() || content == Int.MAX_VALUE ||
-            viewport == Int.MAX_VALUE || viewport <= 0 || content <= viewport ||
-            !track.isFinite() || track <= 0f) return 0f
-        val result = (position.toDouble() - previous) * content / track * if (reverse) -1 else 1
-        return result.toFloat().takeIf { it.isFinite() } ?: 0f
+        if (!position.isFinite() || !previous.isFinite()) return null
+        val pointer = position - previous
+        if (pointer == 0f) return null
+        // No usable metrics yet: drop the sample instead of turning it into stretch.
+        if (content == Int.MAX_VALUE || viewport == Int.MAX_VALUE || viewport <= 0 ||
+            !track.isFinite() || track <= 0f) return null
+        // Short content has nothing to scroll, so the whole gesture belongs to the overscroll.
+        if (content <= viewport) return ScrollIndicatorDragSample(0f, pointer)
+        val result = (pointer.toDouble() * content / track * if (reverse) -1 else 1).toFloat()
+        return result.takeIf { it.isFinite() }?.let { ScrollIndicatorDragSample(it, pointer) }
     }
 }
 
@@ -67,6 +83,11 @@ internal class ScrollIndicatorDragMapping(private var lastPosition: Float) {
  * take becomes stretch. [reverse] is the same flag that maps the pointer onto the bar, and the
  * framework's own `reverseDirection` is its negation, so it also converts between the two delta
  * spaces.
+ *
+ * The effect is fed in POINTER pixels, not content pixels: the bar moves `content / track` content
+ * pixels per pointer pixel, so handing it the content delta would scale the stretch by the list
+ * length. `performScroll` does that conversion instead, which keeps one pointer pixel worth one
+ * pointer pixel of stretch at the ends.
  */
 internal suspend fun runScrollIndicatorDrag(
     state: ScrollableState,
@@ -88,22 +109,25 @@ internal suspend fun runScrollIndicatorDrag(
             val mapping = ScrollIndicatorDragMapping(initialPosition)
             for (position in positions) {
                 val current = metrics()
-                val delta = mapping.delta(position, current?.contentSize ?: Int.MAX_VALUE,
-                    current?.viewportSize ?: Int.MAX_VALUE, track(), reverse())
-                if (delta == 0f) continue
+                val sample = mapping.sample(position, current?.contentSize ?: Int.MAX_VALUE,
+                    current?.viewportSize ?: Int.MAX_VALUE, track(), reverse()) ?: continue
                 if (overscrollEffect == null) {
-                    scrollBy(delta)
+                    scrollBy(sample.scroll)
                     continue
                 }
+                // Content pixels per pointer pixel. Zero means there is nothing to scroll at all.
+                val gain = abs(sample.scroll / sample.pointer)
                 // applyToScroll takes the gesture's own direction, which is the opposite of the
                 // bar's: dragging the bar down moves the content up, like a finger moving up.
                 val flip = if (reverse()) 1f else -1f
                 overscrollEffect.applyToScroll(
-                    offsetOf(delta * flip, vertical),
+                    offsetOf(-sample.pointer, vertical),
                     NestedScrollSource.UserInput,
                 ) { available ->
-                    val consumed = scrollBy(axisValue(available, vertical) * flip)
-                    offsetOf(consumed * flip, vertical)
+                    if (gain <= 0f) Offset.Zero else {
+                        val consumed = scrollBy(axisValue(available, vertical) * flip * gain)
+                        offsetOf(consumed * flip / gain, vertical)
+                    }
                 }
             }
         }
