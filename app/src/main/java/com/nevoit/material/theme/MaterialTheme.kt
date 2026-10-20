@@ -5,6 +5,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
+import com.nevoit.kinetic.layout.indicator.LocalScrollIndicatorColor
 import com.nevoit.material.core.interaction.DimIndication
 import com.nevoit.material.theme.local.LocalColors
 import com.nevoit.material.theme.local.LocalContentColor
@@ -52,6 +53,7 @@ object MaterialTheme {
             LocalType provides type,
             LocalTextStyle provides type.body,
             LocalContentColor provides colors.content,
+            LocalScrollIndicatorColor provides colors.content.copy(if (darkTheme) .4f else .2f),
             LocalDarkTheme provides darkTheme,
             LocalIndication provides DimIndication()
         ) {

@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -13,8 +14,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -32,20 +33,20 @@ import com.nevoit.cirro.data.LibraryRepository
 import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.data.model.forSession
 import com.nevoit.cirro.data.model.recentAlbums
-import com.nevoit.cirro.ui.ItemPosition
-import com.nevoit.cirro.ui.roundedShape
 import com.nevoit.cirro.home.LoginCard
 import com.nevoit.cirro.home.SectionTitle
 import com.nevoit.cirro.palette.CoverPalette
+import com.nevoit.cirro.ui.ItemPosition
+import com.nevoit.cirro.ui.roundedShape
 import com.nevoit.kinetic.layout.KineticLazyVerticalGrid
 import com.nevoit.kinetic.layout.overscroll.rememberOffsetOverscrollEffect
-import com.nevoit.material.core.layout.rememberNavigationTailPadding
-import com.nevoit.material.core.layout.rememberOverlayScrollIndicatorSpec
 import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.PageHeader
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
+import com.nevoit.material.core.layout.rememberNavigationTailPadding
+import com.nevoit.material.core.layout.rememberOverlayScrollIndicatorSpec
 import com.nevoit.material.theme.MaterialTheme
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
@@ -80,15 +81,16 @@ fun BoxScope.LibraryRoute(
     LaunchedEffect(recent) { recent.take(24).forEach { palette.prefetch(it.info.cover) } }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refresh() }
 
+    val tailPadding = rememberNavigationTailPadding()
     val gridState = rememberLazyGridState()
     val overscrollEffect = rememberOffsetOverscrollEffect(gridState)
-    val scrollIndicator = rememberOverlayScrollIndicatorSpec(rememberNavigationTailPadding())
+    val scrollIndicator = rememberOverlayScrollIndicatorSpec(tailPadding)
 
     KineticLazyVerticalGrid(
         columns = GridCells.Adaptive(AlbumGridMinSize),
         state = gridState,
         modifier = Modifier.fillMaxSize(),
-        contentPadding = AlbumGridPadding,
+        contentPadding = PaddingValues(start = 10.dp, end = 10.dp, bottom = tailPadding),
         overscrollEffect = overscrollEffect,
         scrollIndicator = scrollIndicator,
     ) {
@@ -185,6 +187,5 @@ fun BoxScope.LibraryRoute(
                 LibraryAlbumGridCard(album, onOpenLibraryAlbum)
             }
         }
-        item(key = "footer", span = { GridItemSpan(maxLineSpan) }) { LibraryFooter() }
     }
 }

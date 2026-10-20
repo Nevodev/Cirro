@@ -17,11 +17,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.nevoit.kinetic.layout.KineticLazyColumn
-import com.nevoit.kinetic.layout.indicator.LocalScrollIndicatorColor
 import com.nevoit.kinetic.layout.indicator.ScrollIndicatorSpec
 import com.nevoit.kinetic.layout.overscroll.OverscrollVisualOffset
 import com.nevoit.kinetic.layout.overscroll.rememberOffsetOverscrollEffect
-import com.nevoit.material.theme.local.LocalContentColor
 
 /**
  * 全站唯一的纵向列表容器。
@@ -61,7 +59,6 @@ fun VerticalStack(
     )
 
     CompositionLocalProvider(
-        LocalScrollIndicatorColor provides LocalContentColor.current.copy(.2f),
         LocalOverscrollVisualOffset provides (effect as? OverscrollVisualOffset),
     ) {
         KineticLazyColumn(

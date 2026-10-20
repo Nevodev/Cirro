@@ -4,6 +4,7 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -45,9 +46,7 @@ import com.nevoit.cirro.home.OpenCollection
 import com.nevoit.cirro.home.Section
 import com.nevoit.cirro.home.dataOrNull
 import com.nevoit.cirro.library.AlbumGridMinSize
-import com.nevoit.cirro.library.AlbumGridPadding
 import com.nevoit.cirro.library.LibraryBackButton
-import com.nevoit.cirro.library.LibraryFooter
 import com.nevoit.cirro.library.LibraryPlaybackButtons
 import com.nevoit.cirro.library.LibrarySongMenuContent
 import com.nevoit.cirro.library.LibraryStatus
@@ -65,14 +64,14 @@ import com.nevoit.cirro.ui.resolvePosition
 import com.nevoit.cirro.ui.roundedShape
 import com.nevoit.kinetic.layout.KineticLazyVerticalGrid
 import com.nevoit.kinetic.layout.overscroll.rememberOffsetOverscrollEffect
-import com.nevoit.material.core.layout.rememberNavigationTailPadding
-import com.nevoit.material.core.layout.rememberOverlayScrollIndicatorSpec
 import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.PageHeader
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
 import com.nevoit.material.core.interaction.DimIndication
 import com.nevoit.material.core.layout.VerticalStack
+import com.nevoit.material.core.layout.rememberNavigationTailPadding
+import com.nevoit.material.core.layout.rememberOverlayScrollIndicatorSpec
 import com.nevoit.material.theme.MaterialTheme
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -339,8 +338,9 @@ private fun BoxScope.AlbumShelf(
     val gridState = rememberLazyGridState()
     val palette = koinInject<CoverPalette>()
 
+    val tailPadding = rememberNavigationTailPadding()
     val overscrollEffect = rememberOffsetOverscrollEffect(gridState)
-    val scrollIndicator = rememberOverlayScrollIndicatorSpec(rememberNavigationTailPadding())
+    val scrollIndicator = rememberOverlayScrollIndicatorSpec(tailPadding)
 
     KineticLazyVerticalGrid(
         state = gridState,
@@ -348,7 +348,7 @@ private fun BoxScope.AlbumShelf(
         modifier = Modifier
             .fillMaxSize()
             .background(background),
-        contentPadding = AlbumGridPadding,
+        contentPadding = PaddingValues(start = 10.dp, end = 10.dp, bottom = tailPadding),
         overscrollEffect = overscrollEffect,
         scrollIndicator = scrollIndicator,
     ) {
@@ -390,7 +390,6 @@ private fun BoxScope.AlbumShelf(
                 VGap(16.dp)
             }
         }
-        item(key = "footer", span = { GridItemSpan(maxLineSpan) }) { LibraryFooter() }
     }
     TopShade(
         color = background,

@@ -76,6 +76,8 @@ import com.nevoit.material.core.component.VGap
 import com.nevoit.material.core.layout.LocalOverscrollVisualOffset
 import com.nevoit.material.core.layout.VerticalStack
 import com.nevoit.material.core.layout.isScrolledPast
+import com.nevoit.material.core.layout.rememberNavigationTailPadding
+import com.nevoit.material.core.layout.rememberOverlayScrollIndicatorSpec
 import com.nevoit.material.core.modifier.smoothGradient
 import com.nevoit.material.navigation.LocalPageTransitionState
 import com.nevoit.material.theme.MaterialTheme
@@ -422,9 +424,16 @@ private fun CollectionScreen(
             .fillMaxSize()
             .background(backgroundColor)
     ) {
+        // 底色跟着封面种子走，可能跟主题反着来（浅色主题 + 深色封面），滚动条得跟这一页的明暗，
+        // 不能只看主题的 content 色。
+        val scrollIndicator = rememberOverlayScrollIndicatorSpec(
+            endPadding = rememberNavigationTailPadding(),
+            color = contentColor.copy(if (dark) .4f else .2f),
+        )
         VerticalStack(
             state = listState,
             modifier = Modifier.fillMaxSize(),
+            scrollIndicator = scrollIndicator,
         ) {
             item(key = "header") {
                 val info = state.info.dataOrNull

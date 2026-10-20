@@ -5,7 +5,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -37,12 +36,10 @@ import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
 import com.nevoit.material.core.interaction.DimIndication
 import com.nevoit.material.core.modifier.thenIf
-import com.nevoit.material.core.utility.NavigationBarSpacer
 import com.nevoit.material.theme.MaterialTheme
 import org.koin.compose.koinInject
 
 internal val AlbumGridMinSize = 140.dp
-internal val AlbumGridPadding = PaddingValues(horizontal = 10.dp)
 
 /**
  * 列表行里的小封面。尺寸和裁剪由调用方给，没图的时候垫一层行底色占位。
@@ -140,13 +137,4 @@ internal fun LibraryStatus(text: String, onClick: (() -> Unit)? = null) {
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 24.dp, vertical = 16.dp)
     )
-}
-
-@Composable
-internal fun LibraryFooter() {
-    Column {
-        VGap(36.dp)
-        VGap(144.dp)
-        NavigationBarSpacer()
-    }
 }

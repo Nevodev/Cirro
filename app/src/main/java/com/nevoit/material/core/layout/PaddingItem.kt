@@ -19,7 +19,16 @@ fun LazyListScope.paddingItem(state: LazyListState) {
                 val lastContentItem =
                     layoutInfo.visibleItemsInfo.lastOrNull { it.contentType !== LazyPaddingItem }
                 val contentBottom = lastContentItem?.let { it.offset + it.size } ?: 0
-                val height = (viewportBottom - contentBottom + 1).fastCoerceAtLeast(0)
+                // Undo the current scroll: the overscroll rebase turns stretch into real scroll,
+                // and feeding that back in grows the filler by 1px on every pull.
+                val scrollOffset = state.firstVisibleItemScrollOffset
+                val hasNaturalScroll =
+                    state.firstVisibleItemIndex > 0 || scrollOffset > MinimumScrollRangePx
+                val height = if (hasNaturalScroll) {
+                    0
+                } else {
+                    viewportBottom - contentBottom - scrollOffset + MinimumScrollRangePx
+                }.fastCoerceAtLeast(0)
                 layout(constraints.maxWidth, height) {}
             }
         )

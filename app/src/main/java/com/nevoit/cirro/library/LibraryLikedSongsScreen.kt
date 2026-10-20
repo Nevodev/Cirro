@@ -1,7 +1,7 @@
 package com.nevoit.cirro.library
 
-import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,8 +17,8 @@ import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.data.model.forSession
 import com.nevoit.cirro.detail.CollectionRoute
-import com.nevoit.cirro.home.OpenCollection
 import com.nevoit.cirro.home.LoginCard
+import com.nevoit.cirro.home.OpenCollection
 import com.nevoit.cirro.ui.BottomShade
 import com.nevoit.kinetic.layout.rememberKineticFlingBehavior
 import com.nevoit.material.core.component.PageHeader
@@ -51,7 +51,9 @@ fun BoxScope.LibraryLikedSongsRoute(
         )
     } else {
         LazyColumn(
-            modifier = Modifier.fillMaxSize().background(MaterialTheme.colors.pageBackground),
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colors.pageBackground),
             flingBehavior = rememberKineticFlingBehavior(),
         ) {
             item(key = "title") {
@@ -69,7 +71,6 @@ fun BoxScope.LibraryLikedSongsRoute(
             } else {
                 item(key = "liked_loading") { LibraryStatus("正在加载喜爱歌曲…") }
             }
-            item(key = "footer") { LibraryFooter() }
         }
         BottomShade(color = MaterialTheme.colors.pageBackground)
         LibraryBackButton(onBack)
