@@ -25,3 +25,4 @@ dependencyResolutionManagement {
 rootProject.name = "Cirro"
 include(":app")
 include(":reorderable")
+include(":macrobenchmark")

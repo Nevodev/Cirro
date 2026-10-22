@@ -80,6 +80,12 @@ android {
                 enable = true
             }
         }
+        create("benchmark") {
+            initWith(getByName("release"))
+            matchingFallbacks += "release"
+            isDebuggable = false
+            signingConfig = signingConfig ?: signingConfigs.getByName("debug")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
@@ -128,6 +134,9 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
+    "benchmarkImplementation"(libs.androidx.compose.runtime.tracing)
+    // Newer Android versions reject the writable native library injected by the test process.
+    "benchmarkImplementation"(libs.androidx.tracing.perfetto.binary)
 }
 
 configurations.configureEach {
