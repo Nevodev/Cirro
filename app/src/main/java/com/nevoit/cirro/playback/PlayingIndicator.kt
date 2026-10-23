@@ -11,6 +11,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,7 +39,7 @@ internal fun rememberIsCurrentSong(songId: Long): Boolean {
 
 @Composable
 internal fun PlayingCoverIndicator(isCurrent: Boolean, modifier: Modifier = Modifier) {
-    val opacity = rememberPlayingOpacity(isCurrent)
+    val opacity = rememberPlayingOpacity(isCurrent) ?: return
     SpectrumCanvas(isCurrent, opacity, Color.White, shadeCover = true, modifier = modifier)
 }
 
@@ -56,20 +57,31 @@ internal fun PlayingTrackNumber(
             text = index.toString(),
             style = style,
             color = color,
-            modifier = Modifier.graphicsLayer { alpha = 1f - opacity() },
+            modifier = if (opacity == null) Modifier else {
+                Modifier.graphicsLayer { alpha = 1f - opacity() }
+            },
         )
-        SpectrumCanvas(
-            isCurrent, opacity, color, shadeCover = false,
-            modifier = Modifier.matchParentSize(),
-        )
+        if (opacity != null) {
+            SpectrumCanvas(
+                isCurrent, opacity, color, shadeCover = false,
+                modifier = Modifier.matchParentSize(),
+            )
+        }
     }
 }
 
 @Composable
-private fun rememberPlayingOpacity(isCurrent: Boolean): () -> Float {
+internal fun rememberPlayingOpacity(isCurrent: Boolean): (() -> Float)? {
+    var retained by remember { mutableStateOf(isCurrent) }
+    if (!isCurrent && !retained) return null
+
     val opacity = remember { Animatable(0f) }
     LaunchedEffect(isCurrent) {
+        // Keep the old indicator through its fade, including a reversal before it finishes.
+        // Ordinary rows never allocate animation or spectrum resources.
+        retained = true
         opacity.animateTo(if (isCurrent) 1f else 0f, tween(200))
+        if (!isCurrent) retained = false
     }
     return remember(opacity) { { opacity.value } }
 }
