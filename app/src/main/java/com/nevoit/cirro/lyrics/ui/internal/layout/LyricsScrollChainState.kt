@@ -39,7 +39,7 @@ internal class LyricsScrollChainState {
     private var glide = false
     private var focus = 0
     private var followBounceFromIndex = -1
-    private val delayedFirstWordExtraBounce = 0.02f
+    private val delayedFirstWordExtraBounce = 0f
     private val delayedFirstWordExtraDurationMillis = 150f
     private var delayedFirstWordStiffness = FloatArray(0)
     private var delayedFirstWordDamping = FloatArray(0)
@@ -86,7 +86,8 @@ internal class LyricsScrollChainState {
                 delayedFirstWordDamping[distance] =
                     (damping[distance] - criticalDamping * delayedFirstWordExtraBounce)
                         .coerceAtLeast(criticalDamping * 0.05f) * frequencyScale
-                couplingGain[distance] = impulseGain(stiffness[distance], damping[distance]) * config.coupling
+                couplingGain[distance] =
+                    impulseGain(stiffness[distance], damping[distance]) * config.coupling
                 delayedFirstWordCouplingGain[distance] = impulseGain(
                     delayedFirstWordStiffness[distance], delayedFirstWordDamping[distance],
                 ) * config.coupling
@@ -211,16 +212,28 @@ internal class LyricsScrollChainState {
             // Energy bounds the free response; the impulse's absolute integral bounds the
             // neighbour's forcing, including future overshoot when displacement is currently zero.
             val response = amplitude(positions[i] - base, velocities[i], rowStiffness) +
-                if (!glide && i > focus && i > first) gain * previousBound else 0.0
+                    if (!glide && i > focus && i > first) gain * previousBound else 0.0
             // moveTo/advance bound scroll displacement by the viewport; layout shifts can
             // temporarily exceed it before the next physics step and must remain retained.
             val bound = minOf(response, maxOf(limit.toDouble(), abs(positions[i] - base)))
             previousBound = bound
             maximum = maxOf(
                 maximum,
-                bound + amplitude(contentOffsets[i].toDouble(), contentVelocities[i], contentSpring.stiffness) +
-                    amplitude(leadingContentOffsets[i].toDouble(), leadingContentVelocities[i], contentSpring.stiffness) +
-                    amplitude(breathingContentOffsets[i].toDouble(), breathingContentVelocities[i], contentSpring.stiffness),
+                bound + amplitude(
+                    contentOffsets[i].toDouble(),
+                    contentVelocities[i],
+                    contentSpring.stiffness
+                ) +
+                        amplitude(
+                            leadingContentOffsets[i].toDouble(),
+                            leadingContentVelocities[i],
+                            contentSpring.stiffness
+                        ) +
+                        amplitude(
+                            breathingContentOffsets[i].toDouble(),
+                            breathingContentVelocities[i],
+                            contentSpring.stiffness
+                        ),
             )
         }
         return ceil(maximum).toInt()

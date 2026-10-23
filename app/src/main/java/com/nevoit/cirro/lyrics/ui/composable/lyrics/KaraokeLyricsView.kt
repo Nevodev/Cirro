@@ -40,12 +40,12 @@ import com.nevoit.cirro.lyrics.ui.LyricsFontFamily
 import com.nevoit.cirro.lyrics.ui.composable.list.LyricsLazyListState
 import com.nevoit.cirro.lyrics.ui.composable.list.LyricsListItem
 import com.nevoit.cirro.lyrics.ui.composable.list.LyricsScrollChain
-import com.nevoit.cirro.lyrics.ui.internal.effects.lyricsEdgeFade
 import com.nevoit.cirro.lyrics.ui.internal.effects.lyricsContentOffset
+import com.nevoit.cirro.lyrics.ui.internal.effects.lyricsEdgeFade
 import com.nevoit.cirro.lyrics.ui.internal.layout.LineHorizontalPaddingDp
 import com.nevoit.cirro.lyrics.ui.internal.layout.LineVerticalPaddingDp
-import com.nevoit.cirro.lyrics.ui.internal.layout.LyricsLazyColumn
 import com.nevoit.cirro.lyrics.ui.internal.layout.LyricsFocusHeightUpdates
+import com.nevoit.cirro.lyrics.ui.internal.layout.LyricsLazyColumn
 import com.nevoit.cirro.lyrics.ui.internal.layout.lyricsAutoScroll
 import com.nevoit.cirro.lyrics.ui.internal.layout.onMeasured
 import com.nevoit.cirro.lyrics.ui.internal.layout.settledHeight
@@ -192,8 +192,10 @@ fun KaraokeLyricsView(
                 sourceIndices.map { index ->
                     val line = scene.lyrics.lines[index]
                     val focusedHeight = line?.settledHeight(true, true, density.density, true) ?: 0f
-                    val unfocusedHeight = line?.settledHeight(true, true, density.density, false) ?: 0f
-                    val minimumHeight = line?.settledHeight(false, false, density.density, false) ?: 0f
+                    val unfocusedHeight =
+                        line?.settledHeight(true, true, density.density, false) ?: 0f
+                    val minimumHeight =
+                        line?.settledHeight(false, false, density.density, false) ?: 0f
                     val focusHeight = (focusedHeight - unfocusedHeight).toInt()
                     val leadingHeight =
                         line?.settledLeadingHeight(true, true, density.density, true)?.toInt() ?: 0
@@ -219,10 +221,10 @@ fun KaraokeLyricsView(
                         breathingHeightPx = breathingHeight,
                         // Exit drawing survives collapsed backing vocals and hidden captions.
                         visualOverflowPx = ceil(focusedHeight - minimumHeight).toInt() + leadingHeight +
-                            if ((index == 0 && timeline.introEnd > 5000) ||
-                                (index > 0 && timeline.interludeEnds[index].toLong() -
-                                    timeline.interludeStarts[index] > 5000)
-                            ) breathingHeightPx else 0,
+                                if ((index == 0 && timeline.introEnd > 5000) ||
+                                    (index > 0 && timeline.interludeEnds[index].toLong() -
+                                            timeline.interludeStarts[index] > 5000)
+                                ) breathingHeightPx else 0,
                         settledHeightPx = {
                             (line?.settledHeight(
                                 translationShown.value,
@@ -239,7 +241,8 @@ fun KaraokeLyricsView(
                 }
             }
         DisposableEffect(listState, listItems, timeline, mapping) {
-            val updates = LyricsFocusHeightUpdates(listItems, { timeline.focus.value }, mapping::itemIndex)
+            val updates =
+                LyricsFocusHeightUpdates(listItems, { timeline.focus.value }, mapping::itemIndex)
             listState.focusHeightUpdates = updates
             onDispose {
                 if (listState.focusHeightUpdates === updates) listState.focusHeightUpdates = null
@@ -304,7 +307,7 @@ fun KaraokeLyricsView(
             val breathingExtent = if (
                 (index == 0 && timeline.introEnd > 5000) ||
                 (index > 0 && timeline.interludeEnds[index].toLong() -
-                    timeline.interludeStarts[index] > 5000)
+                        timeline.interludeStarts[index] > 5000)
             ) breathingHeightPx.toFloat() else 0f
             val focused = index in focus.allIndices
             val distance =

@@ -49,6 +49,37 @@ class LyricsModelAdapterTest {
     }
 
     @Test
+    fun singleInlineLrcSyllableRetainsItsTimingThroughRendering() {
+        val lyrics = LrcLyricsParser.parse(
+            "[00:01.000]<00:01.500>Oh\n[00:03.000]",
+            LyricsSource.LRCLIB,
+        ).getOrThrow()
+        val line = lyrics.lines.single()
+        val rendered = lyrics.toSyncedLyrics(1).lines.single() as KaraokeLine
+
+        assertEquals(SyncLevel.SYLLABLE, lyrics.syncLevel)
+        assertEquals("Oh", line.text)
+        assertEquals(listOf(LyricSyllable("Oh", 1500, 3000)), line.syllables)
+        assertTrue(rendered.hasSyllableTiming)
+        assertEquals(1500, rendered.syllables.single().start)
+        assertEquals(3000, rendered.syllables.single().end)
+    }
+
+    @Test
+    fun singleInlineLrcSyllableDoesNotChangeAdjacentUntimedLines() {
+        val lyrics = LrcLyricsParser.parse(
+            "[00:01.000]Ordinary line\n[00:03.000]<00:03.000>Oh\n[00:05.000]Another line\n[00:07.000]",
+            LyricsSource.LRCLIB,
+        ).getOrThrow()
+        val lines = lyrics.toSyncedLyrics(1).lines.map { it as KaraokeLine }
+
+        assertEquals(SyncLevel.SYLLABLE, lyrics.syncLevel)
+        assertEquals(listOf(false, true, false), lines.map { it.hasSyllableTiming })
+        assertEquals(3000, lines[1].syllables.single().start)
+        assertEquals(5000, lines[1].syllables.single().end)
+    }
+
+    @Test
     fun singleExplicitSyllableRetainsItsTiming() {
         val line = LyricLine(1000, 3000, "Oh", syllables = listOf(LyricSyllable("Oh", 1500, 2500)))
         val rendered = model(line).lines.single() as KaraokeLine

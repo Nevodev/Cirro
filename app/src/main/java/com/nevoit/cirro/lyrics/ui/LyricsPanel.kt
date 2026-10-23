@@ -50,7 +50,9 @@ private const val ColorSettleMs = 120L
  * 取 `private val` 而不是每次组合现算：引用恒定，免得那条 `LaunchedEffect(state, scrollChain)`
  * 因新实例被反复重启。
  */
-private val LyricsScrollSpring = LyricsScrollChain.of(durationMillis = 300f, bounce = 0.3f)
+private val LyricsScrollSpring =
+    LyricsScrollChain.of(durationMillis = 300f, bounce = 0.3f)
+        .copy(distanceFalloff = 0.15f)
 
 /**
  * 歌词面板：把已获取的歌词适配成渲染层模型，交给 `KaraokeLyricsView`。

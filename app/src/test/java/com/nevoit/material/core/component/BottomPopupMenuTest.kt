@@ -1,5 +1,6 @@
 package com.nevoit.material.core.component
 
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.unit.IntSize
@@ -100,5 +101,6 @@ class BottomPopupMenuTest {
         assertEquals(0f, translation.y, 0f)
     }
 
-    private fun request() = BottomPopupMenuRequest(Any(), Offset.Zero, 12.dp, RectangleShape) {}
+    private fun request() =
+        BottomPopupMenuRequest(Any(), Offset.Zero, 12.dp, mutableStateOf(RectangleShape)) {}
 }

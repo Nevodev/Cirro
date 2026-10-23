@@ -94,10 +94,13 @@ object TtmlLyricsParser {
         meta.language = root.attr(NS_XML, "lang") ?: meta.language
 
         val entries = collectLineEntries(root)
-        val lines = assembleLines(entries, meta, sidecar)
+        val lines = assembleLines(
+            entries, meta, sidecar,
+            lineSynced = root.attr(NS_ITUNES, "timing") == "Line",
+        )
 
         val hasSyllables = lines.any { line ->
-            line.syllables.size > 1 || (line.background?.syllables?.size ?: 0) > 1
+            line.syllables.isNotEmpty() || line.background?.syllables?.isNotEmpty() == true
         }
 
         Lyrics(
@@ -136,6 +139,7 @@ object TtmlLyricsParser {
         entries: List<LineEntry>,
         meta: MetaCollector,
         sidecar: Map<String, Sidecar>,
+        lineSynced: Boolean,
     ): List<LyricLine> {
         val lines = mutableListOf<LyricLine>()
 
@@ -144,7 +148,6 @@ object TtmlLyricsParser {
         var lastPersonIsDuet = false
 
         entries.forEachIndexed { index, entry ->
-            val content = parseCommonContent(entry.element)
             val agentId = entry.element.attr(NS_TTM, "agent") ?: AGENT_DEFAULT
             val agentType = meta.agents[agentId]
 
@@ -167,6 +170,8 @@ object TtmlLyricsParser {
             // 🔴 侧车按 itunes:key 对行；缺 key 时造合成 id（见类注释的第 1 条偏离）。
             val id = entry.element.attr(NS_ITUNES, "key") ?: "__line_$index"
             val side = sidecar[id]
+            val content = parseCommonContent(entry.element).withReplacement(side?.replacement?.content)
+            side?.replacement?.language?.let { meta.language = it }
             val sideTranslations = side?.translations ?: emptyList()
             val sideRomanizations = side?.romanizations ?: emptyList()
             val sideBgTranslations = side?.bgTranslations ?: emptyList()
@@ -190,7 +195,7 @@ object TtmlLyricsParser {
                     text = bg.text,
                     startMs = bg.startMs,
                     endMs = bg.endMs,
-                    syllables = toSyllables(bg.words),
+                    syllables = toSyllables(bg.words, lineSynced),
                     translations = bgTranslations.map(::toTranslatedText),
                     romanizations = (bg.romanizations + sideBgRomanizations).map(::toTranslatedText),
                 )
@@ -200,7 +205,7 @@ object TtmlLyricsParser {
                 startMs = content.startMs,
                 endMs = content.endMs,
                 text = content.text,
-                syllables = toSyllables(content.words),
+                syllables = toSyllables(content.words, lineSynced),
                 translations = lineTranslations.map(::toTranslatedText),
                 romanizations = (content.romanizations + sideRomanizations).map(::toTranslatedText),
                 background = background,
@@ -210,15 +215,26 @@ object TtmlLyricsParser {
         return lines
     }
 
-    /**
-     * 音节数量 ≤ 1 时视为**行级同步**，返回空表。
-     *
-     * 行级 TTML（Apple 的 `itunes:timing="Line"`）也是用整行包一个 `<span>` 表达的，
-     * 那种"一个音节"没有逐字信息量，落在模型里应该是 `syllables` 为空。
-     */
-    private fun toSyllables(words: List<Syllable>): List<LyricSyllable> {
-        if (words.size <= 1) return emptyList()
-        return words.map { word ->
+    private fun Content.withReplacement(replacement: Content?): Content {
+        if (replacement == null) return this
+        val replaceMain = replacement.text.isNotEmpty()
+        val localizedWords = if (replaceMain) replacement.words else words
+        val localizedBackground = background?.withReplacement(replacement.background)
+            ?: replacement.background
+        val (start, end) = calculateTimeRange(startMs, endMs, localizedWords, localizedBackground)
+        return copy(
+            text = if (replaceMain) replacement.text else text,
+            startMs = start,
+            endMs = end,
+            words = localizedWords,
+            background = localizedBackground,
+        )
+    }
+
+    /** 整行占位音节不含逐字时间；显式音节即使只有一个也必须保留。 */
+    private fun toSyllables(words: List<Syllable>, lineSynced: Boolean): List<LyricSyllable> {
+        if (lineSynced) return emptyList()
+        return words.filterNot { it.isFallback }.map { word ->
             LyricSyllable(
                 // 尾随空格折进文本，保证 syllables 拼接 == 行文本（见类注释）。
                 text = if (word.endsWithSpace) word.text + " " else word.text,
@@ -292,6 +308,7 @@ object TtmlLyricsParser {
         var ruby: List<LyricRuby>? = null,
         var endsWithSpace: Boolean = false,
         var obscene: Boolean = false,
+        val isFallback: Boolean = false,
     )
 
     /** 附属文本（翻译 / 音译）或背景人声的一段。 */
@@ -596,6 +613,7 @@ object TtmlLyricsParser {
             text = cleanText,
             startMs = if (originalStart > 0) originalStart else calcStart,
             endMs = if (originalEnd > 0) originalEnd else calcEnd,
+            isFallback = true,
         )
     }
 
@@ -604,11 +622,14 @@ object TtmlLyricsParser {
     // -----------------------------------------------------------------------
 
     private class Sidecar {
+        var replacement: Replacement? = null
         val translations = mutableListOf<SubContent>()
         val romanizations = mutableListOf<SubContent>()
         val bgTranslations = mutableListOf<SubContent>()
         val bgRomanizations = mutableListOf<SubContent>()
     }
+
+    private class Replacement(val content: Content, val language: String?)
 
     private class MetaCollector {
         val title = mutableListOf<String>()
@@ -718,14 +739,25 @@ object TtmlLyricsParser {
 
         for (item in items.filter { it.name == itemName }) {
             val language = item.attr(NS_XML, "lang")
+            val isReplacement = containerName == "translations" && item.attr(null, "type") == "replacement"
             val texts = mutableListOf<XElement>()
             item.collectElements(texts)
 
             for (textNode in texts.filter { it.name == "text" }) {
                 val forId = textNode.attr(null, "for") ?: continue
                 val parsed = parseCommonContent(textNode)
-                val pair = extractSubContent(parsed, language, ignoreWords = false)
                 val entry = sidecar.getOrPut(forId) { Sidecar() }
+                // Apple returns the requested localization as replacement, including its timing.
+                // Treating it as a subtitle displays both scripts and loses the localized syllables.
+                if (isReplacement) {
+                    if (entry.replacement == null &&
+                        (parsed.text.isNotEmpty() || parsed.background?.text?.isNotEmpty() == true)
+                    ) {
+                        entry.replacement = Replacement(parsed, language)
+                    }
+                    continue
+                }
+                val pair = extractSubContent(parsed, language, ignoreWords = false)
 
                 pair.main?.let {
                     if (containerName == "translations") {

@@ -1,11 +1,12 @@
 package com.nevoit.cirro.lyrics.ui.composable.lyrics
 
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.indication
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.BlendMode
@@ -15,9 +16,16 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.kyant.shapes.RoundedRectangle
 import com.nevoit.cirro.lyrics.ui.internal.effects.lyricsVisualLayer
+import com.nevoit.cirro.lyrics.ui.internal.interaction.detectLyricsLineGestures
 import com.nevoit.material.core.animation.rememberPressAnimatable
 import com.nevoit.material.core.interaction.DimIndication
 import com.nevoit.material.theme.tokens.Springs
@@ -64,6 +72,9 @@ fun LyricsLineItem(
         interrupt = true,
         minPressMillis = 100L
     )
+    val onClick by rememberUpdatedState(onLineClicked)
+    val onLongClick by rememberUpdatedState(onLinePressed)
+    val hapticFeedback = LocalHapticFeedback.current
 
     Box(
         modifier =
@@ -72,20 +83,9 @@ fun LyricsLineItem(
                 .lyricsVisualLayer(visualHeight, verticalOverflow) {
                     scaleX = scaleState
                     scaleY = scaleState
-                    alpha = alphaState
                     transformOrigin = TransformOrigin(if (isRightAligned) 1f else 0f, 1f)
                     this.blendMode = blendMode
                     compositingStrategy = CompositingStrategy.Auto
-
-                    val radius = blurRadius()
-                    renderEffect =
-                        if (radius > 0f) {
-                            BlurEffect(
-                                radiusX = radius,
-                                radiusY = radius,
-                                edgeTreatment = TileMode.Clamp,
-                            )
-                        } else null
                 }
                 .graphicsLayer {
                     scaleX = press.progress.value
@@ -98,13 +98,51 @@ fun LyricsLineItem(
                 Modifier
                     .matchParentSize()
                     .clip(RoundedRectangle(20.dp))
-                    .combinedClickable(
-                        onClick = onLineClicked,
-                        onLongClick = onLinePressed,
+                    .indication(
                         interactionSource = press.interactionSource,
-                        indication = DimIndication(color = Color.White)
+                        indication = DimIndication(
+                            color = Color.White,
+                            finishPressOnRelease = true,
+                            maxAlpha = 0.05f
+                        )
                     )
+                    .pointerInput(press.interactionSource, hapticFeedback) {
+                        detectLyricsLineGestures(
+                            interactionSource = press.interactionSource,
+                            onTap = { onClick() },
+                            onLongPress = {
+                                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onLongClick()
+                            },
+                        )
+                    }
+                    .semantics {
+                        onClick {
+                            onClick()
+                            true
+                        }
+                        onLongClick {
+                            onLongClick()
+                            true
+                        }
+                    }
             )
-        content()
+        // Text focus effects must not change the opacity or blur of the sibling press indication.
+        Box(
+            Modifier.lyricsVisualLayer(visualHeight, verticalOverflow) {
+                alpha = alphaState
+                val radius = blurRadius()
+                renderEffect =
+                    if (radius > 0f) {
+                        BlurEffect(
+                            radiusX = radius,
+                            radiusY = radius,
+                            edgeTreatment = TileMode.Clamp,
+                        )
+                    } else null
+            }
+        ) {
+            content()
+        }
     }
 }

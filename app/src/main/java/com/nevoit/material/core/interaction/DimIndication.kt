@@ -1,6 +1,7 @@
 package com.nevoit.material.core.interaction
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.IndicationNodeFactory
 import androidx.compose.foundation.interaction.InteractionSource
@@ -31,9 +32,13 @@ data class DimIndication(
     val color: Color = Color.Unspecified,
     val maxAlpha: Float = DimIndicationDefaults.MAX_ALPHA,
     val shape: Shape = RectangleShape,
+    val finishPressOnRelease: Boolean = false,
+    val releaseSpec: FiniteAnimationSpec<Float> = DimIndicationDefaults.ReleaseOut,
 ) : IndicationNodeFactory {
     override fun create(interactionSource: InteractionSource): DelegatableNode {
-        return DimIndicationNode(interactionSource, color, maxAlpha, shape)
+        return DimIndicationNode(
+            interactionSource, color, maxAlpha, shape, finishPressOnRelease, releaseSpec,
+        )
     }
 }
 
@@ -42,6 +47,8 @@ private class DimIndicationNode(
     private val color: Color,
     maxAlpha: Float,
     private val shape: Shape,
+    private val finishPressOnRelease: Boolean,
+    private val releaseSpec: FiniteAnimationSpec<Float>,
 ) : Modifier.Node(), DrawModifierNode, CompositionLocalConsumerModifierNode {
 
     private val alphaAnimatable = Animatable(0f)
@@ -58,15 +65,16 @@ private class DimIndicationNode(
 
                     is PressInteraction.Release -> {
                         val currentAlpha = alphaAnimatable.value
+                        val releasePeak = if (finishPressOnRelease) targetAlpha else targetAlpha * 0.5f
 
-                        if (currentAlpha < targetAlpha * 0.5f) {
+                        if (currentAlpha < releasePeak) {
                             alphaAnimatable.animateTo(
-                                targetAlpha * 0.5f,
+                                releasePeak,
                                 DimIndicationDefaults.ReleaseOutFast
                             )
                         }
 
-                        alphaAnimatable.animateTo(0f, DimIndicationDefaults.ReleaseOut)
+                        alphaAnimatable.animateTo(0f, releaseSpec)
                     }
 
                     is PressInteraction.Cancel -> {

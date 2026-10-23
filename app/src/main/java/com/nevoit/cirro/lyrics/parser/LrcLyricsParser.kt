@@ -249,7 +249,6 @@ object LrcLyricsParser {
             )
         }
 
-        if (syllables.size <= 1) return plain.toString() to emptyList()
         return plain.toString() to syllables
     }
 
@@ -272,7 +271,7 @@ object LrcLyricsParser {
     }
 
     private fun syncLevelOf(lines: List<LyricLine>): SyncLevel =
-        if (lines.any { it.syllables.size > 1 }) SyncLevel.SYLLABLE else SyncLevel.LINE
+        if (lines.any { it.syllables.isNotEmpty() }) SyncLevel.SYLLABLE else SyncLevel.LINE
 
     private fun metadataOf(tags: Map<String, String>): LyricMetadata = LyricMetadata(
         title = tags["ti"],
