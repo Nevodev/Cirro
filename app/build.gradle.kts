@@ -113,7 +113,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.graphics.shapes)
-    implementation(libs.kyant.shapes)
+    implementation(project(":shapes"))
     implementation(libs.kyant.backdrop)
     implementation(libs.material.color.utilities)
     implementation(libs.serialization.json)
@@ -141,6 +141,9 @@ dependencies {
 
 configurations.configureEach {
     exclude(group = "androidx.compose.material3")
+    // backdrop 传递依赖了 com.kyant0/shapes，这里由本地 :shapes 源码提供
+    exclude(group = "io.github.kyant0", module = "shapes")
+    exclude(group = "io.github.kyant0", module = "shapes-android")
 }
 
 val localSdkDirectory = rootProject.file("local.properties")

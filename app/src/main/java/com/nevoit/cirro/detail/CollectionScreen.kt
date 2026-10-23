@@ -213,6 +213,14 @@ fun CollectionRoute(
         tracksRevealed = true
     }
 
+    // 上面那拍（页面动画 settle → `revealTracks()`）一到就显示，不等曲目数据、也不看行有没有画出来。
+    // `tracksRevealed` 就是这次 settle 的标记，所以头部和曲目是同一个放行点。
+    // 不压这一下的话，info 会在动画中途落地，头部自己先重排一次：作者/元信息多一行、
+    // 收藏那颗按钮整颗冒出来，底对齐的标题跟着往上顶。
+    // `state.info` 自己不被延迟：曲目门禁、简介、作品区、封面兜底都靠它先到先算。
+    // 颜色不在此列——底色和按钮色跟着封面种子走，该什么时候亮就什么时候亮。
+    val headerInfo = if (tracksRevealed) state.info.dataOrNull else null
+
     val songs = state.songs.dataOrNull.orEmpty()
     // 这里是误报，不改
     @Suppress("StateFlowValueCalledInComposition")
@@ -240,6 +248,7 @@ fun CollectionRoute(
 
     CollectionScreen(
         state = state,
+        headerInfo = headerInfo,
         likedPlaylist = likedPlaylist,
         incompleteAlbum = incompleteAlbum,
         onShowFullAlbum = { showFullAlbum = true },
@@ -340,6 +349,8 @@ fun CollectionRoute(
 @Composable
 private fun CollectionScreen(
     state: CollectionViewModel.UiState,
+    /** 头部显示的信息：动画 settle 之后才给，其余用途仍读 [state] 里的 info。 */
+    headerInfo: CollectionInfo?,
     likedPlaylist: Boolean,
     incompleteAlbum: Boolean,
     onShowFullAlbum: () -> Unit,
@@ -452,7 +463,7 @@ private fun CollectionScreen(
                     )
 
                     else -> HeaderBlock(
-                        info = info,
+                        info = headerInfo,
                         likedPlaylist = likedPlaylist,
                         displayTitle = displayTitle,
                         authorHint = authorHint,

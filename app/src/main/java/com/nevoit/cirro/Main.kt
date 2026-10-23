@@ -38,7 +38,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -55,11 +54,11 @@ import com.nevoit.cirro.detail.ArtistShelfRoute
 import com.nevoit.cirro.detail.ArtistShelfSection
 import com.nevoit.cirro.detail.CollectionRoute
 import com.nevoit.cirro.home.HomeRoute
-import com.nevoit.cirro.library.LibraryRoute
+import com.nevoit.cirro.library.LibraryAlbumsRoute
+import com.nevoit.cirro.library.LibraryArtistsRoute
 import com.nevoit.cirro.library.LibraryLikedSongsRoute
 import com.nevoit.cirro.library.LibraryPlaylistsRoute
-import com.nevoit.cirro.library.LibraryArtistsRoute
-import com.nevoit.cirro.library.LibraryAlbumsRoute
+import com.nevoit.cirro.library.LibraryRoute
 import com.nevoit.cirro.library.LibrarySongsRoute
 import com.nevoit.cirro.login.AppleMusicLoginActivity
 import com.nevoit.cirro.palette.CoverPalette
@@ -69,6 +68,7 @@ import com.nevoit.cirro.playback.PlaybackConnection
 import com.nevoit.cirro.playback.PlayerLayer
 import com.nevoit.cirro.playback.PlayerUiController
 import com.nevoit.cirro.ui.BottomShade
+import com.nevoit.material.clip.cornerMaskClip
 import com.nevoit.material.core.component.BottomPopupMenuHost
 import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
@@ -80,7 +80,6 @@ import com.nevoit.material.navigation.CrossfadeNavContainer
 import com.nevoit.material.navigation.NavigationHost
 import com.nevoit.material.navigation.NavigationHostHandle
 import com.nevoit.material.navigation.rememberNavigator
-import com.nevoit.material.navigation.shape.clipShape
 import com.nevoit.material.navigation.shape.deviceCornerShape
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.local.ProvideContentColor
@@ -255,7 +254,8 @@ fun BoxScope.Main() {
         value = coverHint?.let { palette.seed(it) }
     }
     // 常驻 chrome 在导航树外，需要跟艺人页独立的深色主题同步。
-    val artistPage = (currentEntry.destination as? MainDestination.Collection)?.kind == CollectionKind.ARTIST
+    val artistPage =
+        (currentEntry.destination as? MainDestination.Collection)?.kind == CollectionKind.ARTIST
     // null 也表示页内的实际状态，不能重新拿入口封面的旧颜色覆盖它。
     val barSeed = if (artistPage && artistPageSeeds.containsKey(currentEntry.id)) {
         artistPageSeeds[currentEntry.id]
@@ -352,14 +352,7 @@ fun BoxScope.Main() {
             onHostReady = { hostHandle = it },
             transitionModifier = { page, isTransitioning ->
                 page
-                    .graphicsLayer {
-                        compositingStrategy = if (isTransitioning) {
-                            CompositingStrategy.Offscreen
-                        } else {
-                            CompositingStrategy.Auto
-                        }
-                    }
-                    .clipShape(
+                    .cornerMaskClip(
                         shape = navigationPageShape,
                         enabled = isTransitioning,
                     )
@@ -372,10 +365,27 @@ fun BoxScope.Main() {
                         selectedIndex = selectedIndex,
                         onSelect = { selectedIndex = it },
                         onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
-                            navigate(MainDestination.Collection(kind, id, titleHint, coverHint, authorHint = authorHint))
+                            navigate(
+                                MainDestination.Collection(
+                                    kind,
+                                    id,
+                                    titleHint,
+                                    coverHint,
+                                    authorHint = authorHint
+                                )
+                            )
                         },
                         onOpenLibraryAlbum = { id, title, cover, author ->
-                            navigate(MainDestination.Collection(CollectionKind.ALBUM, id, title, cover, libraryAlbum = true, authorHint = author))
+                            navigate(
+                                MainDestination.Collection(
+                                    CollectionKind.ALBUM,
+                                    id,
+                                    title,
+                                    cover,
+                                    libraryAlbum = true,
+                                    authorHint = author
+                                )
+                            )
                         },
                         onOpenLibraryLikedSongs = { navigate(MainDestination.LibraryLikedSongs) },
                         onOpenLibraryPlaylists = { navigate(MainDestination.LibraryPlaylists) },
@@ -389,7 +399,15 @@ fun BoxScope.Main() {
                     session = session,
                     onBack = ::back,
                     onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
-                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint, authorHint = authorHint))
+                        navigate(
+                            MainDestination.Collection(
+                                kind,
+                                id,
+                                titleHint,
+                                coverHint,
+                                authorHint = authorHint
+                            )
+                        )
                     },
                 )
 
@@ -397,7 +415,15 @@ fun BoxScope.Main() {
                     session = session,
                     onBack = ::back,
                     onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
-                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint, authorHint = authorHint))
+                        navigate(
+                            MainDestination.Collection(
+                                kind,
+                                id,
+                                titleHint,
+                                coverHint,
+                                authorHint = authorHint
+                            )
+                        )
                     },
                 )
 
@@ -405,7 +431,15 @@ fun BoxScope.Main() {
                     session = session,
                     onBack = ::back,
                     onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
-                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint, authorHint = authorHint))
+                        navigate(
+                            MainDestination.Collection(
+                                kind,
+                                id,
+                                titleHint,
+                                coverHint,
+                                authorHint = authorHint
+                            )
+                        )
                     },
                 )
 
@@ -413,7 +447,16 @@ fun BoxScope.Main() {
                     session = session,
                     onBack = ::back,
                     onOpenLibraryAlbum = { id, title, cover, author ->
-                        navigate(MainDestination.Collection(CollectionKind.ALBUM, id, title, cover, libraryAlbum = true, authorHint = author))
+                        navigate(
+                            MainDestination.Collection(
+                                CollectionKind.ALBUM,
+                                id,
+                                title,
+                                cover,
+                                libraryAlbum = true,
+                                authorHint = author
+                            )
+                        )
                     },
                 )
 
@@ -421,7 +464,15 @@ fun BoxScope.Main() {
                     session = session,
                     onBack = ::back,
                     onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
-                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint, authorHint = authorHint))
+                        navigate(
+                            MainDestination.Collection(
+                                kind,
+                                id,
+                                titleHint,
+                                coverHint,
+                                authorHint = authorHint
+                            )
+                        )
                     },
                 )
 
@@ -440,7 +491,15 @@ fun BoxScope.Main() {
                             authorHint = destination.authorHint,
                             onBack = ::back,
                             onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
-                                navigate(MainDestination.Collection(kind, id, titleHint, coverHint, authorHint = authorHint))
+                                navigate(
+                                    MainDestination.Collection(
+                                        kind,
+                                        id,
+                                        titleHint,
+                                        coverHint,
+                                        authorHint = authorHint
+                                    )
+                                )
                             },
                             onOpenShelf = { section, artistName ->
                                 navigate(
@@ -465,7 +524,15 @@ fun BoxScope.Main() {
                             libraryAlbum = destination.libraryAlbum,
                             onBack = ::back,
                             onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
-                                navigate(MainDestination.Collection(kind, id, titleHint, coverHint, authorHint = authorHint))
+                                navigate(
+                                    MainDestination.Collection(
+                                        kind,
+                                        id,
+                                        titleHint,
+                                        coverHint,
+                                        authorHint = authorHint
+                                    )
+                                )
                             },
                         )
                     }
@@ -477,7 +544,15 @@ fun BoxScope.Main() {
                     section = destination.section,
                     onBack = ::back,
                     onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
-                        navigate(MainDestination.Collection(kind, id, titleHint, coverHint, authorHint = authorHint))
+                        navigate(
+                            MainDestination.Collection(
+                                kind,
+                                id,
+                                titleHint,
+                                coverHint,
+                                authorHint = authorHint
+                            )
+                        )
                     },
                 )
             }
@@ -586,6 +661,7 @@ private fun BoxScope.MainTabs(
                 onOpenAlbums = onOpenLibraryAlbums,
                 onOpenSongs = onOpenLibrarySongs,
             )
+
             MainDestinations.Search -> {}
         }
     }

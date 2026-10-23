@@ -18,7 +18,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorProducer
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -27,6 +26,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.kyant.shapes.RoundedRectangle
+import com.kyant.shapes.RoundedRectangularShape
 import com.kyant.shapes.UnevenRoundedRectangle
 import com.nevoit.cirro.R
 import com.nevoit.cirro.data.SongLikeRepository
@@ -39,6 +39,7 @@ import com.nevoit.material.core.component.CircleIconButton
 import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.Text
+import com.nevoit.material.core.interaction.DimIndication
 import com.nevoit.material.core.modifier.drawBackground
 import com.nevoit.material.core.utility.rememberColorProducer
 import com.nevoit.material.theme.MaterialTheme
@@ -59,7 +60,7 @@ internal enum class ItemPosition {
     Last,
 }
 
-internal fun ItemPosition.roundedShape(): Shape = when (this) {
+internal fun ItemPosition.roundedShape(): RoundedRectangularShape = when (this) {
     ItemPosition.Single -> RoundedRectangle(20.dp)
     ItemPosition.First -> UnevenRoundedRectangle(20.dp, 20.dp, 8.dp, 8.dp)
     ItemPosition.Middle -> RoundedRectangle(8.dp)
@@ -95,7 +96,7 @@ internal fun TrackRow(
     modifier: Modifier = Modifier,
 ) {
     val shape = position.roundedShape()
-    val liked = if (showStar) rememberIsLiked(song.id) else false
+    val liked = showStar && rememberIsLiked(song.id)
     val playable = song.playable
 
     Box(modifier = modifier.fillMaxWidth()) {
@@ -104,9 +105,13 @@ internal fun TrackRow(
                 .fillMaxWidth()
                 .heightIn(min = 56.dp)
                 .padding(horizontal = 12.dp)
-                .clip(shape)
-                .drawBackground(backgroundColor)
-                .clickable(enabled = playable, onClick = onClick)
+                .drawBackground(backgroundColor, shape)
+                .clickable(
+                    enabled = playable,
+                    onClick = onClick,
+                    interactionSource = null,
+                    indication = DimIndication(shape = shape)
+                )
                 .padding(start = 12.dp)
                 .graphicsLayer { alpha = if (playable) 1f else UnplayableAlpha },
             verticalAlignment = Alignment.CenterVertically,
