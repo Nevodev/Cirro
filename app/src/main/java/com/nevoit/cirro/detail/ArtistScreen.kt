@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -30,6 +31,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -101,11 +103,17 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import org.koin.core.parameter.parametersOf
 
 private val HeaderLogoMaxHeight = 80.dp
+
+private val ArtistHeaderSaver = Saver<MutableState<AppleArtistHeader?>, String>(
+    save = { Json.encodeToString(it.value) },
+    restore = { mutableStateOf(Json.decodeFromString<AppleArtistHeader?>(it)) },
+)
 
 /** 艺人页「歌曲排行」摆几首。 */
 private const val ArtistRankingSize = 5
@@ -141,9 +149,12 @@ fun ArtistRoute(
     }
     val appleArtists = koinInject<AppleArtistRepository>()
     val pageTransition = LocalPageTransitionState.current
-    var artistHeader by remember(id) { mutableStateOf<AppleArtistHeader?>(null) }
-    var showTitleWhileLoading by remember(id) { mutableStateOf(false) }
+    var artistHeader by rememberSaveable(id, saver = ArtistHeaderSaver) {
+        mutableStateOf<AppleArtistHeader?>(null)
+    }
+    var showTitleWhileLoading by rememberSaveable(id) { mutableStateOf(false) }
     LaunchedEffect(viewModel, appleArtists, pageTransition) {
+        if (artistHeader != null) return@LaunchedEffect
         if (kind != CollectionKind.ARTIST) {
             showTitleWhileLoading = true
             return@LaunchedEffect
@@ -174,7 +185,7 @@ fun ArtistRoute(
     val libraryError by libraryRepository.error.collectAsState()
     val session by koinInject<AccountRepository>().session.collectAsState()
     val scope = rememberCoroutineScope()
-    var tracksRevealed by remember(viewModel) { mutableStateOf(false) }
+    var tracksRevealed by rememberSaveable(kind, id) { mutableStateOf(false) }
     var showFullAlbum by rememberSaveable(kind, id) { mutableStateOf(false) }
     val state = remember(
         remoteState,

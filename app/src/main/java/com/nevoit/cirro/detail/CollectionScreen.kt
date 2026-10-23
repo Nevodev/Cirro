@@ -129,7 +129,7 @@ fun CollectionRoute(
     val libraryError by libraryRepository.error.collectAsState()
     val session by koinInject<AccountRepository>().session.collectAsState()
     val scope = rememberCoroutineScope()
-    var tracksRevealed by remember(viewModel) { mutableStateOf(false) }
+    var tracksRevealed by rememberSaveable(kind, id) { mutableStateOf(false) }
     var showFullAlbum by rememberSaveable(kind, id) { mutableStateOf(false) }
     val state = remember(
         remoteState,

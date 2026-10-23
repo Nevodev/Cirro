@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -241,6 +240,10 @@ fun BoxScope.Main() {
             .collect { value = it }
     }
     val artistPageSeeds = remember { mutableStateMapOf<Long, CoverSeed?>() }
+    LaunchedEffect(navigator.backStack) {
+        val retainedIds = navigator.backStack.map { it.id }.toSet()
+        artistPageSeeds.keys.retainAll(retainedIds)
+    }
     val currentEntry = navigator.current
     val coverHint = when (val destination = currentEntry.destination) {
         is MainDestination.Collection -> destination.coverHint
@@ -479,10 +482,6 @@ fun BoxScope.Main() {
                 is MainDestination.Collection -> {
                     if (destination.kind == CollectionKind.ARTIST) {
                         val pageId = entry.id
-                        // 退出动画中仍可能复用原页面，颜色记录须随页面实际销毁再释放。
-                        DisposableEffect(pageId) {
-                            onDispose { artistPageSeeds.remove(pageId) }
-                        }
                         ArtistRoute(
                             kind = destination.kind,
                             id = destination.id,
@@ -511,7 +510,9 @@ fun BoxScope.Main() {
                                 )
                             },
                             onPaletteChanged = { seed ->
-                                artistPageSeeds[pageId] = seed
+                                if (navigator.backStack.any { it.id == pageId }) {
+                                    artistPageSeeds[pageId] = seed
+                                }
                             },
                         )
                     } else {

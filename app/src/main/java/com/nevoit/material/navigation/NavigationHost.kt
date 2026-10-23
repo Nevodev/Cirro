@@ -11,6 +11,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
@@ -97,12 +98,14 @@ val LocalPageTransitionState = staticCompositionLocalOf<PageTransitionState?> { 
 private class PageTransition(
     initialProgress: Float,
     initialUnderlayProgress: Float,
-    val parentEntryId: Long?,
+    parentEntryId: Long?,
     parentLifecycle: Lifecycle,
 ) {
     val progress = Animatable(initialProgress)
     val underlayProgress = Animatable(initialUnderlayProgress)
-    var ready by mutableStateOf(initialProgress == 1f)
+    var parentEntryId by mutableStateOf(parentEntryId)
+    var ready by mutableStateOf(false)
+    var composed = false
     var targetProgress by mutableFloatStateOf(1f)
     val isTransitioning = mutableStateOf(initialProgress != 1f)
     val lifecycleOwner = NavigationPageLifecycleOwner(parentLifecycle)
@@ -112,7 +115,7 @@ private class NavigationPageLifecycleOwner(
     private val parentLifecycle: Lifecycle,
 ) : LifecycleOwner, LifecycleEventObserver {
     private val registry = LifecycleRegistry(this)
-    private var active = true
+    private var maxState = Lifecycle.State.CREATED
 
     override val lifecycle: Lifecycle = registry
 
@@ -125,13 +128,8 @@ private class NavigationPageLifecycleOwner(
         syncState()
     }
 
-    fun deactivate() {
-        active = false
-        syncState()
-    }
-
-    fun activate() {
-        active = true
+    fun moveTo(state: Lifecycle.State) {
+        maxState = state
         syncState()
     }
 
@@ -150,11 +148,7 @@ private class NavigationPageLifecycleOwner(
                 Lifecycle.State.INITIALIZED
             }
 
-            active && parentLifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) -> {
-                Lifecycle.State.STARTED
-            }
-
-            else -> Lifecycle.State.CREATED
+            else -> minOf(parentLifecycle.currentState, maxState)
         }
     }
 }
@@ -173,7 +167,7 @@ class NavigationHostHandle internal constructor(
 }
 
 /**
- * Renders every entry in [navigator] and coordinates page transitions, system back handling,
+ * Renders the current page and pages participating in a transition, coordinating system back,
  * saveable state, lifecycle state, and per-page ViewModel stores.
  *
  * The receiver content is invoked once for each visible page. Use [NavigationScope.destination] to
@@ -220,11 +214,11 @@ fun <D : Any> NavigationHost(
         val stores = pageViewModelStores ?: androidxViewModel<PageViewModelStores>()
         val parentLifecycle = LocalLifecycleOwner.current.lifecycle
         val initialBackStack = remember(navigator) { navigator.backStack }
-        // A plain list in a state holder, not `mutableStateListOf`: the visible set is only ever
+        // A plain list in a state holder, not `mutableStateListOf`: the retained set is only ever
         // replaced wholesale, and `SnapshotStateList` is `android.os.Parcelable` in the Android source
         // set — a supertype a common source set cannot resolve, which is what makes an IDE report
         // "Cannot access 'android.os.Parcelable' which is a supertype of 'SnapshotStateList'".
-        var visibleEntries by remember(navigator) { mutableStateOf(initialBackStack) }
+        var retainedEntries by remember(navigator) { mutableStateOf(initialBackStack) }
         val transitions = remember(navigator, parentLifecycle) {
             mutableMapOf<Long, PageTransition>().apply {
                 initialBackStack.forEachIndexed { index, entry ->
@@ -239,6 +233,17 @@ fun <D : Any> NavigationHost(
         }
         val pageStateHolder = rememberSaveableStateHolder()
 
+        fun entriesToCompose(): List<PageEntry<D>> {
+            val ids = mutableSetOf(navigator.current.id)
+            transitions.forEach { (id, transition) ->
+                if (transition.isTransitioning.value) {
+                    ids += id
+                    transition.parentEntryId?.let { ids += it }
+                }
+            }
+            return retainedEntries.filter { it.id in ids }
+        }
+
         DisposableEffect(transitions) {
             onDispose {
                 transitions.values.forEach { transition ->
@@ -248,30 +253,30 @@ fun <D : Any> NavigationHost(
         }
 
         fun release(entry: PageEntry<D>) {
-            visibleEntries -= entry
+            retainedEntries -= entry
             transitions.remove(entry.id)?.lifecycleOwner?.destroy()
             pageStateHolder.removeState(entry.id)
             stores.remove(entry.id)
         }
 
         fun open(destination: D) {
-            val exitingEntry = visibleEntries.lastOrNull { entry ->
+            val exitingEntry = retainedEntries.lastOrNull { entry ->
                 entry.destination == destination && transitions[entry.id]?.targetProgress == 0f
             }
             if (exitingEntry != null) {
                 val transition = transitions.getValue(exitingEntry.id)
+                transition.parentEntryId = navigator.current.id
                 navigator.reopen(exitingEntry)
-                transition.lifecycleOwner.activate()
                 transition.targetProgress = 1f
                 transition.isTransitioning.value = true
                 // Move the entry back to the top of the draw order.
-                visibleEntries = visibleEntries - exitingEntry + exitingEntry
+                retainedEntries = retainedEntries - exitingEntry + exitingEntry
                 return
             }
             if (navigator.current.destination == destination) return
 
             val parentEntry = navigator.current
-            val interruptedSibling = visibleEntries.asReversed().firstOrNull { candidate ->
+            val interruptedSibling = retainedEntries.asReversed().firstOrNull { candidate ->
                 transitions.getValue(candidate.id).parentEntryId == parentEntry.id
             }
             val initialUnderlayProgress = interruptedSibling?.let { sibling ->
@@ -284,7 +289,7 @@ fun <D : Any> NavigationHost(
                 parentEntryId = parentEntry.id,
                 parentLifecycle = parentLifecycle,
             )
-            visibleEntries += entry
+            retainedEntries += entry
         }
 
         fun closeTop() {
@@ -292,7 +297,17 @@ fun <D : Any> NavigationHost(
             val transition = transitions[entry.id] ?: return
             if (navigator.closeTop(expectedEntryId = entry.id) == null) return
 
-            transition.lifecycleOwner.deactivate()
+            if (!transition.composed) {
+                // A batch pop can cross hidden pages. Keep the actual outgoing UI over the final
+                // destination instead of composing and animating every intermediate page.
+                transitions.values.forEach { candidate ->
+                    if (candidate.parentEntryId == entry.id) {
+                        candidate.parentEntryId = navigator.current.id
+                    }
+                }
+                release(entry)
+                return
+            }
             transition.targetProgress = 0f
             transition.isTransitioning.value = true
         }
@@ -304,6 +319,21 @@ fun <D : Any> NavigationHost(
             )
         }
         LaunchedEffect(hostHandle) { onHostReady(hostHandle) }
+
+        val visibleEntries = entriesToCompose()
+        val visibleEntryIds = visibleEntries.map { it.id }
+        val isTransitioning = transitions.values.any { it.isTransitioning.value }
+        SideEffect {
+            transitions.forEach { (id, transition) ->
+                transition.lifecycleOwner.moveTo(
+                    when {
+                        id !in visibleEntryIds -> Lifecycle.State.CREATED
+                        id == navigator.current.id && !isTransitioning -> Lifecycle.State.RESUMED
+                        else -> Lifecycle.State.STARTED
+                    }
+                )
+            }
+        }
 
         Box(modifier = Modifier.fillMaxSize()) {
             val entryTransitions = visibleEntries.map { entry -> transitions.getValue(entry.id) }
@@ -318,12 +348,25 @@ fun <D : Any> NavigationHost(
 
             visibleEntries.forEachIndexed { index, entry ->
                 key(entry.id) {
+                    val isRoot = entry.id == initialBackStack.first().id
                     val transition = entryTransitions[index]
                     val underlayDriver = underlayDrivers[entry.id]
                     val pageViewModelStoreOwner = stores.owner(entry.id)
 
-                    LaunchedEffect(entry.id, transition.ready, transition.targetProgress) {
-                        if (!transition.ready) return@LaunchedEffect
+                    DisposableEffect(transition) {
+                        transition.composed = true
+                        onDispose {
+                            transition.composed = false
+                            transition.ready = false
+                        }
+                    }
+
+                    LaunchedEffect(entry.id, visibleEntryIds, transition.targetProgress) {
+                        // Both directions must wait for every participating page's current layout.
+                        // A covered page's previous ready signal expires when its UI is disposed.
+                        snapshotFlow {
+                            entriesToCompose().all { transitions.getValue(it.id).ready }
+                        }.first { it }
 
                         val targetProgress = transition.targetProgress
                         if (
@@ -359,11 +402,9 @@ fun <D : Any> NavigationHost(
                         modifier = transitionModifier(
                             Modifier
                                 .fillMaxSize()
-                                .thenIf(index != 0) {
-                                    navigationPageReady { transition.ready = true }
-                                }
+                                .navigationPageReady { transition.ready = true }
                                 .graphicsLayer {
-                                    val ownTranslation = if (index == 0) {
+                                    val ownTranslation = if (isRoot) {
                                         0f
                                     } else {
                                         hostWidthPx * (1f - transition.progress.value)
@@ -376,7 +417,7 @@ fun <D : Any> NavigationHost(
                             transition.isTransitioning.value,
                         ).zIndex(index.toFloat()),
                     ) {
-                        if (index != 0) {
+                        if (!isRoot) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
@@ -406,8 +447,11 @@ fun <D : Any> NavigationHost(
                                     )
                                 },
                             ) {
-                                if (index != 0) {
-                                    BackHandler(onBack = ::closeTop)
+                                if (!isRoot) {
+                                    BackHandler(
+                                        enabled = entry.id == navigator.current.id,
+                                        onBack = ::closeTop,
+                                    )
                                 }
                                 NavigationScope(
                                     entry = entry,
@@ -437,12 +481,8 @@ fun <D : Any> NavigationHost(
 private fun Modifier.navigationPageReady(onReady: () -> Unit): Modifier =
     layout { measurable, constraints ->
         val placeable = measurable.measure(constraints)
-        onReady()
         layout(placeable.width, placeable.height) {
             placeable.place(0, 0)
+            onReady()
         }
     }
-
-private fun Modifier.thenIf(condition: Boolean, block: Modifier.() -> Modifier): Modifier {
-    return if (condition) block() else this
-}
