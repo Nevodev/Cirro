@@ -30,6 +30,9 @@ check(!hasSigningProperties || isSigningConfigured) {
 }
 
 val classicNdkVersion = "28.2.13676358"
+val generatingBaselineProfile = providers.gradleProperty("baselineProfile")
+    .map(String::toBooleanStrict).getOrElse(false)
+val nativeAbis = if (generatingBaselineProfile) listOf("x86_64") else listOf("arm64-v8a")
 
 android {
     namespace = "com.nevoit.cirro"
@@ -45,12 +48,9 @@ android {
         versionCode = 5
         versionName = "1.0"
 
-        // 只出 arm64-v8a。x86_64 那份 `.so` 只服务模拟器，真机装不上也不该打进包 ——
-        // 原生库占 APK 体积的大头，剔掉它等于直接砍掉约一半的原生负载。
-        // `abiFilters` 对 `jniLibs/` 里手工放的预编译 `.so` 同样生效（不只是 ndk 构建产物）。
-        // ⚠️ 要跑 x86_64 模拟器时，把 "x86_64" 加回来。
+        // 模拟器采集显式启用 x86_64，日常构建仍只打包 ARM64 原生库。
         ndk {
-            abiFilters += "arm64-v8a"
+            abiFilters += nativeAbis
         }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -82,6 +82,12 @@ android {
         }
         create("benchmark") {
             initWith(getByName("release"))
+            // 采集源符号规则，交给正式构建的 R8 重写，避免复用采集 APK 的混淆名称。
+            if (generatingBaselineProfile) {
+                optimization {
+                    enable = false
+                }
+            }
             matchingFallbacks += "release"
             isDebuggable = false
             signingConfig = signingConfig ?: signingConfigs.getByName("debug")
@@ -166,12 +172,14 @@ val buildClassicNative = tasks.register<Exec>("buildClassicNative") {
     inputs.file(rootProject.file("classic/Cargo.toml"))
     inputs.file(rootProject.file("classic/Cargo.lock"))
     inputs.dir(rootProject.file("classic/src"))
+    inputs.property("abis", nativeAbis)
     outputs.dir(nativeOutputDirectory)
     environment("ANDROID_NDK_HOME", ndkDirectory.absolutePath)
     commandLine(
-        "cargo", "ndk", "-t", "arm64-v8a", "-o",
-        nativeOutputDirectory.get().asFile.absolutePath,
-        "build", "--release",
+        listOf("cargo", "ndk") + nativeAbis.flatMap { listOf("-t", it) } + listOf(
+            "-o", nativeOutputDirectory.get().asFile.absolutePath,
+            "build", "--release",
+        )
     )
 }
 android.sourceSets["main"].jniLibs.directories.add(nativeOutputDirectory.get().asFile.absolutePath)

@@ -1,3 +1,49 @@
+# 手动采集 Baseline Profile
+
+使用带窗口的 Android 模拟器，登录、点击、滚动和播放全部由人操作。
+采集器只负责启动应用、记录执行路径和导出规则，不会自动操作页面。
+使用 Android API 34 及以上镜像，或可执行 `adb root` 的 Google APIs 镜像；
+低于 API 34 的非 root 镜像会被拒绝，避免采集框架通过卸载重装重置编译状态而丢失登录数据。
+
+在仓库根目录执行，Python 环境和 JDK 要求与下方性能测试相同：
+
+```text
+python tools/manual_baseline_profile.py build
+python tools/manual_baseline_profile.py install
+```
+
+打开模拟器中的 Cirro，手动登录并确认能正常加载歌曲。安装使用覆盖安装，
+签名不兼容时直接失败，不卸载应用或清除数据。连接的手机不会被选中；
+多个模拟器时通过 `--serial` 指定。
+
+然后开始采集：
+
+```text
+python tools/manual_baseline_profile.py record
+```
+
+等终端显示「采集已开始」后，手动访问常用路径，例如资料库、歌单、滚动歌曲列表、
+搜索、播放、展开播放器、歌词和播放队列。采集仅进行一轮，不会重复重启应用；
+开始和结束时框架会停止应用进程，保留登录数据。最长等待 30 分钟，超时按失败处理。
+操作完成后，在另一个终端执行：
+
+```text
+python tools/manual_baseline_profile.py finish
+```
+
+等待 `record` 终端成功结束，它会保留原始日志和规则于
+`macrobenchmark/build/manual-profile/`，并更新 `app/src/main/baseline-prof.txt`。
+只有检测到测试成功和包含应用源符号的非空规则才会更新该文件。
+采集失败时先查看 `instrumentation.txt` 的具体报错；若主机进程被强制结束，
+确认对应 instrumentation 已停止后再删除该目录中的残留 `session.json`。
+
+`build` 显式传入 `-PbaselineProfile=true`：仅此模式启用 x86_64 原生库，
+并关闭 benchmark 的 R8 优化，避免把混淆后的名称当作源符号规则。
+日常构建继续使用 ARM64 和既有优化配置。AGP 会在后续正式构建时读取
+`app/src/main/baseline-prof.txt`，由 R8 重写并打包；不需要把此参数传给正式构建。
+这里生成的是 Baseline Profile，手动浏览的全部页面不会被声明为 Startup Profile。
+生成规则不等于已证明性能收益，启动及交互改善仍需在真机验证。
+
 # 喜爱歌曲 TrackRow 性能测试
 
 测试真实的「资料库 → 喜爱歌曲」页面，不替换数据源，不修改 TrackRow 行为。
