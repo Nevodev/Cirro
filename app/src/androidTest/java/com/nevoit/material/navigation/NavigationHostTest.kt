@@ -149,6 +149,62 @@ class NavigationHostTest {
     }
 
     @Test
+    fun alternatingPagesKeepMovingWhenTheExitingSiblingIsDisposed() {
+        val pages = Pages()
+        show(pages)
+        compose.runOnIdle { pages.scopes.getValue(0).navigate(1) }
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = false
+
+        var outgoing = 1
+        for (incoming in listOf(2, 1, 2)) {
+            compose.runOnIdle { pages.scopes.getValue(outgoing).back() }
+            advanceFrames(6)
+            compose.runOnIdle { pages.scopes.getValue(0).navigate(incoming) }
+            advanceFrames(4)
+
+            var previous = pages.transitions.getValue(incoming).progress.value
+            var lastStep = 0f
+            var removed = false
+            for (frame in 0 until 24) {
+                advanceFrames(1)
+                val progress = pages.transitions.getValue(incoming).progress.value
+                lastStep = progress - previous
+                previous = progress
+                if (outgoing !in pages.composed) {
+                    removed = true
+                    break
+                }
+            }
+            assertTrue("The outgoing page never left composition", removed)
+            assertTrue("The incoming page should still be moving", previous in 0.1f..0.9f)
+            assertTrue(lastStep > 0f)
+
+            // The linear tween must keep the same frame step across sibling removal. Restarting
+            // it from the current position introduces a stationary frame and a slower remainder.
+            repeat(3) {
+                advanceFrames(1)
+                val progress = pages.transitions.getValue(incoming).progress.value
+                assertEquals(lastStep, progress - previous, 0.005f)
+                previous = progress
+            }
+            advanceFrames(24)
+            compose.runOnIdle {
+                assertEquals(setOf(incoming), pages.composed)
+                assertEquals(1f, pages.transitions.getValue(incoming).progress.value, 0f)
+            }
+            outgoing = incoming
+        }
+    }
+
+    private fun advanceFrames(count: Int) {
+        repeat(count) {
+            compose.mainClock.advanceTimeByFrame()
+            compose.waitForIdle()
+        }
+    }
+
+    @Test
     fun restoredBackStackInitiallyComposesOnlyItsTopEntry() {
         val navigator = Navigator(
             initialBackStack = (0..5).map { PageEntry(it.toLong() + 40, it) },

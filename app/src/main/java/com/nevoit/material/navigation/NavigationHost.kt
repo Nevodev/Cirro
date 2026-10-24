@@ -361,11 +361,12 @@ fun <D : Any> NavigationHost(
                         }
                     }
 
-                    LaunchedEffect(entry.id, visibleEntryIds, transition.targetProgress) {
-                        // Both directions must wait for every participating page's current layout.
-                        // A covered page's previous ready signal expires when its UI is disposed.
+                    LaunchedEffect(transition, transition.targetProgress) {
+                        // Sibling disposal must not restart an animation already in flight. Wait
+                        // once for this page and its underlay; disposal expires their ready signals.
                         snapshotFlow {
-                            entriesToCompose().all { transitions.getValue(it.id).ready }
+                            transition.ready &&
+                                (transitions[transition.parentEntryId]?.ready != false)
                         }.first { it }
 
                         val targetProgress = transition.targetProgress
