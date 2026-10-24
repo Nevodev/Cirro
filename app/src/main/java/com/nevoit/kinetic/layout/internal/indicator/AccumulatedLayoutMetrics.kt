@@ -26,6 +26,13 @@ import kotlin.math.max
  */
 internal class AccumulatedLayoutMetrics(
     private val state: ScrollableState,
+    private val layoutInfo: () -> Any = {
+        when (state) {
+            is LazyListState -> state.layoutInfo
+            is LazyGridState -> state.layoutInfo
+            else -> state
+        }
+    },
 ) : ScrollIndicatorState {
 
     // One entry per laid out line, ascending by the first item index of the line.
@@ -40,6 +47,7 @@ internal class AccumulatedLayoutMetrics(
     private var sizeSum = 0L
     private var itemsSum = 0L
     private var end = 0
+    private val itemKeys = HashMap<Int, Any>()
 
     private var total = 0
     private var before = 0L
@@ -82,28 +90,23 @@ internal class AccumulatedLayoutMetrics(
             // Nothing anchored yet: keep the platform value until an item is measurable.
             if (line < 0) return state.scrollIndicatorState?.scrollOffset ?: 0
             val range = (contentSizePx() - viewport).coerceAtLeast(0L)
-            var offset = (before + lineOffsets[line] - anchorOffset).coerceIn(0L, range)
+            // Item offsets already use the content origin after leading padding.
+            var offset = (lineOffsets[line] - anchorOffset).coerceIn(0L, range)
             if (reverse) offset = range - offset
             return offset.toIntClamped()
         }
 
     private fun sample() {
-        val layout = currentLayout()
+        val layout = layoutInfo()
         if (layout === sampledLayout) return
         sampledLayout = layout
         pendingCount = 0
-        when (state) {
-            is LazyListState -> readList(state.layoutInfo)
-            is LazyGridState -> readGrid(state.layoutInfo)
+        when (layout) {
+            is LazyListLayoutInfo -> readList(layout)
+            is LazyGridLayoutInfo -> readGrid(layout)
             else -> return
         }
         commit()
-    }
-
-    private fun currentLayout(): Any = when (state) {
-        is LazyListState -> state.layoutInfo
-        is LazyGridState -> state.layoutInfo
-        else -> state
     }
 
     /** One line per item. */
@@ -117,7 +120,12 @@ internal class AccumulatedLayoutMetrics(
             viewportPx = if (vertical) info.viewportSize.height else info.viewportSize.width,
             reversed = info.reverseLayout,
         )
+        if (info.visibleItemsInfo.any { item ->
+                itemKeys[item.index]?.let { it != item.key } == true
+            }
+        ) resetMeasurements()
         for (item in info.visibleItemsInfo) {
+            itemKeys[item.index] = item.key
             addLine(item.index, item.index + 1, item.size.toLong(), item.offset.toLong())
         }
     }
@@ -133,6 +141,11 @@ internal class AccumulatedLayoutMetrics(
             viewportPx = if (vertical) info.viewportSize.height else info.viewportSize.width,
             reversed = info.reverseLayout,
         )
+        if (info.visibleItemsInfo.any { item ->
+                val line = if (vertical) item.row else item.column
+                line >= 0 && itemKeys[item.index]?.let { it != item.key } == true
+            }
+        ) resetMeasurements()
         var start = -1
         var endItem = 0
         var row = -1
@@ -141,6 +154,7 @@ internal class AccumulatedLayoutMetrics(
         for (item in info.visibleItemsInfo) {
             val itemRow = if (vertical) item.row else item.column
             if (itemRow == -1) continue // items animating out have no line
+            itemKeys[item.index] = item.key
             val itemOffset = (if (vertical) item.offset.y else item.offset.x).toLong()
             val itemSize = (if (vertical) item.size.height else item.size.width).toLong()
             if (start >= 0 && itemRow == row) {
@@ -167,22 +181,27 @@ internal class AccumulatedLayoutMetrics(
         reversed: Boolean,
     ) {
         val newSpacing = itemSpacing.toLong()
-        if (newSpacing != spacing) {
-            spacing = newSpacing
-            lineStarts = IntArray(0)
-            lineSizes = LongArray(0)
-            lineGaps = LongArray(0)
-            lineOffsets = LongArray(1)
-            lines = 0
-            sizeSum = 0L
-            itemsSum = 0L
-            end = 0
-        }
+        // Indices are reused after filtering; old prefixes can extend past the new content end.
+        if (total != this.total || newSpacing != spacing) resetMeasurements()
+        spacing = newSpacing
         this.total = total
         before = beforePx.toLong()
         after = afterPx.toLong()
         viewport = viewportPx
         reverse = reversed
+    }
+
+    private fun resetMeasurements() {
+        lines = 0
+        sizeSum = 0L
+        itemsSum = 0L
+        end = 0
+        lineOffsets[0] = 0L
+        anchorStart = -1
+        anchorOffset = 0L
+        sampleLineSize = 0L
+        sampleItemsPerLine = 1.0
+        itemKeys.clear()
     }
 
     private fun addLine(start: Int, endItem: Int, size: Long, offset: Long) {

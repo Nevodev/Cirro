@@ -2,25 +2,31 @@ package com.nevoit.cirro.detail
 
 import android.content.Intent
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -34,8 +40,12 @@ import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -72,6 +82,7 @@ import com.nevoit.cirro.ui.SongMenuViewModel
 import com.nevoit.cirro.ui.TopShade
 import com.nevoit.cirro.ui.TrackRow
 import com.nevoit.cirro.ui.resolvePosition
+import com.nevoit.kinetic.layout.overscroll.rememberOffsetOverscrollEffect
 import com.nevoit.material.core.component.BottomPopupMenuScope
 import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.Text
@@ -424,6 +435,31 @@ private fun CollectionScreen(
 
     val screenWidth = LocalWindowInfo.current.containerDpSize.width
     val listState = rememberLazyListState()
+    val density = LocalDensity.current
+    val searchThresholdPx = with(density) { CollectionSearchPullThreshold.toPx() }
+    val dismissThresholdPx = LocalViewConfiguration.current.touchSlop
+    val search = rememberSaveable(
+        searchThresholdPx,
+        dismissThresholdPx,
+        saver = CollectionSearchState.saver(searchThresholdPx, dismissThresholdPx),
+    ) { CollectionSearchState(searchThresholdPx, dismissThresholdPx) }
+    val searching = search.query.isNotBlank()
+    val searchResult = rememberCollectionSongSearchResults(state.songs.dataOrNull.orEmpty(), search.query)
+    val offsetEffect = rememberOffsetOverscrollEffect(listState)
+    val searchEffect = remember(offsetEffect, search, listState) {
+        CollectionSearchOverscrollEffect(offsetEffect, search) { listState.canScrollBackward }
+    }
+    var floatingBarHeightPx by remember { mutableIntStateOf(0) }
+    val searchTop = if (floatingBarHeightPx > 0) with(density) { floatingBarHeightPx.toDp() }
+    else WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 72.dp
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focus = LocalFocusManager.current
+    val closeSearch = {
+        keyboard?.hide()
+        focus.clearFocus()
+        search.close()
+    }
+    BackHandler(enabled = search.revealed, onBack = closeSearch)
     val showTopShade by listState.isScrolledPast(screenWidth * 0.75f)
     val topShapeAlpha by animateFloatAsState(
         targetValue = if (showTopShade) 1f else 0f,
@@ -433,6 +469,7 @@ private fun CollectionScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
+            .collectionSearchGestures(search)
             .drawBackground(backgroundColor)
     ) {
         // 底色跟着封面种子走，可能跟主题反着来（浅色主题 + 深色封面），滚动条得跟这一页的明暗，
@@ -445,14 +482,35 @@ private fun CollectionScreen(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
+                .then(if (searching) Modifier.imePadding() else Modifier)
                 .semantics { testTagsAsResourceId = true }
                 .testTag(
                     if (state.songs is Section.Ready) "collection-tracks-ready"
                     else "collection-tracks-loading"
                 ),
             scrollIndicator = scrollIndicator,
+            overscrollEffect = searchEffect,
+            contentPadding = if (searching) PaddingValues(
+                top = searchTop + CollectionSearchHeight + 12.dp,
+                bottom = rememberNavigationTailPadding(),
+            ) else null,
         ) {
-            item(key = "header") {
+            if (searching) {
+                when (state.songs) {
+                    is Section.Loading -> item(key = "search-loading") {
+                        ListHint(text = "正在加载歌曲…", contentVariant = contentVariantColor())
+                    }
+                    is Section.Failed -> item(key = "search-failed") {
+                        ListHint(
+                            text = "加载失败 · 点按重试",
+                            contentVariant = contentVariantColor(),
+                            onClick = onRetry,
+                        )
+                    }
+                    is Section.Ready -> Unit
+                }
+            }
+            if (!searching) item(key = "header") {
                 val info = state.info.dataOrNull
                 // 过冲位移由 VerticalStack 通过 Local 提供，这一页不自己建 effect
                 val overscrollVisual = LocalOverscrollVisualOffset.current
@@ -460,6 +518,7 @@ private fun CollectionScreen(
                     state.info is Section.Failed && info == null -> InfoFailure(
                         onRetry = onRetry,
                         contentVariant = contentVariantColor(),
+                        modifier = Modifier.animateItem(tween(200), Springs.crisp(), tween(200)),
                     )
 
                     else -> HeaderBlock(
@@ -479,10 +538,11 @@ private fun CollectionScreen(
                         overscrollOffsetY = {
                             overscrollVisual?.visualOffset?.y?.coerceAtLeast(0f) ?: 0f
                         },
+                        modifier = Modifier.animateItem(tween(200), Springs.crisp(), tween(200)),
                     )
                 }
             }
-            if (!incompleteAlbum && description.isNotEmpty()) {
+            if (!searching && !incompleteAlbum && description.isNotEmpty()) {
                 item(key = "description") {
                     VGap(24.dp)
                     var expanded by rememberSaveable { mutableStateOf(false) }
@@ -502,12 +562,12 @@ private fun CollectionScreen(
                     )
                 }
             }
-            if (state.info.dataOrNull != null) {
+            if (searching || state.info.dataOrNull != null) {
                 // 曲目区只有两种画面：列表，或者「加载失败」。**加载中什么都不画是故意的**——
                 // 曲目在进场动画期间就预取完了（见 `CollectionViewModel`），再插一个中间态
                 // 只会让列表落地时多抖一下。
                 val tracks = state.songs
-                if (tracks is Section.Failed) {
+                if (!searching && tracks is Section.Failed) {
                     item(key = "tracks-failed") {
                         ListHint(
                             text = "加载失败 · 点按重试",
@@ -517,37 +577,45 @@ private fun CollectionScreen(
                     }
                 } else {
                     val songs = tracks.dataOrNull.orEmpty()
-                    if (songs.isNotEmpty()) {
-                        item(key = "tracks-gap") {
-                            VGap(24.dp)
+                    val matches = if (searching) searchResult?.matches else null
+                    val songCount = matches?.size ?: songs.size
+                    if (songCount > 0) {
+                        if (!searching) item(key = "tracks-gap") {
+                            Box(Modifier.animateItem(tween(200), Springs.crisp(), tween(200)).height(24.dp))
                         }
                         // 必须给 key：`animateItem()` 靠它做增删/位移，没 key 就只有默认的 index。
-                        itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
+                        items(
+                            count = songCount,
+                            key = { index -> matches?.get(index)?.value?.id ?: songs[index].id },
+                        ) { index ->
+                            val entry = matches?.get(index)
+                            val song = entry?.value ?: songs[index]
+                            val originalIndex = entry?.index ?: index
                             TrackRow(
                                 song = song,
                                 backgroundColor = itemBgColor,
-                                showArtist = song.artistText != state.info.dataOrNull?.author,
+                                showArtist = searching || song.artistText != state.info.dataOrNull?.author,
                                 index = if (state.info.dataOrNull?.kind == CollectionKind.ALBUM) {
-                                    albumTrackNumbers[song.id] ?: (index + 1)
+                                    albumTrackNumbers[song.id] ?: (originalIndex + 1)
                                 } else null,
-                                position = resolvePosition(songs.size, index),
+                                position = resolvePosition(songCount, index),
                                 isPlaying = song.id == playingId,
                                 content = contentColorProducer,
                                 contentVariant = contentVariantColor,
                                 // 喜爱歌单整份都是「已喜爱」：行行亮着星星没有信息量，
                                 // 顺带省掉每行一条喜欢态订阅（见 TrackRow 的 showStar）
                                 showStar = !likedPlaylist,
-                                onClick = { onPlay(index) },
+                                onClick = { onPlay(originalIndex) },
                                 menuContent = { songMenuContent(song) },
                                 // 左右边距在 TrackRow 内部（背景要铺满整宽，左侧那条缝留给红心星）
                                 modifier = Modifier
                                     .animateItem(tween(200), Springs.crisp(), tween(200)),
                             )
-                            if (index < songs.size - 1) {
+                            if (index < songCount - 1) {
                                 VGap(4.dp)
                             }
                         }
-                        item(key = "footer") {
+                        if (!searching) item(key = "footer") {
                             val info = state.info.dataOrNull
                             val songsLoaded = state.songs.dataOrNull
                             val count = songsLoaded?.size ?: info?.trackCount ?: 0
@@ -571,7 +639,7 @@ private fun CollectionScreen(
                 }
             }
 
-            if (incompleteAlbum && state.songs is Section.Ready) {
+            if (!searching && incompleteAlbum && state.songs is Section.Ready) {
                 item(key = "show-full-album") {
                     VGap()
                     ProvideContentColor(contentVariantColor()) {
@@ -595,7 +663,7 @@ private fun CollectionScreen(
                 }
             }
 
-            if (state.info.dataOrNull?.kind == CollectionKind.ALBUM && state.songs is Section.Ready) {
+            if (!searching && state.info.dataOrNull?.kind == CollectionKind.ALBUM && state.songs is Section.Ready) {
                 val info = state.info.dataOrNull
                 if (info != null && info.primaryArtistId > 0) {
                     item(key = "more-works") {
@@ -624,17 +692,30 @@ private fun CollectionScreen(
 
         TopShade(
             color = backgroundColor,
-            modifier = Modifier.height(72.dp + 48.dp),
+            modifier = Modifier.height(
+                72.dp + 48.dp + if (search.revealed) 12.dp + CollectionSearchHeight else 0.dp
+            ),
             alpha = { topShapeAlpha })
         // 底部 shade 跟页面走：详情页用它自己的封面底色，MiniPlayer/底栏常驻层是透明的
         BottomShade(color = backgroundColor)
 
         FloatingBar(
-            onBack = onBack,
+            onBack = { if (search.revealed) closeSearch() else onBack() },
             onShare = onShare,
             background = circleColor,
             tint = circleIconColor,
-            modifier = Modifier.align(Alignment.TopCenter),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .onSizeChanged { floatingBarHeightPx = it.height },
+        )
+        CollectionSearchField(
+            state = search,
+            background = circleColor,
+            tint = circleIconColor,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                // FloatingBar 的底部 padding 正好是按钮下的 12dp 间距。
+                .padding(top = searchTop, start = PagePadding, end = PagePadding),
         )
     }
 }
