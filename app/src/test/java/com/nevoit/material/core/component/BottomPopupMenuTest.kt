@@ -78,17 +78,17 @@ class BottomPopupMenuTest {
     }
 
     @Test
-    fun collapsedMenuLandsAtCallerCenterWithSystemBarsExcludingExistingPadding() {
-        // A host at (20, 40) with 24px/30px system bars and 12px padding leaves
-        // max(inset, padding) on each edge, rather than adding both gaps.
+    fun collapsedMenuLandsAtCallerCenterWithoutReservingTheNavigationBar() {
+        // An 800px-high host at (20, 40) reserves max(24px status bar, 12px padding)
+        // at the top and only 12px padding at the bottom, even with a 30px navigation bar.
         val translation = bottomPopupMenuTranslation(
             originInWindow = Offset(350f, 140f),
             viewportPositionInWindow = Offset(32f, 64f),
-            viewportSize = IntSize(376, 746),
+            viewportSize = IntSize(376, 764),
             menuSize = IntSize(376, 200),
             progress = 0f,
         )
-        val finalCenterInWindow = Offset(220f, 710f)
+        val finalCenterInWindow = Offset(220f, 728f)
         assertEquals(Offset(350f, 140f), finalCenterInWindow + translation)
     }
 

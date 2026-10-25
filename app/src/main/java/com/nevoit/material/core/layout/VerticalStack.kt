@@ -2,11 +2,12 @@ package com.nevoit.material.core.layout
 
 import androidx.compose.foundation.OverscrollEffect
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.add
 import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsIgnoringVisibility
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -29,6 +30,7 @@ import com.nevoit.kinetic.layout.overscroll.rememberOffsetOverscrollEffect
  *   第一帧布局，inset 下发前会算成 0 而错位。
  * - 滚动条轨道让开顶部（状态栏 + 72dp，`TopShade` / 浮层按钮的位置）和底部的那段尾距。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun VerticalStack(
     modifier: Modifier = Modifier,
@@ -49,7 +51,8 @@ fun VerticalStack(
 ) {
     val effect = overscrollEffect ?: rememberOffsetOverscrollEffect(state)
 
-    val navigationBarInsets = WindowInsets.navigationBars
+    // Popup menus hide the system bar; its visibility must not move the underlying content.
+    val navigationBarInsets = WindowInsets.navigationBarsIgnoringVisibility
     val bottomTail = remember { WindowInsets(bottom = NavigationTailHeight) }
     val defaultContentPadding = remember(navigationBarInsets, bottomTail) {
         navigationBarInsets.add(bottomTail)

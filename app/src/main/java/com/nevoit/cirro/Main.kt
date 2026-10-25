@@ -13,14 +13,17 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBarsIgnoringVisibility
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -208,6 +211,7 @@ sealed interface MainDestination {
     ) : MainDestination
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun BoxScope.Main() {
     val navigator = rememberNavigator<MainDestination>(MainDestination.Tabs)
@@ -599,7 +603,7 @@ fun BoxScope.Main() {
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .navigationBarsPadding()
+                        .windowInsetsPadding(WindowInsets.navigationBarsIgnoringVisibility)
                         .padding(12.dp)
                         .fillMaxWidth(),
                 ) {

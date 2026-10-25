@@ -4,14 +4,16 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBarsIgnoringVisibility
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.runtime.Composable
@@ -36,6 +38,7 @@ private val BottomShadeContentHeight = 156.dp
  * shade 固定在页面内而不挂在常驻层上——每页拿自己的底色画，详情页进来
  * shade 自然是封面色，返回时也跟着页面一起滑走。渐变参数与原常驻 shade 一致。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun BoxScope.BottomShade(
     color: ColorProducer,
@@ -51,7 +54,7 @@ fun BoxScope.BottomShade(
                 end = 0.7f,
                 intensity = 0.8f,
             )
-            .navigationBarsPadding()
+            .windowInsetsPadding(WindowInsets.navigationBarsIgnoringVisibility)
             .height(BottomShadeContentHeight)
 
     )

@@ -1,6 +1,7 @@
 package com.nevoit.material.core.component
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -14,10 +15,8 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberOverscrollEffect
 import androidx.compose.foundation.rememberScrollState
@@ -51,6 +50,7 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.paneTitle
@@ -58,6 +58,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.nevoit.kinetic.layout.rememberKineticFlingBehavior
 import com.nevoit.material.core.utility.rememberColorProducer
 import com.nevoit.material.navigation.shape.deviceCornerShape
@@ -171,6 +174,22 @@ fun BottomPopupMenuHost(
     content: @Composable BoxScope.() -> Unit,
 ) {
     val state = remember { BottomPopupMenuHostState() }
+    val window = LocalActivity.current?.window
+    val view = LocalView.current
+    val menuExpanded = state.expanded
+    DisposableEffect(window, view, menuExpanded) {
+        if (window == null || !menuExpanded) return@DisposableEffect onDispose {}
+        val controller = WindowCompat.getInsetsController(window, view)
+        val navigationBars = WindowInsetsCompat.Type.navigationBars()
+        val previousBehavior = controller.systemBarsBehavior
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(navigationBars)
+        onDispose {
+            controller.systemBarsBehavior = previousBehavior
+            // A rapidly reopened menu can capture stale visibility while the bar is reappearing.
+            controller.show(navigationBars)
+        }
+    }
     CompositionLocalProvider(LocalBottomPopupMenuHost provides state) {
         Box(
             modifier = modifier
@@ -300,7 +319,7 @@ private fun BottomPopupMenuLayer(
                 .fillMaxSize()
                 .padding(request.padding)
                 .consumeWindowInsets(PaddingValues(request.padding))
-                .windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.navigationBars))
+                .windowInsetsPadding(WindowInsets.statusBars)
         ) {
             Box(
                 modifier = Modifier
@@ -391,7 +410,7 @@ internal fun bottomPopupMenuTranslation(
     menuSize: IntSize,
     progress: Float,
 ): Offset {
-    // The viewport excludes system bars and menu padding. Transformed menu bounds would feed
+    // The viewport excludes the status bar and menu padding. Transformed menu bounds would feed
     // the animation back into its own coordinate calculation.
     val menuCenter = viewportPositionInWindow +
             Offset(viewportSize.width / 2f, viewportSize.height - menuSize.height / 2f)

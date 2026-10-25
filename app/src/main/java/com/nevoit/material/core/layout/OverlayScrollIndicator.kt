@@ -1,7 +1,8 @@
 package com.nevoit.material.core.layout
 
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsIgnoringVisibility
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -14,9 +15,10 @@ import com.nevoit.kinetic.layout.indicator.ScrollIndicatorSpec
 
 internal val NavigationTailHeight = 180.dp
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun rememberNavigationTailPadding(): Dp {
-    val insets = WindowInsets.navigationBars
+    val insets = WindowInsets.navigationBarsIgnoringVisibility
     val density = LocalDensity.current
     return with(density) { insets.getBottom(density).toDp() } + NavigationTailHeight
 }

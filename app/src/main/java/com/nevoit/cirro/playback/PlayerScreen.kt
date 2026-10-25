@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -30,7 +31,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBarsIgnoringVisibility
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
@@ -38,6 +39,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.runtime.Composable
@@ -389,6 +391,7 @@ private fun rememberThemedColor(target: Color, label: String): ColorProducer =
  * 由待播列表面板自己订。子块之间的参数是稳定的（`song`、`isPlaying`），所以重组只落在真正变了
  * 的那一块上——**回调必须 `remember` 固定**，否则每次都是新 lambda，Compose 的跳过就全失效了。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PlayerOverlay(
     controller: PlayerUiController,
@@ -843,7 +846,7 @@ private fun PlayerOverlay(
                 modifier = Modifier
                     .fillMaxSize()
                     .statusBarsPadding()
-                    .navigationBarsPadding(),
+                    .windowInsetsPadding(WindowInsets.navigationBarsIgnoringVisibility),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 // 舞台区：面板（歌词）铺满，封面浮在上面——收起时它会缩成小方块飞向标题行，
