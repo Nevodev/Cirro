@@ -18,6 +18,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -42,6 +45,7 @@ import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.MaterialShapeButton
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
+import com.nevoit.material.core.modifier.smoothGradient
 import com.nevoit.material.theme.MaterialShapes
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.scaled
@@ -60,6 +64,8 @@ internal val TrackCorner = 8.dp
 internal val HeaderRise = 128.dp
 
 internal const val HeaderGradientRiseMultiplier = 2f
+
+private const val HeaderGradientEdgeOverlapPx = 2f
 
 /**
  * 详情页倒影的模糊带往上**溢进封面**的高度，按倒影带高度算。
@@ -99,6 +105,17 @@ internal const val CircleToneLight = 90.0
 internal const val CircleIconToneDark = 90.0
 
 internal const val CircleIconToneLight = 30.0
+
+internal fun Modifier.headerCoverGradient(color: ColorProducer): Modifier =
+    smoothGradient(color, start = 0f, end = 1f, intensity = 1f).drawBehind {
+        // The independently sampled cover layer can bleed past a coincident gradient edge
+        // under fractional scaling. Cover both sides of that edge without changing layout.
+        drawRect(
+            color = color(),
+            topLeft = Offset(0f, size.height - HeaderGradientEdgeOverlapPx),
+            size = Size(size.width, HeaderGradientEdgeOverlapPx * 2f),
+        )
+    }
 
 /**
  * 头部按钮排：左圆钮（艺人页是「艺人资料」，其余是「随机播放」）、中播放胶囊、右收藏圆钮。

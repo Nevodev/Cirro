@@ -95,9 +95,7 @@ internal class PearMeshGlRenderer(
     val gpuRendererForDebug: String = GLES30.glGetString(GLES30.GL_RENDERER) ?: "Unknown"
 
     private val initialArtwork = initialState.artwork?.takeUnless { it.bitmap.isRecycled }
-    private var currentArtwork = uploadTexture(
-        initialArtwork?.bitmap ?: createGrayArtwork()
-    )
+    private var currentArtwork = initialArtwork?.let { uploadTexture(it.bitmap) } ?: 0
     private var previousArtwork = currentArtwork
     private var uploadedArtworkId = initialArtwork?.id ?: 0L
     private var observedArtworkId = uploadedArtworkId
@@ -126,6 +124,22 @@ internal class PearMeshGlRenderer(
         // Artwork transitions must finish even when playback flow is intentionally frozen.
         val artworkTime = System.nanoTime() / 1_000_000_000.0
         updateArtwork(state, artworkTime)
+        if (currentArtwork == 0) {
+            // Surface startup and artwork decoding race. Until a real texture arrives, match
+            // the Compose backdrop instead of presenting a synthetic cover as the first song.
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+            GLES30.glViewport(0, 0, width, height)
+            GLES30.glClearColor(
+                currentBackdropWashColor[0],
+                currentBackdropWashColor[1],
+                currentBackdropWashColor[2],
+                1f,
+            )
+            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+            GLES30.glClearColor(0f, 0f, 0f, 1f)
+            frameCaptureRequest?.getAndSet(null)?.let(::captureFrame)
+            return
+        }
         val transitionMix = artworkTransitionMix(artworkTime)
         val currentLyricsMix = state.behindLyricsProgress
         // 流动时钟可以暂停，但音频包络仍按渲染时间释放；清空 PCM 缓存不能清空已经显示的缩放。
@@ -517,11 +531,19 @@ internal class PearMeshGlRenderer(
 
     private fun startArtworkTransition(bitmap: Bitmap, id: Long, time: Double) {
         if (bitmap.isRecycled) return
+        val firstArtwork = currentArtwork == 0
         artworkAspect = bitmap.width.toFloat() / bitmap.height
         previousArtwork = currentArtwork
         currentArtwork = uploadTexture(bitmap)
         uploadedArtworkId = id
-        artworkTransitionStart = time
+        if (firstArtwork) {
+            // There is no previous song to crossfade from, including when decoding finishes
+            // after the constructor snapshot but before the first render.
+            previousArtwork = currentArtwork
+            artworkTransitionStart = Double.NEGATIVE_INFINITY
+        } else {
+            artworkTransitionStart = time
+        }
     }
 
     private fun artworkTransitionMix(time: Double): Float {
@@ -675,9 +697,5 @@ internal class PearMeshGlRenderer(
         fun lerp(from: Float, to: Float, amount: Float): Float =
             from + (to - from) * amount
 
-        fun createGrayArtwork(): Bitmap =
-            createBitmap(1, 1).apply {
-                eraseColor(Color.GRAY)
-            }
     }
 }

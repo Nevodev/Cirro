@@ -27,6 +27,8 @@ import com.kyant.shapes.continuousCurvatureCornerPoints
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
+private const val CornerMaskPadding = 2f
+
 fun Modifier.cornerMaskClip(
     radius: Dp,
     enabled: Boolean = true,
@@ -37,16 +39,26 @@ fun Modifier.cornerMaskClip(
     enabled: Boolean = true,
 ): Modifier = then(CornerMaskClipElement(shape, enabled))
 
+fun Modifier.cornerMaskClip(
+    bounds: (Size) -> Rect,
+    shape: () -> RoundedRectangularShape,
+): Modifier = then(CornerMaskClipElement(null, true, bounds, shape))
+
 private class CornerMaskClipElement(
-    val shape: RoundedRectangularShape,
+    val shape: RoundedRectangularShape?,
     val enabled: Boolean,
+    val bounds: ((Size) -> Rect)? = null,
+    val shapeProducer: (() -> RoundedRectangularShape)? = null,
 ) : ModifierNodeElement<CornerMaskClipNode>() {
 
-    override fun create(): CornerMaskClipNode = CornerMaskClipNode(shape, enabled)
+    override fun create(): CornerMaskClipNode =
+        CornerMaskClipNode(shape, enabled, bounds, shapeProducer)
 
     override fun update(node: CornerMaskClipNode) {
         node.shape = shape
         node.enabled = enabled
+        node.bounds = bounds
+        node.shapeProducer = shapeProducer
         node.invalidateDraw()
     }
 
@@ -59,19 +71,24 @@ private class CornerMaskClipElement(
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is CornerMaskClipElement) return false
-        return shape == other.shape && enabled == other.enabled
+        return shape == other.shape && enabled == other.enabled &&
+            bounds == other.bounds && shapeProducer == other.shapeProducer
     }
 
     override fun hashCode(): Int {
-        var result = shape.hashCode()
+        var result = shape?.hashCode() ?: 0
         result = 31 * result + enabled.hashCode()
+        result = 31 * result + (bounds?.hashCode() ?: 0)
+        result = 31 * result + (shapeProducer?.hashCode() ?: 0)
         return result
     }
 }
 
 private class CornerMaskClipNode(
-    var shape: RoundedRectangularShape,
+    var shape: RoundedRectangularShape?,
     var enabled: Boolean,
+    var bounds: ((Size) -> Rect)?,
+    var shapeProducer: (() -> RoundedRectangularShape)?,
 ) : Modifier.Node(), DrawModifierNode {
 
     private var cornersSize = Size.Zero
@@ -80,6 +97,7 @@ private class CornerMaskClipNode(
     private var corners: RoundedRectangularShape.Corners? = null
 
     private fun cornersOf(
+        shape: RoundedRectangularShape,
         width: Float,
         height: Float,
         direction: LayoutDirection,
@@ -108,18 +126,26 @@ private class CornerMaskClipNode(
             return
         }
 
-        val width = size.width
-        val height = size.height
+        val bounds = bounds?.invoke(size) ?: Rect(Offset.Zero, size)
+        val width = bounds.width
+        val height = bounds.height
         if (width <= 0f || height <= 0f) {
-            drawContent()
             return
         }
 
-        val corners = cornersOf(width, height, layoutDirection, this)
+        val shape = shapeProducer?.invoke() ?: checkNotNull(shape)
+        val corners = cornersOf(shape, width, height, layoutDirection, this)
         if (corners.topLeft <= 0f && corners.topRight <= 0f &&
             corners.bottomRight <= 0f && corners.bottomLeft <= 0f
         ) {
-            drawContent()
+            val canvas = drawContext.canvas
+            canvas.save()
+            try {
+                canvas.clipRect(bounds)
+                drawContent()
+            } finally {
+                canvas.restore()
+            }
             return
         }
 
@@ -129,13 +155,20 @@ private class CornerMaskClipNode(
         val bottomLeft = CornerMaskCache.obtain(corners.bottomLeft, width, height)
 
         val canvas = drawContext.canvas
-        canvas.saveLayer(Rect(0f, 0f, width, height), MaskLayerPaint)
+        canvas.save()
         try {
-            drawContent()
-            if (topLeft != null) drawCornerMask(topLeft, mirrorX = false, mirrorY = false)
-            if (topRight != null) drawCornerMask(topRight, mirrorX = true, mirrorY = false)
-            if (bottomRight != null) drawCornerMask(bottomRight, mirrorX = true, mirrorY = true)
-            if (bottomLeft != null) drawCornerMask(bottomLeft, mirrorX = false, mirrorY = true)
+            // saveLayer bounds are allocation hints; the moving rectangle must also clip content.
+            canvas.clipRect(bounds)
+            canvas.saveLayer(bounds, MaskLayerPaint)
+            try {
+                drawContent()
+                if (topLeft != null) drawCornerMask(topLeft, bounds, mirrorX = false, mirrorY = false)
+                if (topRight != null) drawCornerMask(topRight, bounds, mirrorX = true, mirrorY = false)
+                if (bottomRight != null) drawCornerMask(bottomRight, bounds, mirrorX = true, mirrorY = true)
+                if (bottomLeft != null) drawCornerMask(bottomLeft, bounds, mirrorX = false, mirrorY = true)
+            } finally {
+                canvas.restore()
+            }
         } finally {
             canvas.restore()
         }
@@ -144,11 +177,16 @@ private class CornerMaskClipNode(
 
 private fun DrawScope.drawCornerMask(
     mask: ImageBitmap,
+    bounds: Rect,
     mirrorX: Boolean,
     mirrorY: Boolean,
 ) {
     if (!mirrorX && !mirrorY) {
-        drawImage(mask, topLeft = Offset.Zero, blendMode = BlendMode.DstOut)
+        drawImage(
+            mask,
+            topLeft = bounds.topLeft - Offset(CornerMaskPadding, CornerMaskPadding),
+            blendMode = BlendMode.DstOut,
+        )
         return
     }
 
@@ -156,14 +194,18 @@ private fun DrawScope.drawCornerMask(
     canvas.save()
     try {
         canvas.translate(
-            if (mirrorX) size.width else 0f,
-            if (mirrorY) size.height else 0f
+            if (mirrorX) bounds.right else bounds.left,
+            if (mirrorY) bounds.bottom else bounds.top
         )
         canvas.scale(
             if (mirrorX) -1f else 1f,
             if (mirrorY) -1f else 1f
         )
-        drawImage(mask, topLeft = Offset.Zero, blendMode = BlendMode.DstOut)
+        drawImage(
+            mask,
+            topLeft = Offset(-CornerMaskPadding, -CornerMaskPadding),
+            blendMode = BlendMode.DstOut,
+        )
     } finally {
         canvas.restore()
     }
@@ -219,22 +261,32 @@ private fun createCornerMask(radius: Float, tW: Float, tH: Float): ImageBitmap? 
         index += 2
     }
 
-    val width = ceil(maxX + 1f).toInt()
-    val height = ceil(maxY + 1f).toInt()
+    val width = ceil(maxX + CornerMaskPadding + 1f).toInt()
+    val height = ceil(maxY + CornerMaskPadding + 1f).toInt()
     if (width <= 0 || height <= 0) return null
 
     val path = Path()
-    path.moveTo((1.0 - points[0]).toFloat() * radius, points[1].toFloat() * radius)
+    path.moveTo(
+        (1.0 - points[0]).toFloat() * radius + CornerMaskPadding,
+        points[1].toFloat() * radius + CornerMaskPadding,
+    )
     index = 2
     while (index <= 14) {
         path.cubicTo(
-            (1.0 - points[index]).toFloat() * radius, points[index + 1].toFloat() * radius,
-            (1.0 - points[index + 2]).toFloat() * radius, points[index + 3].toFloat() * radius,
-            (1.0 - points[index + 4]).toFloat() * radius, points[index + 5].toFloat() * radius
+            (1.0 - points[index]).toFloat() * radius + CornerMaskPadding,
+            points[index + 1].toFloat() * radius + CornerMaskPadding,
+            (1.0 - points[index + 2]).toFloat() * radius + CornerMaskPadding,
+            points[index + 3].toFloat() * radius + CornerMaskPadding,
+            (1.0 - points[index + 4]).toFloat() * radius + CornerMaskPadding,
+            points[index + 5].toFloat() * radius + CornerMaskPadding,
         )
         index += 6
     }
+    // Keep the mask opaque beyond the two straight edges. At fractional origins, filtering a
+    // bitmap that ends exactly on the clip edge leaves a partially erased one-pixel seam.
+    path.lineTo(0f, maxY + CornerMaskPadding)
     path.lineTo(0f, 0f)
+    path.lineTo(maxX + CornerMaskPadding, 0f)
     path.close()
 
     val bitmap = ImageBitmap(width, height, ImageBitmapConfig.Alpha8)

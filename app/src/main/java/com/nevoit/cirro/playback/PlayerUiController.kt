@@ -18,7 +18,7 @@ private const val SettleVelocity = 1.5f
  * 播放页的展开进度。
  *
  * 播放页不是导航目的地、也不是独立窗口，而是常驻在最外层的覆盖层——它和吸底迷你条要由
- * **同一个进度值**同时驱动（覆盖层往上滑、迷你条连同底栏往下沉），所以这个值不能活在
+ * **同一个进度值**同时驱动（容器展开、封面接续），所以这个值不能活在
  * 任何一个页面的组合里，得提到外面来。这里就是它唯一的真相源。
  *
  * **`progress` 只能在 draw / layer 阶段读**（`graphicsLayer`、`Canvas`、`drawBackground`
@@ -53,6 +53,11 @@ class PlayerUiController {
     var present: Boolean by mutableStateOf(false)
         private set
 
+    var isClosing: Boolean by mutableStateOf(false)
+        private set
+
+    val acceptsInput: Boolean get() = present && !isClosing
+
     /**
      * 动画请求序号。开、合、松手各 +1，界面看到它变了就跑一次新动画（上一轮自动被打断）。
      *
@@ -64,9 +69,9 @@ class PlayerUiController {
     private var target = 0f
     private var velocity = 0f
 
-    fun open() = request(open = true, velocity = 0f)
+    fun open() = request(open = true, velocity = null)
 
-    fun close() = request(open = false, velocity = 0f)
+    fun close() = request(open = false, velocity = null)
 
     /**
      * 拖拽跟手。[deltaProgress] 是这一帧的进度增量，正数朝展开方向。
@@ -75,6 +80,7 @@ class PlayerUiController {
      */
     fun onDrag(deltaProgress: Float) {
         if (!present) present = true
+        isClosing = false
         val next = (anim.value + deltaProgress).coerceIn(0f, 1f)
         scope.launch { anim.snapTo(next) }
     }
@@ -114,15 +120,19 @@ class PlayerUiController {
         )
     }
 
-    private fun request(open: Boolean, velocity: Float) {
+    private fun request(open: Boolean, velocity: Float?) {
         present = true
+        isClosing = !open
         target = if (open) 1f else 0f
-        this.velocity = velocity
+        // collectLatest cancels the previous animation and clears Animatable.velocity; capture it
+        // at the request boundary so reversing a running spring keeps its current momentum.
+        this.velocity = velocity ?: anim.velocity
         animationRequest++
     }
 
     private companion object {
-        val OpenSpec = Springs.smooth(durationMillis = 450, visibilityThreshold = 0.0001f)
+        val OpenSpec =
+            Springs.smooth(durationMillis = 350, visibilityThreshold = 0.0001f, extraBounce = -0.1)
         val CloseSpec = Springs.smooth(durationMillis = 350, visibilityThreshold = 0.0001f)
     }
 }

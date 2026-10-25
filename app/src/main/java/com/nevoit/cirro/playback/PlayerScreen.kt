@@ -41,6 +41,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -52,17 +53,24 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.layer.setOutline
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
@@ -126,6 +134,9 @@ private const val CoverCrossfadeMs = 300
 
 /** 大封面的边长上限。竖屏由可用区域的短边说了算，这个只防横屏/平板把它拉得过大。 */
 private val CoverSideCap = 360.dp
+
+/** 大封面下探强度：0 关闭，1 使用整份容器顶部位移形成的弧度。 */
+private const val ExpandedCoverDipFraction = 0.75f
 
 /** 正文区的左右边距。歌曲信息、进度条、控制条都跟这条线对齐。 */
 private val ContentPadding = 24.dp
@@ -281,26 +292,42 @@ private fun pickMeshPreset(count: Int, last: Int): Int {
 fun PlayerLayer(
     controller: PlayerUiController,
     connection: PlaybackConnection,
+    expansion: PlayerExpansionState,
     modifier: Modifier = Modifier,
 ) {
     if (!controller.present) return
 
-    BackHandler { controller.close() }
+    BackHandler(enabled = controller.acceptsInput) { controller.close() }
+    DisposableEffect(expansion) {
+        onDispose { expansion.releasePage() }
+    }
 
     // 开合动画在这里跑：`LaunchedEffect` 的协程自带帧时钟，弹簧取下一帧要靠它。
     // 手指按下去时，控制器的 snapTo 会把这个动画打断，collectLatest 也跟着把这一轮取消，
     // 所以拖拽和动画不会打架。
-    LaunchedEffect(controller) {
+    LaunchedEffect(controller, expansion) {
         snapshotFlow { controller.animationRequest }
             .collectLatest {
+                if (controller.animationTarget().first > 0f) {
+                    snapshotFlow { expansion.ready }.first { it }
+                    expansion.takeOver()
+                }
                 controller.animate()
                 controller.onAnimationSettled()
             }
     }
 
+    Box(
+        modifier = modifier.fillMaxSize().drawBehind {
+            if (expansion.ownsVisual) {
+                drawRect(Color.Black, alpha = 0.6f * controller.progress.coerceIn(0f, 1f))
+            }
+        },
+    )
     PlayerOverlay(
         controller = controller,
         connection = connection,
+        expansion = expansion,
         modifier = modifier,
     )
 }
@@ -326,9 +353,8 @@ private fun rememberThemedColor(target: Color, label: String): ColorProducer =
 /**
  * 播放页本体。
  *
- * 整体位置由 [PlayerUiController.progress] 推出来：进度 0 时它整块停在屏幕下沿之外，
- * 进度 1 时铺满。这个位移**在 graphicsLayer 的 block 里算**，所以拖拽/开合动画期间
- * 只有这一层重画，播放页的内容一次都不重组。
+ * 页面始终按最终尺寸布局；展开进度只改变裁剪边界、背景交接和封面图层，避免动画期间
+ * 反复排版正文或改变背景 Surface 的尺寸。
  *
  * 内容按"多久变一次"分层订阅：换歌/播放状态在最外层，位置心跳下沉到进度条，队列（模式 + 列表）
  * 由待播列表面板自己订。子块之间的参数是稳定的（`song`、`isPlaying`），所以重组只落在真正变了
@@ -338,6 +364,7 @@ private fun rememberThemedColor(target: Color, label: String): ColorProducer =
 private fun PlayerOverlay(
     controller: PlayerUiController,
     connection: PlaybackConnection,
+    expansion: PlayerExpansionState,
     modifier: Modifier = Modifier,
 ) {
     // 粗粒度订阅：只有换歌、或播放/暂停翻转，才让这一层重组。位置心跳（500ms 一次）不进这里，
@@ -741,14 +768,16 @@ private fun PlayerOverlay(
     // 而这两处采样时刻不同，一相减就会把「页面走了多少」错算进收起的位移里。见 `PlayerCover`。
     var metaRow by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
-    Box(
+    PlayerExpansion(
+        state = expansion,
         modifier = modifier
             .fillMaxSize()
-            .graphicsLayer { translationY = (1f - controller.progress) * size.height }
-            .draggable(
-                orientation = Orientation.Vertical,
-                state = dragState,
-                onDragStopped = { velocity -> controller.onDragEnd(-velocity / heightPx) },
+            .then(
+                if (controller.acceptsInput) Modifier.draggable(
+                    orientation = Orientation.Vertical,
+                    state = dragState,
+                    onDragStopped = { velocity -> controller.onDragEnd(-velocity / heightPx) },
+                ) else Modifier
             )
     ) {
         // 垫底用主题底色而不是纯黑：渲染器起来之前（EGL 起线程、编译着色器、上传封面）那一两百
@@ -861,6 +890,7 @@ private fun PlayerOverlay(
                         cover = cover,
                         collapse = collapseCover,
                         metaRow = metaRow,
+                        expansion = expansion,
                     )
                 }
 
@@ -1066,6 +1096,7 @@ private fun PlayerStage(
     cover: String,
     collapse: State<Float>,
     metaRow: LayoutCoordinates?,
+    expansion: PlayerExpansionState,
 ) {
     // 修饰符固定住，否则每次都是新实例，跳过就失效了
     val stageModifier = remember {
@@ -1082,6 +1113,7 @@ private fun PlayerStage(
             side = side,
             collapse = collapse,
             metaRow = metaRow,
+            expansion = expansion,
         )
     }
 }
@@ -1102,8 +1134,14 @@ private fun PlayerCover(
     side: Dp,
     collapse: State<Float>,
     metaRow: LayoutCoordinates?,
+    expansion: PlayerExpansionState,
 ) {
     val target = cover.takeIf { it.isNotEmpty() }
+    val coverLayer = rememberGraphicsLayer()
+    DisposableEffect(expansion, coverLayer) {
+        expansion.targetCoverLayer = coverLayer
+        onDispose { expansion.targetCoverLayer = null }
+    }
     val painter = rememberAsyncImagePainter(model = target, contentScale = ContentScale.Crop)
     val state by painter.state.collectAsState()
 
@@ -1131,6 +1169,51 @@ private fun PlayerCover(
     // 采样时刻就不再有任何影响。
     val self = remember { mutableStateOf<LayoutCoordinates?>(null) }
     var anchor by remember { mutableStateOf<Offset?>(null) }
+    val expandedShape = remember { RoundedRectangle(16.dp) }
+    val coverBackground = MaterialTheme.colors.scrimMedium
+    val density = LocalDensity.current
+    val direction = LocalLayoutDirection.current
+    val transform: GraphicsLayer.() -> Unit = remember(expansion, collapse, anchor, density, direction, expandedShape) {
+        {
+            with(density) {
+                val width = size.width.toFloat()
+                val height = size.height.toFloat()
+                val collapseProgress = collapse.value
+                val collapseTarget = anchor
+                val collapsedSide = CollapsedCoverSize.toPx()
+                val panelScale = if (collapseTarget != null) {
+                    lerp(1f, collapsedSide / width, collapseProgress)
+                } else 1f
+                val panelX = if (collapseTarget != null) {
+                    (collapseTarget.x + collapsedSide / 2f - width / 2f) * collapseProgress
+                } else 0f
+                val panelY = if (collapseTarget != null) {
+                    (collapseTarget.y - height / 2f) * collapseProgress
+                } else 0f
+                val progress = expansion.controller.progress.coerceIn(0f, 1f)
+                val source = expansion.sourceCoverBounds
+                val targetBounds = expansion.targetCoverBounds
+                scaleX = lerp(source.width / width, panelScale, progress)
+                scaleY = lerp(source.height / height, panelScale, progress)
+                translationX = lerp(source.center.x - targetBounds.center.x, panelX, progress)
+                // Keep the dip out of measured geometry so reversing follows the same path.
+                val dip = expansion.sourceBounds.top.coerceAtLeast(0f) * ExpandedCoverDipFraction *
+                    progress * (1f - progress) * (1f - collapseProgress.coerceIn(0f, 1f))
+                translationY = lerp(source.center.y - targetBounds.center.y, panelY, progress) + dip
+                val shape = if (progress >= 1f) expandedShape else {
+                    val radius = lerp(MiniPlayerCoverRadius.toPx(), 16.dp.toPx() * panelScale, progress)
+                    RoundedRectangle((radius / scaleX.coerceAtLeast(0.0001f)).toDp())
+                }
+                setOutline(shape.createOutline(Size(width, height), direction, density))
+                clip = true
+            }
+        }
+    }
+    SideEffect {
+        expansion.targetCoverTransform = transform
+        expansion.targetCoverBackground = coverBackground
+        expansion.hasCover = target != null
+    }
 
     fun resample(coords: LayoutCoordinates) {
         val row = metaRow ?: return
@@ -1150,24 +1233,14 @@ private fun PlayerCover(
 
     Box(
         modifier = Modifier
-            .onGloballyPositioned { resample(it) }
             .size(side)
-            .graphicsLayer {
-                // 收起：绕自身中心缩到 [CollapsedCoverSize]，再把中心从「舞台正中」平移到
-                // 「标题行左侧那一格」。跟参考实现的封面一样，`scale` 和 `translation` 都按
-                // 同一个进度插值，所以整段是匀速滑过去而不是先缩后移。
-                val progress = collapse.value
-                val collapseTarget = anchor
-                if (progress > 0f && collapseTarget != null) {
-                    val targetSidePx = CollapsedCoverSize.toPx()
-                    scaleX = lerp(1f, targetSidePx / size.width, progress)
-                    scaleY = scaleX
-                    translationX = (collapseTarget.x + targetSidePx / 2f - size.width / 2f) * progress
-                    translationY = (collapseTarget.y - size.height / 2f) * progress
-                }
+            .onGloballyPositioned {
+                expansion.onTargetCoverPositioned(it)
+                resample(it)
             }
-            .clip(RoundedRectangle(16.dp))
-            .background(MaterialTheme.colors.scrimMedium),
+            .drawWithContent {
+                coverLayer.record { this@drawWithContent.drawContent() }
+            },
     ) {
         Crossfade(
             targetState = front,

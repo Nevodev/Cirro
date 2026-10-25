@@ -20,10 +20,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.ColorProducer
+import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextMotion
@@ -64,6 +68,7 @@ fun MiniPlayer(
     contentColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.content),
     contentVariantColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.contentVariant),
     progressColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.primary),
+    expansion: PlayerExpansionState? = null,
 ) {
     // 按钮跟着「乐观播放」走：切歌缓冲期 `isPlaying` 是 false，直接拿它画会闪一下暂停图标。
     // `initial` 是首帧快照，同步读一次即可——原先那层 `stateFlow.collectAsState()` 多开了
@@ -82,11 +87,40 @@ fun MiniPlayer(
 
     val error = header.third
     val errorColor = rememberColorProducer(MaterialTheme.colors.error)
+    val visual = remember(expansion, containerColor) {
+        if (expansion == null) Modifier.drawBackground(containerColor)
+        else Modifier
+            .onGloballyPositioned(expansion::onSourcePositioned)
+            .drawWithContent {
+                // Keep the live foreground separate from the opaque container colour, so replaying
+                // it during expansion cannot leave a small pill of the old colour behind.
+                expansion.foregroundLayer.record { this@drawWithContent.drawContent() }
+                if (!expansion.ownsVisual) {
+                    expansion.foregroundLayer.alpha = 1f
+                    drawRect(containerColor())
+                    drawLayer(expansion.foregroundLayer)
+                }
+            }
+    }
+    val coverVisual = remember(expansion) {
+        if (expansion == null) Modifier
+        else Modifier
+            .onGloballyPositioned(expansion::onSourceCoverPositioned)
+            .drawWithContent {
+                expansion.sourceCoverLayer.record { this@drawWithContent.drawContent() }
+                drawLayer(expansion.sourceCoverLayer)
+            }
+    }
 
     Box(
         modifier = modifier
+            .then(
+                if (expansion?.ownsVisual == true && expansion.controller.acceptsInput) {
+                    Modifier.clearAndSetSemantics {}
+                } else Modifier
+            )
             .clip(Capsule())
-            .drawBackground(containerColor)
+            .then(visual)
             .height(boxHeight)
             // 整条可点：开播放页。里面的两个按钮自己消费事件，不会连带触发
             .clickable(onClick = onClick),
@@ -99,7 +133,8 @@ fun MiniPlayer(
                 modifier = Modifier
                     .padding(start = 16.dp)
                     .size(36.dp)
-                    .clip(RoundedRectangle(8.dp))
+                    .clip(RoundedRectangle(MiniPlayerCoverRadius))
+                    .then(coverVisual)
                     .background(MaterialTheme.colors.scrimNormal),
             ) {
                 if (!song.cover.isNullOrEmpty()) {

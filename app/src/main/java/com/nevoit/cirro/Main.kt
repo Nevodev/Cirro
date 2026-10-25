@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -39,6 +40,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
@@ -66,6 +68,7 @@ import com.nevoit.cirro.playback.MiniPlayer
 import com.nevoit.cirro.playback.PlaybackConnection
 import com.nevoit.cirro.playback.PlayerLayer
 import com.nevoit.cirro.playback.PlayerUiController
+import com.nevoit.cirro.playback.rememberPlayerExpansionState
 import com.nevoit.cirro.ui.BottomShade
 import com.nevoit.material.clip.cornerMaskClip
 import com.nevoit.material.core.component.BottomPopupMenuHost
@@ -144,6 +147,8 @@ private const val MiniVariantToneLight = 50
 private const val MiniPrimaryToneDark = 80
 
 private const val MiniPrimaryToneLight = 40
+
+private const val PlayerUnderlayScale = 0.92f
 
 /**
  * 导航目的地：默认页是底部标签页，往上推统一详情页。
@@ -340,154 +345,98 @@ fun BoxScope.Main() {
     )
 
     val navigationPageShape = deviceCornerShape()
+    val playerExpansion = rememberPlayerExpansionState(
+        playerUi,
+        rememberColorProducer(barContainerColor),
+    )
+    val underlayScale = remember(playerExpansion, playerUi) {
+        {
+            val progress =
+                if (playerExpansion.ownsVisual) playerUi.progress.coerceIn(0f, 1f) else 0f
+            1f - (1f - PlayerUnderlayScale) * progress
+        }
+    }
+    val clipUnderlay by remember(underlayScale) {
+        derivedStateOf { underlayScale() < 1f }
+    }
+    val playerUnderlay = remember(underlayScale, navigationPageShape, clipUnderlay) {
+        Modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                val scale = underlayScale()
+                scaleX = scale
+                scaleY = scale
+            }
+            .cornerMaskClip(shape = navigationPageShape, enabled = clipUnderlay)
+    }
     RequestNotificationPermissionOnce()
 
     BottomPopupMenuHost(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black),
         containerColor = rememberColorProducer(menuContainerColor),
         contentColor = rememberColorProducer(miniContentColor),
         contentVariantColor = rememberColorProducer(miniVariantColor),
         actionContainerColor = rememberColorProducer(menuActionContainerColor),
         actionContentColor = rememberColorProducer(menuActionContentColor),
     ) {
-        NavigationHost(
-            navigator = navigator,
-            onHostReady = { hostHandle = it },
-            transitionModifier = { page, isTransitioning ->
-                page
-                    .cornerMaskClip(
-                        shape = navigationPageShape,
-                        enabled = isTransitioning,
-                    )
-            }
-        ) {
-            when (val destination = destination) {
-                MainDestination.Tabs -> Box(modifier = Modifier.fillMaxSize()) {
-                    MainTabs(
-                        session = session,
-                        selectedIndex = selectedIndex,
-                        onSelect = { selectedIndex = it },
-                        onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
-                            navigate(
-                                MainDestination.Collection(
-                                    kind,
-                                    id,
-                                    titleHint,
-                                    coverHint,
-                                    authorHint = authorHint
-                                )
+        Box(playerUnderlay.background(MaterialTheme.colors.pageBackground)) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .onGloballyPositioned(playerExpansion::onUnderlayPositioned)
+            ) {
+                NavigationHost(
+                    navigator = navigator,
+                    onHostReady = { hostHandle = it },
+                    transitionModifier = { page, isTransitioning ->
+                        page
+                            .cornerMaskClip(
+                                shape = navigationPageShape,
+                                enabled = isTransitioning,
                             )
-                        },
-                        onOpenLibraryAlbum = { id, title, cover, author ->
-                            navigate(
-                                MainDestination.Collection(
-                                    CollectionKind.ALBUM,
-                                    id,
-                                    title,
-                                    cover,
-                                    libraryAlbum = true,
-                                    authorHint = author
-                                )
+                    }
+                ) {
+                    when (val destination = destination) {
+                        MainDestination.Tabs -> Box(modifier = Modifier.fillMaxSize()) {
+                            MainTabs(
+                                session = session,
+                                selectedIndex = selectedIndex,
+                                onSelect = { selectedIndex = it },
+                                onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
+                                    navigate(
+                                        MainDestination.Collection(
+                                            kind,
+                                            id,
+                                            titleHint,
+                                            coverHint,
+                                            authorHint = authorHint
+                                        )
+                                    )
+                                },
+                                onOpenLibraryAlbum = { id, title, cover, author ->
+                                    navigate(
+                                        MainDestination.Collection(
+                                            CollectionKind.ALBUM,
+                                            id,
+                                            title,
+                                            cover,
+                                            libraryAlbum = true,
+                                            authorHint = author
+                                        )
+                                    )
+                                },
+                                onOpenLibraryLikedSongs = { navigate(MainDestination.LibraryLikedSongs) },
+                                onOpenLibraryPlaylists = { navigate(MainDestination.LibraryPlaylists) },
+                                onOpenLibraryArtists = { navigate(MainDestination.LibraryArtists) },
+                                onOpenLibraryAlbums = { navigate(MainDestination.LibraryAlbums) },
+                                onOpenLibrarySongs = { navigate(MainDestination.LibrarySongs) },
                             )
-                        },
-                        onOpenLibraryLikedSongs = { navigate(MainDestination.LibraryLikedSongs) },
-                        onOpenLibraryPlaylists = { navigate(MainDestination.LibraryPlaylists) },
-                        onOpenLibraryArtists = { navigate(MainDestination.LibraryArtists) },
-                        onOpenLibraryAlbums = { navigate(MainDestination.LibraryAlbums) },
-                        onOpenLibrarySongs = { navigate(MainDestination.LibrarySongs) },
-                    )
-                }
+                        }
 
-                MainDestination.LibraryLikedSongs -> LibraryLikedSongsRoute(
-                    session = session,
-                    onBack = ::back,
-                    onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
-                        navigate(
-                            MainDestination.Collection(
-                                kind,
-                                id,
-                                titleHint,
-                                coverHint,
-                                authorHint = authorHint
-                            )
-                        )
-                    },
-                )
-
-                MainDestination.LibraryPlaylists -> LibraryPlaylistsRoute(
-                    session = session,
-                    onBack = ::back,
-                    onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
-                        navigate(
-                            MainDestination.Collection(
-                                kind,
-                                id,
-                                titleHint,
-                                coverHint,
-                                authorHint = authorHint
-                            )
-                        )
-                    },
-                )
-
-                MainDestination.LibraryArtists -> LibraryArtistsRoute(
-                    session = session,
-                    onBack = ::back,
-                    onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
-                        navigate(
-                            MainDestination.Collection(
-                                kind,
-                                id,
-                                titleHint,
-                                coverHint,
-                                authorHint = authorHint
-                            )
-                        )
-                    },
-                )
-
-                MainDestination.LibraryAlbums -> LibraryAlbumsRoute(
-                    session = session,
-                    onBack = ::back,
-                    onOpenLibraryAlbum = { id, title, cover, author ->
-                        navigate(
-                            MainDestination.Collection(
-                                CollectionKind.ALBUM,
-                                id,
-                                title,
-                                cover,
-                                libraryAlbum = true,
-                                authorHint = author
-                            )
-                        )
-                    },
-                )
-
-                MainDestination.LibrarySongs -> LibrarySongsRoute(
-                    session = session,
-                    onBack = ::back,
-                    onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
-                        navigate(
-                            MainDestination.Collection(
-                                kind,
-                                id,
-                                titleHint,
-                                coverHint,
-                                authorHint = authorHint
-                            )
-                        )
-                    },
-                )
-
-                is MainDestination.Collection -> {
-                    if (destination.kind == CollectionKind.ARTIST) {
-                        val pageId = entry.id
-                        ArtistRoute(
-                            kind = destination.kind,
-                            id = destination.id,
-                            titleHint = destination.titleHint,
-                            coverHint = destination.coverHint,
-                            authorHint = destination.authorHint,
+                        MainDestination.LibraryLikedSongs -> LibraryLikedSongsRoute(
+                            session = session,
                             onBack = ::back,
                             onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
                                 navigate(
@@ -500,29 +449,137 @@ fun BoxScope.Main() {
                                     )
                                 )
                             },
-                            onOpenShelf = { section, artistName ->
+                        )
+
+                        MainDestination.LibraryPlaylists -> LibraryPlaylistsRoute(
+                            session = session,
+                            onBack = ::back,
+                            onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
                                 navigate(
-                                    MainDestination.ArtistShelf(
-                                        artistId = destination.id,
-                                        section = section,
-                                        artistName = artistName,
+                                    MainDestination.Collection(
+                                        kind,
+                                        id,
+                                        titleHint,
+                                        coverHint,
+                                        authorHint = authorHint
                                     )
                                 )
                             },
-                            onPaletteChanged = { seed ->
-                                if (navigator.backStack.any { it.id == pageId }) {
-                                    artistPageSeeds[pageId] = seed
-                                }
+                        )
+
+                        MainDestination.LibraryArtists -> LibraryArtistsRoute(
+                            session = session,
+                            onBack = ::back,
+                            onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
+                                navigate(
+                                    MainDestination.Collection(
+                                        kind,
+                                        id,
+                                        titleHint,
+                                        coverHint,
+                                        authorHint = authorHint
+                                    )
+                                )
                             },
                         )
-                    } else {
-                        CollectionRoute(
-                            kind = destination.kind,
-                            id = destination.id,
-                            titleHint = destination.titleHint,
-                            coverHint = destination.coverHint,
-                            authorHint = destination.authorHint,
-                            libraryAlbum = destination.libraryAlbum,
+
+                        MainDestination.LibraryAlbums -> LibraryAlbumsRoute(
+                            session = session,
+                            onBack = ::back,
+                            onOpenLibraryAlbum = { id, title, cover, author ->
+                                navigate(
+                                    MainDestination.Collection(
+                                        CollectionKind.ALBUM,
+                                        id,
+                                        title,
+                                        cover,
+                                        libraryAlbum = true,
+                                        authorHint = author
+                                    )
+                                )
+                            },
+                        )
+
+                        MainDestination.LibrarySongs -> LibrarySongsRoute(
+                            session = session,
+                            onBack = ::back,
+                            onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
+                                navigate(
+                                    MainDestination.Collection(
+                                        kind,
+                                        id,
+                                        titleHint,
+                                        coverHint,
+                                        authorHint = authorHint
+                                    )
+                                )
+                            },
+                        )
+
+                        is MainDestination.Collection -> {
+                            if (destination.kind == CollectionKind.ARTIST) {
+                                val pageId = entry.id
+                                ArtistRoute(
+                                    kind = destination.kind,
+                                    id = destination.id,
+                                    titleHint = destination.titleHint,
+                                    coverHint = destination.coverHint,
+                                    authorHint = destination.authorHint,
+                                    onBack = ::back,
+                                    onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
+                                        navigate(
+                                            MainDestination.Collection(
+                                                kind,
+                                                id,
+                                                titleHint,
+                                                coverHint,
+                                                authorHint = authorHint
+                                            )
+                                        )
+                                    },
+                                    onOpenShelf = { section, artistName ->
+                                        navigate(
+                                            MainDestination.ArtistShelf(
+                                                artistId = destination.id,
+                                                section = section,
+                                                artistName = artistName,
+                                            )
+                                        )
+                                    },
+                                    onPaletteChanged = { seed ->
+                                        if (navigator.backStack.any { it.id == pageId }) {
+                                            artistPageSeeds[pageId] = seed
+                                        }
+                                    },
+                                )
+                            } else {
+                                CollectionRoute(
+                                    kind = destination.kind,
+                                    id = destination.id,
+                                    titleHint = destination.titleHint,
+                                    coverHint = destination.coverHint,
+                                    authorHint = destination.authorHint,
+                                    libraryAlbum = destination.libraryAlbum,
+                                    onBack = ::back,
+                                    onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
+                                        navigate(
+                                            MainDestination.Collection(
+                                                kind,
+                                                id,
+                                                titleHint,
+                                                coverHint,
+                                                authorHint = authorHint
+                                            )
+                                        )
+                                    },
+                                )
+                            }
+                        }
+
+                        is MainDestination.ArtistShelf -> ArtistShelfRoute(
+                            artistId = destination.artistId,
+                            artistName = destination.artistName,
+                            section = destination.section,
                             onBack = ::back,
                             onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
                                 navigate(
@@ -539,91 +596,60 @@ fun BoxScope.Main() {
                     }
                 }
 
-                is MainDestination.ArtistShelf -> ArtistShelfRoute(
-                    artistId = destination.artistId,
-                    artistName = destination.artistName,
-                    section = destination.section,
-                    onBack = ::back,
-                    onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
-                        navigate(
-                            MainDestination.Collection(
-                                kind,
-                                id,
-                                titleHint,
-                                coverHint,
-                                authorHint = authorHint
-                            )
-                        )
-                    },
-                )
-            }
-        }
-
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(12.dp)
-                .fillMaxWidth()
-                // 播放页铺开时整块 chrome 往下沉并淡出。位移在 layer 阶段算，Main 不参与
-                .chromeExit { playerUi.progress },
-        ) {
-            if (hasSong) {
-                MiniPlayer(
-                    stateFlow = playbackConnection.state,
-                    onClick = { playerUi.open() },
-                    onTogglePlay = { playbackConnection.togglePlayPause() },
-                    onSkipNext = { playbackConnection.skipToNext() },
-                    containerColor = rememberColorProducer(barContainerColor),
-                    contentColor = rememberColorProducer(miniContentColor),
-                    contentVariantColor = rememberColorProducer(miniVariantColor),
-                    progressColor = rememberColorProducer(miniPrimaryColor),
+                Column(
                     modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(12.dp)
                         .fillMaxWidth(),
-                )
-                VGap()
-            }
-            NavigationBar(
-                items = NavItems.entries.map { entry ->
-                    val icon = painterResource(entry.item.iconRes)
-                    NavigationBarItem(
-                        icon = icon,
-                        label = entry.item.label
+                ) {
+                    if (hasSong) {
+                        MiniPlayer(
+                            stateFlow = playbackConnection.state,
+                            onClick = { playerUi.open() },
+                            onTogglePlay = { playbackConnection.togglePlayPause() },
+                            onSkipNext = { playbackConnection.skipToNext() },
+                            containerColor = rememberColorProducer(barContainerColor),
+                            contentColor = rememberColorProducer(miniContentColor),
+                            contentVariantColor = rememberColorProducer(miniVariantColor),
+                            progressColor = rememberColorProducer(miniPrimaryColor),
+                            expansion = playerExpansion,
+                            modifier = Modifier
+                                .fillMaxWidth(),
+                        )
+                        VGap()
+                    }
+                    NavigationBar(
+                        items = NavItems.entries.map { entry ->
+                            val icon = painterResource(entry.item.iconRes)
+                            NavigationBarItem(
+                                icon = icon,
+                                label = entry.item.label
+                            )
+                        },
+                        selectedIndex = selectedIndex,
+                        onSelect = { index ->
+                            selectedIndex = index
+                            // 详情页还盖在上面时点标签：切标签的同时把详情页收掉
+                            hostHandle?.closeToRoot()
+                        },
+                        containerColor = rememberColorProducer(barContainerColor),
+                        indicatorColor = rememberColorProducer(barIndicatorColor),
+                        activeIconColor = rememberColorProducer(barActiveIconColor),
+                        inactiveIconColor = rememberColorProducer(barInactiveIconColor),
+                        modifier = Modifier.fillMaxWidth(),
                     )
-                },
-                selectedIndex = selectedIndex,
-                onSelect = { index ->
-                    selectedIndex = index
-                    // 详情页还盖在上面时点标签：切标签的同时把详情页收掉
-                    hostHandle?.closeToRoot()
-                },
-                containerColor = rememberColorProducer(barContainerColor),
-                indicatorColor = rememberColorProducer(barIndicatorColor),
-                activeIconColor = rememberColorProducer(barActiveIconColor),
-                inactiveIconColor = rememberColorProducer(barInactiveIconColor),
-                modifier = Modifier.fillMaxWidth()
-            )
+                }
+            }
         }
 
-        // 播放页盖在最上层：导航、迷你条、底栏全在它下面。它整套位置自己算，
-        // 和上面 chrome 的退场共用一个进度值，所以两边永远同步。
+        // 迷你条保留布局，绘制由播放页接管；底栏留在原位，由展开容器自然遮住。
         PlayerLayer(
             controller = playerUi,
             connection = playbackConnection,
+            expansion = playerExpansion,
         )
     }
-}
-
-/**
- * 常驻 chrome 在播放页展开时的退场：整块往下沉，同时淡出。
- *
- * 进度是每帧都在变的动画态，所以位移和透明**只在 graphicsLayer 的 block 里读**。
- * 放进组合期读的话，Main 会跟着手指（和弹簧）每帧重组一次，连带它底下所有页面。
- */
-private fun Modifier.chromeExit(progress: () -> Float): Modifier = graphicsLayer {
-    val value = progress()
-    translationY = value * size.height
-    alpha = 1f - value
 }
 
 /** 导航根页：底部标签页 + 顶栏。MiniPlayer 和底栏不在这儿——它们常驻在导航之外。 */

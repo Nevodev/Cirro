@@ -94,7 +94,6 @@ import com.nevoit.material.core.component.VGap
 import com.nevoit.material.core.layout.LocalOverscrollVisualOffset
 import com.nevoit.material.core.layout.VerticalStack
 import com.nevoit.material.core.layout.isScrolledPast
-import com.nevoit.material.core.modifier.smoothGradient
 import com.nevoit.material.navigation.LocalPageTransitionState
 import com.nevoit.material.core.utility.rememberColorProducer
 import com.nevoit.material.theme.MaterialTheme
@@ -875,12 +874,7 @@ private fun HeaderBlock(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .height(HeaderRise * HeaderGradientRiseMultiplier)
-                .smoothGradient(
-                    color = backgroundColor,
-                    start = 0f,
-                    end = 1f,
-                    intensity = 1f,
-                )
+                .headerCoverGradient(rememberColorProducer(backgroundColor))
         )
 
         Column(
