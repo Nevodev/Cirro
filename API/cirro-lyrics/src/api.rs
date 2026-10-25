@@ -10,7 +10,21 @@
 use serde_json::{json, Value};
 
 use crate::engine;
-use crate::sources::{amll, apple, lrclib, netease};
+use crate::sources::{amll, apple, lrclib, netease, qq};
+
+pub async fn qq_search(term: String) -> Value {
+    match qq::search(&term).await {
+        Ok(songs) => json!({"ok":true,"qqSongs":songs}),
+        Err(e) => fail(e),
+    }
+}
+
+pub async fn qq_lyric(id: String) -> Value {
+    match qq::fetch(&id).await {
+        Ok(lyric) => json!({"ok":true,"qrc":lyric.qrc,"translation":lyric.translation,"roman":lyric.roman}),
+        Err(e) => fail(e),
+    }
+}
 
 fn fail(message: String) -> Value {
     json!({ "ok": false, "message": message })
@@ -89,10 +103,9 @@ pub async fn amll_ttml(ncm_id: String) -> Value {
     }
 }
 
-/// Apple Music 取词。已登录走官方直连、未登录走第三方（`lyrics.paxsenix.org`），
-/// 由原生层按有没有 `media-user-token` 自己分岔 —— 调用方不必关心。
+/// Apple Music 取词。需要登录，使用官方接口。
 ///
-/// 一并带上 `via`（`official` / `paxsenix`）、`storefront` / `storefrontProbed`：
+/// 一并带上 `via`（`official`）、`storefront` / `storefrontProbed`：
 /// 区域取错会让官方那条路**每一首都空手**，而 `reason` 只会写 `no_lyrics` ——
 /// 没有这些字段就分不清"这首歌没有官方词"和"区域取错了"。
 pub async fn apple_ttml(am_id: String) -> Value {

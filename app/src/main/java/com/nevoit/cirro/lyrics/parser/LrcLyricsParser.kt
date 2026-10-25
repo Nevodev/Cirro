@@ -20,7 +20,7 @@ import kotlin.math.abs
  * - `[ti:]/[ar:]/[al:]/[by:]/[offset:]` 等标签（`offset` 会真的移动时间轴）；
  * - **只有时间戳没有文本的行**：不产出歌词行，但会作为上一行的结束时间切分点；
  * - 增强型 LRC 的行内逐字 `<mm:ss.xx>`（lrclib 有时会给）：解析成音节，同时从显示文本里剥掉；
- * - 整行被括号包住 → 背景人声（[LyricLine.isBackground]）；
+ * - 括号保留为普通歌词文本；LRC 没有明确的背景人声标记；
  * - 结束时间统一在这里推导完（末行封顶），模型里不放哨兵值。
  *
  * 🔴 网易那份 `lrc` 前面（有时还有后面）会混进制作人员表与版权声明，`[00:00.000] 作词 : XXX`
@@ -54,18 +54,25 @@ object LrcLyricsParser {
         roman: String? = null,
         track: LyricTrackRef? = null,
     ): Result<Lyrics> = runCatching {
-        val parsed = readEntries(lrc).withoutInfoLines(track)
+        val raw = readEntries(lrc)
+        val qq = source == LyricsSource.QQ
+        val cleaningTrack = if (qq) LyricInfoLines.qqTrack(metadataOf(raw.tags), track) else track
+        val parsed = raw.withoutInfoLines(cleaningTrack, titleIsAnchor = qq)
         var lines = buildLines(parsed.entries)
 
         translation?.takeIf { it.isNotBlank() }?.let {
-            lines = mergeByTime(lines, readEntries(it).withoutInfoLines(track))
+            lines = mergeByTime(
+                lines, readEntries(it).withoutInfoLines(cleaningTrack, titleIsAnchor = qq),
+                ignorePlaceholder = qq,
+            )
         }
         roman?.takeIf { it.isNotBlank() }?.let { romanEntries ->
             // 罗马音塞进 romanizations 而不是 translations
             lines = mergeByTime(
                 lines,
-                readEntries(romanEntries).withoutInfoLines(track),
+                readEntries(romanEntries).withoutInfoLines(cleaningTrack, titleIsAnchor = qq),
                 intoRomanization = true,
+                ignorePlaceholder = qq,
             )
         }
 
@@ -120,9 +127,9 @@ object LrcLyricsParser {
      * 翻译 / 罗马音也各过一遍：它们同样是 LRC 文本、同样可能带着那几行 credit；不过这一遍
      * 只影响「翻译行会不会被并到主行上」（[mergeByTime] 按时间戳找宿主），去掉是安全的。
      */
-    private fun Parsed.withoutInfoLines(track: LyricTrackRef?): Parsed {
+    private fun Parsed.withoutInfoLines(track: LyricTrackRef?, titleIsAnchor: Boolean = false): Parsed {
         if (entries.isEmpty()) return this
-        val flags = LyricInfoLines.markInfoLines(entries.map { it.text }, track)
+        val flags = LyricInfoLines.markInfoLines(entries.map { it.text }, track, titleIsAnchor)
         if (flags.none { it }) return this
         return Parsed(entries.filterIndexed { index, _ -> !flags[index] }, tags)
     }
@@ -217,7 +224,6 @@ object LrcLyricsParser {
                 endMs = 0L,
                 text = plainText,
                 syllables = syllables,
-                isBackground = ParserSupport.isBracketedBackground(plainText),
             )
         }
 
@@ -293,6 +299,7 @@ object LrcLyricsParser {
         lines: List<LyricLine>,
         other: Parsed,
         intoRomanization: Boolean = false,
+        ignorePlaceholder: Boolean = false,
     ): List<LyricLine> {
         val table = other.entries
             .filter { it.text.isNotBlank() }
@@ -303,6 +310,7 @@ object LrcLyricsParser {
         return lines.map { line ->
             val text = table[line.startMs] ?: nearest(times, line.startMs)?.let { table[it] }
             if (text.isNullOrBlank()) return@map line
+            if (ignorePlaceholder && text.trim() == "//") return@map line
 
             val extra = LyricTranslatedText(text)
             if (intoRomanization) {

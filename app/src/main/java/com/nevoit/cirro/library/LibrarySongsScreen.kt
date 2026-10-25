@@ -2,24 +2,45 @@ package com.nevoit.cirro.library
 
 import android.content.Intent
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.movableContentOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -31,6 +52,9 @@ import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.data.model.forSession
 import com.nevoit.cirro.data.model.hasPendingInserts
+import com.nevoit.cirro.detail.animateCollectionSearchExit
+import com.nevoit.cirro.detail.collectionSearchTransform
+import com.nevoit.cirro.detail.rememberCollectionSongSearchResults
 import com.nevoit.cirro.home.LoginCard
 import com.nevoit.cirro.home.OpenCollection
 import com.nevoit.cirro.playback.PlaybackConnection
@@ -94,21 +118,126 @@ fun BoxScope.LibrarySongsRoute(
     val source = remember { QueueSource(title = "歌曲") }
     val subTitle = if (songs.isNotEmpty()) "${songs.size} 首" else null
     val listState = rememberLazyListState()
+    var query by rememberSaveable(content?.userId) { mutableStateOf("") }
+    var searchFocused by remember(content?.userId) { mutableStateOf(false) }
+    var searchFloating by rememberSaveable(content?.userId) { mutableStateOf(false) }
+    var searchClosing by remember(content?.userId) { mutableStateOf(false) }
+    val searchOpacity = remember(content?.userId) { Animatable(1f) }
+    val searchExitProgress = remember(content?.userId) { Animatable(1f) }
+    LaunchedEffect(searchClosing) {
+        if (searchClosing) {
+            // Keep the editor in its floating layer until the exit animation has finished.
+            animateCollectionSearchExit(searchOpacity, searchExitProgress)
+            searchFloating = false
+            searchClosing = false
+        } else {
+            searchOpacity.snapTo(1f)
+            searchExitProgress.snapTo(1f)
+        }
+    }
+    var inlineSearchCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var listCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    val floatingSearchTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 72.dp
+    val floatingSearchTopPx = with(LocalDensity.current) { floatingSearchTop.roundToPx() }
+    val searchFieldHeightPx = with(LocalDensity.current) { LibrarySongSearchHeight.roundToPx() }
+    val currentFloatingSearchTopPx by rememberUpdatedState(floatingSearchTopPx)
+    var searchLiftStartPx by remember(content?.userId) {
+        mutableFloatStateOf(floatingSearchTopPx.toFloat())
+    }
+    val searchFocusRequester = remember(content?.userId) { FocusRequester() }
+    val searchAvailable = content != null && session != Session.LoggedOut
+    val searchLift = remember(searchFloating, content?.userId) {
+        Animatable(
+            if (searchFloating) searchLiftStartPx
+            else floatingSearchTopPx.toFloat()
+        )
+    }
+    LaunchedEffect(searchFloating, floatingSearchTopPx, searchLift, searchAvailable) {
+        if (searchFloating && searchAvailable) {
+            searchFocusRequester.requestFocus()
+            searchLift.animateTo(floatingSearchTopPx.toFloat(), Springs.crisp())
+        }
+    }
+    val focus = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val searchActive = searchFloating || searchFocused || query.isNotEmpty()
+    val closeSearch = {
+        if (!searchClosing) {
+            val layout = listState.layoutInfo
+            val inlineVisible = layout.visibleItemsInfo.any {
+                it.key == "search" && it.offset < layout.viewportEndOffset &&
+                    it.offset + searchFieldHeightPx > layout.viewportStartOffset
+            }
+            searchClosing = searchFloating && !inlineVisible
+            if (!searchClosing) searchFloating = false
+            query = ""
+            keyboard?.hide()
+            focus.clearFocus()
+        }
+    }
+    BackHandler(enabled = searchActive, onBack = closeSearch)
+    val currentCloseSearch by rememberUpdatedState(closeSearch)
+    // Move the same editor between the list and the floating layer to retain text selection.
+    // Inline placement belongs to the lazy list; copying its coordinates after layout lags scroll.
+    val searchEditor = remember(content?.userId) {
+        movableContentOf<Modifier> { editorModifier ->
+            LibrarySongSearchField(
+                query = query,
+                focused = searchFocused,
+                onQueryChange = { query = it },
+                onFocusChange = { focused ->
+                    if (focused && !searchFloating && !searchClosing) {
+                        val inline = inlineSearchCoordinates?.takeIf { it.isAttached }
+                        val list = listCoordinates?.takeIf { it.isAttached }
+                        searchLiftStartPx = if (inline != null && list != null) {
+                            list.localPositionOf(inline, Offset.Zero).y
+                        } else currentFloatingSearchTopPx.toFloat()
+                        searchFloating = true
+                        listState.requestScrollToItem(0)
+                    }
+                    searchFocused = focused
+                },
+                onDismiss = { currentCloseSearch() },
+                background = MaterialTheme.colors.scrimNormal,
+                focusRequester = searchFocusRequester,
+                enabled = !searchClosing,
+                modifier = editorModifier,
+            )
+        }
+    }
+    val searchResult = rememberCollectionSongSearchResults(songs, query)
+    val matches = if (query.isNotBlank()) searchResult?.matches else null
+    val songCount = matches?.size ?: songs.size
+    val playbackSongs = remember(songs, query, searchResult) {
+        if (query.isBlank()) songs
+        else searchResult?.takeIf { it.query == query }?.matches?.map { it.value }.orEmpty()
+    }
 
     VerticalStack(
         state = listState,
         modifier = Modifier
             .fillMaxSize()
+            .imePadding()
+            .onGloballyPositioned { listCoordinates = it }
             .background(MaterialTheme.colors.pageBackground),
     ) {
-        item(key = "title") {
+        if (searchFloating) item(key = "search-header-space") {
+            Spacer(
+                Modifier
+                    .animateItem(tween(200), Springs.crisp(), tween(200))
+                    .statusBarsPadding()
+                    .height(72.dp)
+            )
+        } else item(key = "title") {
             PageHeader(
                 title = "歌曲",
                 subTitle = subTitle,
-                modifier = Modifier.padding(horizontal = 12.dp)
+                modifier = Modifier
+                    .animateItem(tween(200), Springs.crisp(), tween(200))
+                    .padding(horizontal = 12.dp)
             )
         }
-        if (error != null) item(key = "library_error") {
+        if (content == null && error != null) item(key = "library_error") {
             LibraryStatus(error.orEmpty(), viewModel::refresh)
         }
         if (session == Session.LoggedOut) {
@@ -118,20 +247,37 @@ fun BoxScope.LibrarySongsRoute(
                 LibraryStatus(if (session == Session.Offline) "恢复登录后加载资料库" else "正在加载资料库…")
             }
         } else {
+            item(key = "search") {
+                Column(
+                    Modifier
+                        .animateItem(tween(200), Springs.crisp(), tween(200))
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp)
+                        .onGloballyPositioned { inlineSearchCoordinates = it }
+                ) {
+                    if (searchFloating) Spacer(Modifier.height(LibrarySongSearchHeight))
+                    else searchEditor(Modifier)
+                    VGap(12.dp)
+                }
+            }
             item(key = "play") {
-                Column(Modifier.padding(horizontal = 12.dp)) {
+                Column(
+                    Modifier
+                        .animateItem(tween(200), Springs.crisp(), tween(200))
+                        .padding(horizontal = 12.dp)
+                ) {
                     LibraryPlaybackButtons(
-                        enabled = songs.isNotEmpty(),
-                        onPlay = { if (songs.isNotEmpty()) playback.playSongs(songs, 0, source) },
+                        enabled = true,
+                        onPlay = { playback.playSongs(playbackSongs, 0, source) },
                         onShuffle = {
-                            // 跟歌单页一致：整份歌单进队列 + 随机那一轴打开，乱序在 playQueueOf 里做。
-                            if (songs.isNotEmpty()) {
-                                playback.playSongs(songs, 0, source, shuffle = true)
-                            }
+                            playback.playSongs(playbackSongs, 0, source, shuffle = true)
                         },
                     )
                     VGap(24.dp)
                 }
+            }
+            if (error != null) item(key = "library_error") {
+                LibraryStatus(error.orEmpty(), viewModel::refresh)
             }
             if (songsError != null) item(key = "error") {
                 LibraryStatus(songsError.orEmpty(), viewModel::refresh)
@@ -139,14 +285,20 @@ fun BoxScope.LibrarySongsRoute(
             if (songs.isEmpty()) item(key = "empty") {
                 LibraryStatus(if (songsLoading || loading) "正在加载歌曲…" else "暂无歌曲")
             }
-            itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
-                val play = { playback.playSongs(songs, index, source) }
+            items(
+                count = songCount,
+                key = { index -> matches?.get(index)?.value?.id ?: songs[index].id },
+            ) { index ->
+                val match = matches?.get(index)
+                val song = match?.value ?: songs[index]
+                val originalIndex = match?.index ?: index
+                val play = { playback.playSongs(songs, originalIndex, source) }
                 TrackRow(
                     song = song,
                     backgroundColor = MaterialTheme.colors.cardBackground,
                     showArtist = true,
                     index = null,
-                    position = resolvePosition(songs.size, index),
+                    position = resolvePosition(songCount, index),
                     isPlaying = rememberIsCurrentSong(song.id),
                     content = MaterialTheme.colors.content,
                     contentVariant = MaterialTheme.colors.contentVariant,
@@ -166,7 +318,7 @@ fun BoxScope.LibrarySongsRoute(
                     // 左右边距在 TrackRow 内部（背景要铺满整宽，左侧那条缝留给红心星）
                     modifier = Modifier.animateItem(tween(200), Springs.crisp(), tween(200)),
                 )
-                if (index < songs.lastIndex) VGap(4.dp)
+                if (index < songCount - 1) VGap(4.dp)
             }
         }
     }
@@ -174,10 +326,25 @@ fun BoxScope.LibrarySongsRoute(
         color = MaterialTheme.colors.pageBackground,
         threshold = { it.calculateTopPadding() + 12.dp },
         listState = listState,
-        modifier = Modifier.height(72.dp + 48.dp)
+        modifier = Modifier.height(
+            72.dp + 48.dp + if (searchFloating) 12.dp + LibrarySongSearchHeight else 0.dp
+        )
     )
+    if (searchAvailable && searchFloating) {
+        searchEditor(
+            Modifier
+                .align(Alignment.TopStart)
+                .graphicsLayer {
+                    translationY = searchLift.value
+                    collectionSearchTransform(searchExitProgress.value, searchOpacity.value)
+                }
+                .padding(horizontal = 12.dp),
+        )
+    }
     BottomShade(color = MaterialTheme.colors.pageBackground)
-    LibraryBackButton(onBack)
+    LibraryBackButton {
+        if (searchActive) closeSearch() else onBack()
+    }
 }
 
 @Composable

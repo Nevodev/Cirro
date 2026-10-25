@@ -26,6 +26,8 @@ urlencoding = "2"
 base64 = "0.22"
 # 只用来从 Apple 的 index*.js 里抠 JWT —— 刻意避开完整 `regex`（体积）。
 regex-lite = "0.1"
+flate2 = "1"
+quick-xml = "0.38"
 
 [profile.release]
 opt-level = "z"

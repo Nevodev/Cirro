@@ -1,5 +1,6 @@
 package com.nevoit.cirro.playback
 
+import android.app.PendingIntent
 import android.content.Intent
 import androidx.annotation.OptIn
 import androidx.core.net.toUri
@@ -16,6 +17,7 @@ import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import com.nevoit.cirro.MainActivity
 import com.nevoit.cirro.data.AudioQualityStore
 import com.nevoit.cirro.data.NcmBridge
 import com.nevoit.cirro.data.PlayQueueStore
@@ -152,7 +154,20 @@ class PlaybackService : MediaSessionService(), KoinComponent {
             }
         })
 
-        session = MediaSession.Builder(this, player).build()
+        val openApp = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java).apply {
+                action = Intent.ACTION_MAIN
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        session = MediaSession.Builder(this, player)
+            .setSessionActivity(openApp)
+            .setCallback(PlaybackSessionCallback())
+            .build()
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session

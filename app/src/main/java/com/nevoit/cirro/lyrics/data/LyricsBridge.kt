@@ -13,6 +13,17 @@ data class NeteaseLyric(
     val isEmpty: Boolean get() = lrc.isBlank()
 }
 
+@Serializable
+data class QqSongCandidate(
+    val id: String = "",
+    val name: String = "",
+    val artists: List<String> = emptyList(),
+    val album: String = "",
+    val durationMs: Long = 0,
+)
+
+data class QqLyric(val qrc: String, val translation: String, val roman: String)
+
 /**
  * AMLL TTML DB 的一首。
  *
@@ -28,12 +39,12 @@ data class AmllTtml(
 /**
  * Apple TTML。[ttml] 为空说明没拿到，[reason] 说明为什么（目前只会是 `no_lyrics`）。
  *
- * [via] 是这份词的来源：`official`（登录后直连 amp-api）或 `paxsenix`（未登录走第三方端点）。
+ * [via] 是这份词的来源：`official`（登录后直连 amp-api）。
  *
  * [storefront] 是这次实际用的商店区域、[storefrontProbed] 说明它是探测出来的还是回落值。
  * 这两个字段是排障用的：catalog **按区域分区**（同一首中文歌在 `cn` 区有逐字词、在 `us` 区
  * 是零歌词），而 `reason` 只会写 `no_lyrics` —— 没有它们就分不清"这首歌没有官方词"和
- * "区域取错了"。⚠️ 走 `paxsenix` 时 [storefront] 为空（那条路只用曲目 id、与区域无关）。
+ * "区域取错了"。
  */
 data class AppleTtml(
     val ttml: String,
@@ -128,8 +139,7 @@ object LyricsBridge {
      * 配置 Apple Music 凭据。
      *
      * [mediaUserToken] 是 Apple Music **订阅账号**的 `media-user-token`，与网易 cookie 无关；
-     * 传空串 = **未登录**：这一级**不会被跳过**，而是改成「开发者 token 搜索 + 第三方
-     * （`lyrics.paxsenix.org`）取词」—— 歌词仍是 Apple 同源 TTML，只是不直连官方。
+     * 传空串 = 未登录，跳过 Apple 歌词。
      *
      * 开发者 access token、storefront、language 全由原生层自己弄（抓 Apple 网页 /
      * 问 `/v1/me/storefront`），上层不用也不该管 —— 与原项目一致。
@@ -153,6 +163,13 @@ object LyricsBridge {
     /** 是否已配置 Apple 凭据。 */
     fun appleConfigured(): Boolean =
         decode(nativeAppleConfigured()).getOrNull()?.configured ?: false
+
+    fun qqSearch(term: String): Result<List<QqSongCandidate>> =
+        decode(nativeQqSearch(term)).map { it.qqSongs }
+
+    fun qqLyric(id: String): Result<QqLyric?> = decode(nativeQqLyric(id)).map {
+        if (it.qrc.isBlank()) null else QqLyric(it.qrc, it.translation, it.roman)
+    }
 
     /** 网易 LRC（只逐行）。空即这一级没取到。 */
     fun netease(id: Long): Result<NeteaseLyric?> = decode(nativeNetease(id.toString())).map { body ->
@@ -181,8 +198,7 @@ object LyricsBridge {
     }
 
     /**
-     * Apple 歌词。已登录走官方直连、未登录走第三方（`lyrics.paxsenix.org`），
-     * 由原生层按有没有 `media-user-token` 自己分岔 —— 调用方不必关心。
+     * Apple 官方歌词，需要 `media-user-token`。
      *
      * [AppleTtml.ttml] 为空表示没拿到（这首歌确实没有 / 请求失败）。
      */
@@ -292,6 +308,10 @@ object LyricsBridge {
 
     private external fun nativeNetease(id: String): String
 
+    private external fun nativeQqSearch(term: String): String
+
+    private external fun nativeQqLyric(id: String): String
+
     private external fun nativeAmll(ncmId: String): String
 
     private external fun nativeApple(amId: String): String
@@ -321,6 +341,8 @@ private data class BridgeResponse(
     // 通用
     val version: String = "",
     val configured: Boolean = false,
+    val qqSongs: List<QqSongCandidate> = emptyList(),
+    val qrc: String = "",
     // 网易
     val empty: Boolean = false,
     val lrc: String = "",

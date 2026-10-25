@@ -30,18 +30,4 @@ internal object ParserSupport {
                 )
             }
         }
-
-    /**
-     * 判断一行文本是不是被括号整体包住的背景人声。
-     *
-     * LRC 家族没有 `ttm:role` 这种标记，业界通行做法就是看整行括号 —— 与 AMLL 一致，
-     * 半角 `()` 与全角 `（）` 都算。
-     */
-    fun isBracketedBackground(text: String): Boolean {
-        val trimmed = text.trim()
-        if (trimmed.length < 2) return false
-        val first = trimmed.first()
-        val last = trimmed.last()
-        return (first == '(' && last == ')') || (first == '（' && last == '）')
-    }
 }

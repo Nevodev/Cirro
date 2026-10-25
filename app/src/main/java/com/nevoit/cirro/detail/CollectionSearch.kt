@@ -1,6 +1,7 @@
 package com.nevoit.cirro.detail
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.OverscrollEffect
@@ -30,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ColorProducer
+import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
@@ -246,16 +248,7 @@ internal fun CollectionSearchField(
                 progress.animateTo(1f, spec, initialVelocity = velocity)
             }
         } else {
-            coroutineScope {
-                launch { opacity.animateTo(0f, tween(durationMillis = 200)) }
-                progress.animateTo(
-                    targetValue = 0f,
-                    animationSpec = tween(
-                        durationMillis = 400,
-                        easing = CubicBezierEasing(0.2f, 0.2f, 0f, 1f)
-                    )
-                )
-            }
+            animateCollectionSearchExit(opacity, progress)
         }
     }
 
@@ -266,11 +259,7 @@ internal fun CollectionSearchField(
         Row(
             modifier = modifier
                 .graphicsLayer {
-                    val fraction = progress.value
-                    alpha = opacity.value.coerceIn(0f, 1f)
-                    scaleX = 1f + 0.25f * (1f - fraction)
-                    scaleY = scaleX
-                    transformOrigin = TransformOrigin(0.5f, 0.5f)
+                    collectionSearchTransform(progress.value, opacity.value)
                 }
                 .fillMaxWidth()
                 .height(CollectionSearchHeight)
@@ -337,4 +326,25 @@ internal fun CollectionSearchField(
             )
         }
     }
+}
+
+internal suspend fun animateCollectionSearchExit(
+    opacity: Animatable<Float, AnimationVector1D>,
+    progress: Animatable<Float, AnimationVector1D>,
+) = coroutineScope {
+    launch { opacity.animateTo(0f, tween(durationMillis = 200)) }
+    progress.animateTo(
+        targetValue = 0f,
+        animationSpec = tween(
+            durationMillis = 400,
+            easing = CubicBezierEasing(0.2f, 0.2f, 0f, 1f),
+        ),
+    )
+}
+
+internal fun GraphicsLayerScope.collectionSearchTransform(progress: Float, opacity: Float) {
+    alpha = opacity.coerceIn(0f, 1f)
+    scaleX = 1f + 0.25f * (1f - progress)
+    scaleY = scaleX
+    transformOrigin = TransformOrigin(0.5f, 0.5f)
 }

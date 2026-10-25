@@ -5,3 +5,5 @@ pub mod amll;
 pub mod apple;
 pub mod lrclib;
 pub mod netease;
+pub mod qq;
+mod qrc;

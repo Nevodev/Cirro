@@ -1,5 +1,6 @@
 package com.nevoit.cirro.lyrics.parser
 
+import com.nevoit.cirro.lyrics.model.LyricMetadata
 import java.util.Locale
 
 /**
@@ -53,6 +54,18 @@ data class LyricTrackRef(
  * 按实测补了缺项（`演奏` 等）；判据本身按本项目「只做头尾块」的口径收紧过。
  */
 internal object LyricInfoLines {
+    private val QQ_ANNOTATIONS = Regex("""\([^)]*\)|（[^）]*）|\[[^]]*]|【[^】]*】""")
+
+    internal fun qqTrack(metadata: LyricMetadata, fallback: LyricTrackRef?): LyricTrackRef? {
+        val title = metadata.title?.takeIf { it.isNotBlank() } ?: fallback?.title ?: return fallback
+        val artists = metadata.artist?.takeIf { it.isNotBlank() }?.let { listOf(it) }
+            ?: fallback?.artists.orEmpty()
+        // QQ's display title can omit the version/alias annotations present in its own tags.
+        return LyricTrackRef(
+            QQ_ANNOTATIONS.replace(title, "").trim(),
+            artists.map { QQ_ANNOTATIONS.replace(it, "").trim() },
+        )
+    }
 
     /** 单行判定的结论，也是块扫描的推进依据。 */
     private enum class Hit {
@@ -141,16 +154,20 @@ internal object LyricInfoLines {
      *
      * [track] 给了才认标题行；不给（比如 lrclib 那条路拿不到曲目）只是少一条弱判据，不影响其余。
      */
-    fun markInfoLines(texts: List<String>, track: LyricTrackRef? = null): BooleanArray {
+    fun markInfoLines(
+        texts: List<String>,
+        track: LyricTrackRef? = null,
+        titleIsAnchor: Boolean = false,
+    ): BooleanArray {
         val flags = BooleanArray(texts.size)
         if (texts.isEmpty()) return flags
 
-        val head = scan(texts, track, forward = true)
+        val head = scan(texts, track, forward = true, titleIsAnchor)
         // 头尾块不许互相跨界：剩下的全给尾块也不够时，尾块直接放弃
         val tail = if (head >= texts.size) {
             0
         } else {
-            minOf(scan(texts, track, forward = false), texts.size - head)
+            minOf(scan(texts, track, forward = false, titleIsAnchor), texts.size - head)
         }
 
         for (index in 0 until head) flags[index] = true
@@ -164,7 +181,7 @@ internal object LyricInfoLines {
     }
 
     /** 从一端向内扫，返回这一段信息块的跨度（条目数）。 */
-    private fun scan(texts: List<String>, track: LyricTrackRef?, forward: Boolean): Int {
+    private fun scan(texts: List<String>, track: LyricTrackRef?, forward: Boolean, titleIsAnchor: Boolean): Int {
         var span = 0
         var anchored = false
         var index = if (forward) 0 else texts.lastIndex
@@ -178,7 +195,7 @@ internal object LyricInfoLines {
                 index += step
                 continue
             }
-            val hit = classify(text, track)
+            val hit = classify(text, track, titleIsAnchor)
             if (hit == null) break
             if (hit == Hit.STRICT) anchored = true
             span++
@@ -191,7 +208,7 @@ internal object LyricInfoLines {
     }
 
     /** 单行判定。返回 null = 不是信息行。 */
-    private fun classify(text: String, track: LyricTrackRef?): Hit? {
+    private fun classify(text: String, track: LyricTrackRef?, titleIsAnchor: Boolean): Hit? {
         val line = text.replace(FULL_WIDTH_COLON, ':').trim()
         if (line.isEmpty()) return null
 
@@ -206,7 +223,9 @@ internal object LyricInfoLines {
         if (line.startsWith('（') && line.endsWith('）')) return Hit.LOOSE
         if (ISRC.containsMatchIn(line)) return Hit.LOOSE
         if (DASH_PREFIX.containsMatchIn(line)) return Hit.LOOSE
-        if (looksLikeTitleLine(line, track)) return Hit.LOOSE
+        // A matching QQ title + artist identifies its generated header even when all credits
+        // are English and therefore lack the keyword/colon anchor used by ordinary LRC.
+        if (looksLikeTitleLine(line, track)) return if (titleIsAnchor) Hit.STRICT else Hit.LOOSE
 
         return null
     }

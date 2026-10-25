@@ -12,6 +12,24 @@ import org.junit.Test
 
 class TtmlLyricsParserTest {
     @Test
+    fun explicitBackingVocalsSurviveLineTimingWithoutInferringParentheses() {
+        val lyrics = TtmlLyricsParser.parse(
+            ttml(
+                """<p begin="1s" end="3s">(Lead)<span ttm:role="x-bg" begin="1.5s" end="2.5s">(Echo)</span></p>""",
+                timing = "Line",
+            ),
+            LyricsSource.AMLL_TTML_DB,
+        ).getOrThrow()
+        val line = lyrics.lines.single()
+        assertEquals(SyncLevel.LINE, lyrics.syncLevel)
+        assertEquals("(Lead)", line.text)
+        assertFalse(line.isBackground)
+        assertEquals("Echo", requireNotNull(line.background).text)
+        assertTrue(line.syllables.isEmpty())
+        assertTrue(line.background.syllables.isEmpty())
+    }
+
+    @Test
     fun singleTimedSpanRetainsTimingForAppleAndAmll() {
         for (source in listOf(LyricsSource.APPLE_MUSIC, LyricsSource.AMLL_TTML_DB)) {
             for (timing in listOf(null, "Word")) {

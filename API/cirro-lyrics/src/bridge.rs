@@ -202,3 +202,25 @@ pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeLrcl
     let value = engine::RUNTIME.block_on(api::lrclib_lyric(track, artist, album, duration));
     jni_out(&mut env, value)
 }
+
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeQqSearch<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    term: JString<'local>,
+) -> jstring {
+    let term = jni_in(&mut env, &term);
+    let value = engine::RUNTIME.block_on(api::qq_search(term));
+    jni_out(&mut env, value)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeQqLyric<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    id: JString<'local>,
+) -> jstring {
+    let id = jni_in(&mut env, &id);
+    let value = engine::RUNTIME.block_on(api::qq_lyric(id));
+    jni_out(&mut env, value)
+}

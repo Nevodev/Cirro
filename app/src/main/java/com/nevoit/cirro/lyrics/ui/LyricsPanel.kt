@@ -180,6 +180,7 @@ private fun rememberSettledLyricsColor(color: ColorProducer): Color {
 private val LyricsSource.label: String
     get() = when (this) {
         LyricsSource.APPLE_MUSIC -> "Apple Music 官方"
+        LyricsSource.QQ -> "QQ 音乐"
         LyricsSource.AMLL_TTML_DB -> "AMLL TTML DB"
         LyricsSource.NETEASE -> "网易云"
         LyricsSource.LRCLIB -> "lrclib"
@@ -246,7 +247,7 @@ private fun LyricBackground.toAccompanimentLine(
 /**
  * 一行 → 渲染层的行。
  *
- * [LyricLine.isBackground]（整行就是被括号包起来的和声）走 `AccompanimentKaraokeLine`，
+ * [LyricLine.isBackground]（明确标记的独立和声行）走 `AccompanimentKaraokeLine`，
  * 它跟主行是两条独立的行；[LyricLine.background]（主行内嵌的和声）则挂到主行的
  * `accompanimentLines` 上——两种在渲染层是不同路径，别混。
  *

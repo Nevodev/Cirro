@@ -1,5 +1,6 @@
 package com.nevoit.cirro.lyrics.ui.internal.layout
 
+import com.nevoit.cirro.lyrics.core.model.karaoke.KaraokeLine
 import com.nevoit.cirro.lyrics.ui.preparation.PreparedLine
 
 /**
@@ -19,7 +20,7 @@ internal fun PreparedLine.settledLeadingHeight(
     it.settledHeight(translationShown, phoneticShown, density, ownerFocused, true).toDouble()
 }.toFloat()
 
-/** Nested vocals occupy space only while their owning list item is focused. */
+/** Backing vocals occupy space only while their owning list item is focused. */
 internal fun PreparedLine.settledHeight(
     translationShown: Boolean,
     phoneticShown: Boolean,
@@ -27,7 +28,9 @@ internal fun PreparedLine.settledHeight(
     ownerFocused: Boolean,
     nested: Boolean = false,
 ): Float {
-    if (nested && !ownerFocused) return 0f
+    // LyricsReveal collapses standalone backing vocals too. Counting their hidden height here
+    // adds a phantom prefix to every later follow target, accumulating across consecutive BGVs.
+    if (!ownerFocused && (nested || source is KaraokeLine.AccompanimentKaraokeLine)) return 0f
     // Nested lines are rendered with the inner default padding on both sides; the top level adds its
     // own, and only the top level is measured as a list item.
     val padding = if (nested) 16f else 2f * LineVerticalPaddingDp

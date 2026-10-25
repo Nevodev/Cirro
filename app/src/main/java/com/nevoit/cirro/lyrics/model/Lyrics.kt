@@ -3,13 +3,16 @@ package com.nevoit.cirro.lyrics.model
 import kotlinx.serialization.Serializable
 
 /**
- * 歌词来源，按取词优先级排列（越小越优先）。
+ * 歌词来源。取词优先级随 Apple Music 登录态变化。
  *
  * `durationMs` 之类字段的来源展示、调试日志都靠它。
  */
 enum class LyricsSource {
     /** Apple Music 官方 TTML（需 cookie）。 */
     APPLE_MUSIC,
+
+    /** QQ 音乐 QRC / LRC。 */
+    QQ,
 
     /** Steve-xmh 的 AMLL TTML DB。 */
     AMLL_TTML_DB,
@@ -112,7 +115,7 @@ data class LyricLine(
     val background: LyricBackground? = null,
     /** 对唱行（Apple `ttm:agent` person 交替成对侧 / AMLL `isDuet`）。 */
     val isDuet: Boolean = false,
-    /** 该行本身是被括号包裹的背景人声（LRC 侧靠整行括号识别）。 */
+    /** 该行本身被来源明确标记为背景人声；不从普通文本的括号推断。 */
     val isBackground: Boolean = false,
 )
 
