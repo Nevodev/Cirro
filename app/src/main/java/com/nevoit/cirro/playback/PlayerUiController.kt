@@ -56,6 +56,9 @@ class PlayerUiController {
     var isClosing: Boolean by mutableStateOf(false)
         private set
 
+    var isDragging: Boolean by mutableStateOf(false)
+        private set
+
     val acceptsInput: Boolean get() = present && !isClosing
 
     /**
@@ -81,6 +84,7 @@ class PlayerUiController {
     fun onDrag(deltaProgress: Float) {
         if (!present) present = true
         isClosing = false
+        isDragging = true
         val next = (anim.value + deltaProgress).coerceIn(0f, 1f)
         scope.launch { anim.snapTo(next) }
     }
@@ -123,6 +127,7 @@ class PlayerUiController {
     private fun request(open: Boolean, velocity: Float?) {
         present = true
         isClosing = !open
+        isDragging = false
         target = if (open) 1f else 0f
         // collectLatest cancels the previous animation and clears Animatable.velocity; capture it
         // at the request boundary so reversing a running spring keeps its current momentum.

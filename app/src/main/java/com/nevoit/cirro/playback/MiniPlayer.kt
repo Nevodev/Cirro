@@ -3,6 +3,9 @@ package com.nevoit.cirro.playback
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,7 +19,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -25,6 +30,7 @@ import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -84,6 +90,16 @@ fun MiniPlayer(
     val boxWidth = LocalWindowInfo.current.containerDpSize.width - 24.dp
     val boxHeight = 56.dp
     val progressBarWidth = boxWidth - boxHeight
+    val heightPx = LocalWindowInfo.current.containerSize.height.toFloat().coerceAtLeast(1f)
+    val touchSlop = LocalViewConfiguration.current.touchSlop
+    var dragDistance by remember { mutableFloatStateOf(0f) }
+    val dragState = rememberDraggableState { delta ->
+        dragDistance += delta
+        val controller = expansion?.controller
+        if (controller != null && (controller.isDragging || delta < 0f)) {
+            controller.onDrag(-delta / heightPx)
+        }
+    }
 
     val error = header.third
     val errorColor = rememberColorProducer(MaterialTheme.colors.error)
@@ -122,6 +138,16 @@ fun MiniPlayer(
             .clip(Capsule())
             .then(visual)
             .height(boxHeight)
+            .draggable(
+                state = dragState,
+                orientation = Orientation.Vertical,
+                onDragStarted = { dragDistance = 0f },
+                onDragStopped = { velocity ->
+                    val controller = expansion?.controller
+                    if (controller?.isDragging == true) controller.onDragEnd(-velocity / heightPx)
+                    else if (controller == null && dragDistance < -touchSlop) onClick()
+                },
+            )
             // 整条可点：开播放页。里面的两个按钮自己消费事件，不会连带触发
             .clickable(onClick = onClick),
     ) {

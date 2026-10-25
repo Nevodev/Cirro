@@ -337,12 +337,13 @@ fun PlayerLayer(
     // 手指按下去时，控制器的 snapTo 会把这个动画打断，collectLatest 也跟着把这一轮取消，
     // 所以拖拽和动画不会打架。
     LaunchedEffect(controller, expansion) {
-        snapshotFlow { controller.animationRequest }
+        snapshotFlow { controller.animationRequest to controller.isDragging }
             .collectLatest {
-                if (controller.animationTarget().first > 0f) {
+                if (controller.isDragging || controller.animationTarget().first > 0f) {
                     snapshotFlow { expansion.ready }.first { it }
                     expansion.takeOver()
                 }
+                if (controller.isDragging) return@collectLatest
                 controller.animate()
                 controller.onAnimationSettled()
             }
