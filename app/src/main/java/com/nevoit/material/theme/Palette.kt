@@ -44,7 +44,7 @@ fun paletteColors(isDark: Boolean): MaterialColors {
         navigationBarIndicator = scrimNormal.compositeOver(cardBackground),
         onNavigationBarIndicator = accent,
         navigationBarInactiveIcon = contentVariant.compositeOver(cardBackground),
-        iconButtonBackground = cardBackground,
+        iconButtonBackground = scrimNormal,
         onIconButton = accent,
         primaryButtonBackground = accent,
         onPrimaryButton = onAccent,

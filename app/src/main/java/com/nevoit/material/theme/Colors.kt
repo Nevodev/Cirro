@@ -87,7 +87,7 @@ data class MaterialColors(
     val navigationBarInactiveLabel: Color,
 
     // the floating round buttons in the page corners (back, share, more, account)
-    val iconButtonBackground: Color = cardBackground,
+    val iconButtonBackground: Color = scrimNormal,
     val onIconButton: Color = primary,
 
     // filled buttons, split by weight rather than by size: `primary` is the accent fill,
@@ -208,7 +208,7 @@ fun materialColorsFromScheme(scheme: DynamicScheme, isDark: Boolean): MaterialCo
         navigationBarActiveLabel = Color(scheme.onSurface),
         navigationBarInactiveIcon = Color(scheme.onSurfaceVariant),
         navigationBarInactiveLabel = Color(scheme.onSurfaceVariant),
-        iconButtonBackground = cardBackground,
+        iconButtonBackground = scrimNormal,
         onIconButton = Color(scheme.primary),
         primaryButtonBackground = Color(scheme.primary),
         onPrimaryButton = Color(scheme.onPrimary),

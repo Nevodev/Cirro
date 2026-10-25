@@ -86,6 +86,7 @@ import com.nevoit.cirro.ui.TopShade
 import com.nevoit.cirro.ui.TrackRow
 import com.nevoit.cirro.ui.resolvePosition
 import com.nevoit.cirro.ui.video.ArtistHeaderVideo
+import com.nevoit.material.core.animation.animatePremultipliedColorAsState
 import com.nevoit.material.core.component.BottomPopupMenuScope
 import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.Text
@@ -468,7 +469,7 @@ private fun ArtistScreen(
         label = "itemBg",
     )
 
-    val circleColor by animateColorAsState(
+    val circleColor = animatePremultipliedColorAsState(
         targetValue = poleTone(CircleToneDark, CircleToneLight)
             ?: MaterialTheme.colors.iconButtonBackground,
         animationSpec = tween(durationMillis = 500),
