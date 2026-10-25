@@ -37,6 +37,7 @@ internal class AccumulatedLayoutMetrics(
 
     // One entry per laid out line, ascending by the first item index of the line.
     private var lineStarts = IntArray(0)
+    private var lineEnds = IntArray(0)
     private var lineSizes = LongArray(0)
     // Averaged distance inserted before a line that follows items which were never laid out.
     private var lineGaps = LongArray(0)
@@ -231,6 +232,7 @@ internal class AccumulatedLayoutMetrics(
         sampleLineSize = sizeAcc / pendingCount
         sampleItemsPerLine = if (itemAcc > 0) itemAcc.toDouble() / pendingCount else 1.0
 
+        var rebuildFrom = lines
         for (k in 0 until pendingCount) {
             val start = pendingStarts[k]
             val endItem = pendingEnds[k]
@@ -240,16 +242,14 @@ internal class AccumulatedLayoutMetrics(
                 if (lineSizes[known] != size) {
                     sizeSum += size - lineSizes[known]
                     lineSizes[known] = size
-                    rebuild(known)
+                    rebuildFrom = minOf(rebuildFrom, known)
                 }
-            } else if (lines == 0 || start > lineStarts[lines - 1]) {
-                val from = if (lines == 0) 0 else end
-                val gap = if (start > from) ((start - from) * stepPerItem()).toLong() else 0L
-                append(start, size, gap)
-                itemsSum += endItem - start
+            } else {
+                rebuildFrom = minOf(rebuildFrom, insert(start, endItem, size))
             }
             if (endItem > end) end = endItem
         }
+        if (rebuildFrom < lines) rebuild(rebuildFrom)
 
         val target = firstVisibleIndex()
         var k = 0
@@ -258,34 +258,60 @@ internal class AccumulatedLayoutMetrics(
         anchorOffset = pendingOffsets[k]
     }
 
-    private fun append(start: Int, size: Long, gap: Long) {
+    private fun insert(start: Int, endItem: Int, size: Long): Int {
+        var low = 0
+        var high = lines
+        while (low < high) {
+            val mid = (low + high) ushr 1
+            if (lineStarts[mid] < start) low = mid + 1 else high = mid
+        }
+        val index = low
+        val from = if (index == 0) 0 else lineEnds[index - 1]
+        // Split the existing estimate when scrolling back into an unmeasured prefix or gap.
+        // Keep the rest of that estimate fixed; only the newly measured line becomes exact.
+        val nextStart = if (index < lines) lineStarts[index] else start
+        val step = if (index < lines && nextStart > from) {
+            lineGaps[index].toDouble() / (nextStart - from)
+        } else stepPerItem()
+        val gap = ((start - from).coerceAtLeast(0) * step).toLong()
+        val remainingGap = if (index < lines) {
+            (lineGaps[index] - ((endItem - from) * step).toLong()).coerceAtLeast(0L)
+        } else 0L
+
         if (lines >= lineStarts.size) {
             val capacity = max(lines + 1, lineStarts.size * 2)
             lineStarts = lineStarts.copyOf(capacity)
+            lineEnds = lineEnds.copyOf(capacity)
             lineSizes = lineSizes.copyOf(capacity)
             lineGaps = lineGaps.copyOf(capacity)
         }
         if (lines + 1 >= lineOffsets.size) {
             lineOffsets = lineOffsets.copyOf(max(lines + 2, lineOffsets.size * 2))
         }
-        // lineOffsets[lines] is the offset just past the last line, so a gap only has to be added.
-        val offset = lineOffsets[lines] + gap
-        lineStarts[lines] = start
-        lineSizes[lines] = size
-        lineGaps[lines] = gap
-        lineOffsets[lines] = offset
+        lineStarts.copyInto(lineStarts, index + 1, index, lines)
+        lineEnds.copyInto(lineEnds, index + 1, index, lines)
+        lineSizes.copyInto(lineSizes, index + 1, index, lines)
+        lineGaps.copyInto(lineGaps, index + 1, index, lines)
+        lineStarts[index] = start
+        lineEnds[index] = endItem
+        lineSizes[index] = size
+        lineGaps[index] = gap
+        if (index < lines) lineGaps[index + 1] = remainingGap
         sizeSum += size
+        itemsSum += endItem - start
         lines++
-        lineOffsets[lines] = offset + size + spacing
+        return index
     }
 
     private fun rebuild(from: Int) {
-        var k = from + 1
-        while (k <= lines) {
-            lineOffsets[k] = lineOffsets[k - 1] + lineSizes[k - 1] + spacing +
-                (if (k < lines) lineGaps[k] else 0L)
+        var offset = if (from == 0) 0L else lineOffsets[from - 1] + lineSizes[from - 1] + spacing
+        var k = from
+        while (k < lines) {
+            lineOffsets[k] = offset + lineGaps[k]
+            offset = lineOffsets[k] + lineSizes[k] + spacing
             k++
         }
+        lineOffsets[lines] = offset
     }
 
     /** Index of the accumulated line holding [itemIndex], or -1 when that item was never laid out. */
@@ -303,10 +329,8 @@ internal class AccumulatedLayoutMetrics(
                 high = mid - 1
             }
         }
-        return if (found >= 0 && itemIndex < lineEnd(found)) found else -1
+        return if (found >= 0 && itemIndex < lineEnds[found]) found else -1
     }
-
-    private fun lineEnd(index: Int): Int = if (index < lines - 1) lineStarts[index + 1] else end
 
     private fun contentSizePx(): Long {
         if (total <= 0) return before + after

@@ -65,6 +65,7 @@ import kotlin.time.Duration.Companion.milliseconds
 
 internal val CollectionSearchHeight = 48.dp
 internal val CollectionSearchPullThreshold = 96.dp
+private val SearchLineBreaks = Regex("\\r\\n|[\\n\\r\\u000B\\u000C\\u0085\\u2028\\u2029]")
 
 @Stable
 internal class CollectionSearchState(
@@ -75,7 +76,13 @@ internal class CollectionSearchState(
 ) {
     var revealed by mutableStateOf(revealed)
         private set
-    var query by mutableStateOf(query)
+    private var singleLineQuery by mutableStateOf(SearchLineBreaks.replace(query, " "))
+    // singleLine controls the field layout; pasted paragraph separators must also leave the model.
+    var query: String
+        get() = singleLineQuery
+        set(value) {
+            singleLineQuery = SearchLineBreaks.replace(value, " ")
+        }
     var animationVelocity by mutableStateOf<Float?>(null)
         private set
     private var pullDistance = 0f

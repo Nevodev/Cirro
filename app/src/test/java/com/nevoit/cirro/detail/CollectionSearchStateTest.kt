@@ -149,6 +149,31 @@ class CollectionSearchStateTest {
         assertTrue(state.revealed)
     }
 
+    @Test
+    fun pastingMultilineTextStoresOneLineAndKeepsWordsSeparated() {
+        val state = pressedState()
+        state.query = "晴天\r\n周杰伦\n叶惠美\rLive"
+        assertEquals("晴天 周杰伦 叶惠美 Live", state.query)
+    }
+
+    @Test
+    fun unicodeParagraphAndLineSeparatorsCannotLeaveHiddenSelectableLines() {
+        val state = pressedState()
+        state.query = "a\u000Bb\u000Cc\u0085d\u2028e\u2029f"
+        assertEquals("a b c d e f", state.query)
+    }
+
+    @Test
+    fun restoringAMultilineQueryAlsoNormalizesItAndOrdinaryEditingKeepsSpaces() {
+        val state = CollectionSearchState(96f, 12f, revealed = true, query = "晴天\n周杰伦")
+        assertEquals("晴天 周杰伦", state.query)
+        state.query = "  晴天  Live  "
+        assertEquals("  晴天  Live  ", state.query)
+        state.query = ""
+        assertEquals("", state.query)
+        assertTrue(state.revealed)
+    }
+
     private fun pressedState(velocity: () -> Float = { 0f }) =
         CollectionSearchState(96f, 12f).apply { beginGesture(velocity) }
 
