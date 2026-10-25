@@ -20,7 +20,7 @@ internal class LyricsFocusHeightUpdates(
         previous = current
         // Without a baseline, reconcile every item with the existing height index once.
         if (last == null) return null
-        if (last.allIndices == current.allIndices &&
+        if (last.layoutIndices == current.layoutIndices &&
             last.activeIntro == current.activeIntro &&
             last.activeInterludeIndex == current.activeInterludeIndex
         ) return EmptyIndices
@@ -30,8 +30,8 @@ internal class LyricsFocusHeightUpdates(
             val index = itemIndex(sourceIndex)
             if (index in items.indices) changed.add(index)
         }
-        for (index in last.allIndices) if (index !in current.allIndices) add(index)
-        for (index in current.allIndices) if (index !in last.allIndices) add(index)
+        for (index in last.layoutIndices) if (index !in current.layoutIndices) add(index)
+        for (index in current.layoutIndices) if (index !in last.layoutIndices) add(index)
         if (last.activeIntro != current.activeIntro) add(0)
         if (last.activeInterludeIndex != current.activeInterludeIndex) {
             last.activeInterludeIndex?.let(::add)

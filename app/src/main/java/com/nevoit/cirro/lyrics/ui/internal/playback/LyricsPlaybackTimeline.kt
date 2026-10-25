@@ -43,8 +43,20 @@ private class TimelineBoundary {
     val endingInterludes = mutableListOf<Int>()
 }
 
-internal class LyricsPlaybackTimeline(lyrics: SyncedLyrics, prepared: PreparedLyrics) {
-    private val delayedFirstWordMinWaitMillis = 200L
+internal class LyricsPlaybackTimeline(
+    lyrics: SyncedLyrics,
+    prepared: PreparedLyrics,
+    earlyLineSwitchMillis: Int = DefaultEarlyLineSwitchMillis,
+) {
+    init {
+        require(earlyLineSwitchMillis >= 0)
+    }
+
+    companion object {
+        // Follow and backing-vocal layout move together; syllable clocks keep their source times.
+        const val DefaultEarlyLineSwitchMillis = 150
+        private const val FirstWordGapThresholdMillis = 200L
+    }
     val state = LyricsPlaybackState(prepared)
     private val boundaries: IntArray
     private val focusStates: List<FocusState>
@@ -194,7 +206,7 @@ internal class LyricsPlaybackTimeline(lyrics: SyncedLyrics, prepared: PreparedLy
                     // Keep the decision tied to the line change, even after the first word starts.
                     firstWordStartsLater = firstChangedAt != Int.MIN_VALUE &&
                         firstWordStart != null &&
-                        firstWordStart.toLong() - firstChangedAt >= delayedFirstWordMinWaitMillis,
+                        firstWordStart.toLong() - firstChangedAt >= FirstWordGapThresholdMillis,
                 )
             )
             if (event.startingRows.isNotEmpty() || event.endingRows.isNotEmpty()) {
@@ -210,13 +222,80 @@ internal class LyricsPlaybackTimeline(lyrics: SyncedLyrics, prepared: PreparedLy
             }
             visibleIntervals.add(visibleSnapshot)
         }
-        boundaries = events.keys.toIntArray()
-        focusStates = focusIntervals
-        activeRows = rowIntervals
-        visibleLines = visibleIntervals
-        endingRows = events.values.map { it.endingRows }
-        hidingLines = events.values.map { it.hidingLines }
-        showingLines = events.values.map { it.showingLines }
+        val actualBoundaries = events.keys.toIntArray()
+        data class EarlySwitch(val previous: Int, val next: Int, val until: Int, val layoutIndices: List<Int>)
+        val earlySwitches = sortedMapOf<Int, EarlySwitch>()
+        var previousChange = Int.MIN_VALUE
+        for (index in 1 until focusIntervals.size) {
+            val previous = focusIntervals[index - 1].firstIndex
+            val nextLine = focusIntervals[index].firstIndex
+            if (previous == nextLine) continue
+            val handoff = actualBoundaries[index]
+            val nextWord = (lines.getOrNull(nextLine) as? KaraokeLine)
+                ?.syllables?.firstOrNull { it.content.isNotBlank() }?.start
+                ?: lines.getOrNull(nextLine)?.start
+            val gap = nextWord?.toLong()?.minus(handoff)
+            if (earlyLineSwitchMillis > 0 && nextLine > previous &&
+                lines.getOrNull(previous) !is KaraokeLine.AccompanimentKaraokeLine &&
+                lines.getOrNull(nextLine) !is KaraokeLine.AccompanimentKaraokeLine &&
+                gap != null && gap in 0 until FirstWordGapThresholdMillis
+            ) {
+                // Clamp to the preceding follow interval so short lines cannot be skipped.
+                val early = maxOf(
+                    handoff.toLong() - earlyLineSwitchMillis,
+                    previousChange.toLong() + 1,
+                    starts[previous].toLong() + 1,
+                    0L,
+                )
+                if (early < handoff) earlySwitches[early.toInt()] = EarlySwitch(
+                    previous, nextLine, handoff, focusIntervals[index].allIndices,
+                )
+            }
+            previousChange = handoff
+        }
+        boundaries = (events.keys + earlySwitches.keys).sorted().toIntArray()
+        val sourceIntervals = IntArray(boundaries.size)
+        var actual = 0
+        var early: EarlySwitch? = null
+        focusStates = boundaries.mapIndexed { index, time ->
+            while (actual + 1 < actualBoundaries.size && actualBoundaries[actual + 1] <= time) actual++
+            sourceIntervals[index] = actual
+            if (early?.let { time >= it.until } == true) early = null
+            earlySwitches[time]?.let { early = it }
+            val original = focusIntervals[actual]
+            val transition = early?.takeIf { original.firstIndex == it.previous }
+            if (transition == null) original else original.copy(
+                followIndex = transition.next,
+                layoutIndices = transition.layoutIndices,
+                firstWordStartsLater = false,
+            )
+        }
+        activeRows = sourceIntervals.map { rowIntervals[it] }
+        val vocalOwners = mutableMapOf<PreparedLine, Int>()
+        fun registerVocals(line: PreparedLine, owner: Int) {
+            if (line.source is KaraokeLine.AccompanimentKaraokeLine) vocalOwners[line] = owner
+            line.before.forEach { registerVocals(it, owner) }
+            line.after.forEach { registerVocals(it, owner) }
+        }
+        prepared.lines.forEachIndexed { index, line -> line?.let { registerVocals(it, index) } }
+        visibleLines = sourceIntervals.mapIndexed { index, source ->
+            val focus = focusStates[index]
+            if (focus.layoutIndices == focus.allIndices) visibleIntervals[source] else {
+                visibleIntervals[source].filter { vocal ->
+                    val owner = vocalOwners[vocal]
+                    owner !in focus.allIndices || owner in focus.layoutIndices
+                }
+            }
+        }
+        // Synthetic follow boundaries must not replay actual word/visibility boundary events.
+        endingRows = boundaries.map { events[it]?.endingRows.orEmpty() }
+        hidingLines = visibleLines.mapIndexed { index, visible ->
+            visibleLines.getOrNull(index - 1).orEmpty().filter { it !in visible }
+        }
+        showingLines = visibleLines.mapIndexed { index, visible ->
+            val previous = visibleLines.getOrNull(index - 1).orEmpty()
+            visible.filter { it !in previous }
+        }
         cursor = BoundaryCursor(boundaries)
     }
 

@@ -55,6 +55,7 @@ data class LyricTrackRef(
  */
 internal object LyricInfoLines {
     private val QQ_ANNOTATIONS = Regex("""\([^)]*\)|（[^）]*）|\[[^]]*]|【[^】]*】""")
+    private val QQ_ARTIST_SEPARATOR = Regex("""\s*/\s*""")
 
     internal fun qqTrack(metadata: LyricMetadata, fallback: LyricTrackRef?): LyricTrackRef? {
         val title = metadata.title?.takeIf { it.isNotBlank() } ?: fallback?.title ?: return fallback
@@ -63,7 +64,10 @@ internal object LyricInfoLines {
         // QQ's display title can omit the version/alias annotations present in its own tags.
         return LyricTrackRef(
             QQ_ANNOTATIONS.replace(title, "").trim(),
-            artists.map { QQ_ANNOTATIONS.replace(it, "").trim() },
+            artists.flatMap {
+                val name = QQ_ANNOTATIONS.replace(it, "").trim()
+                listOf(name) + QQ_ARTIST_SEPARATOR.split(name)
+            }.filter { it.isNotBlank() }.distinct(),
         )
     }
 
@@ -107,6 +111,15 @@ internal object LyricInfoLines {
         """\b(recorded|mixed|mastered|produced|published|engineered|written|arranged|""" +
             """composed|percussion|programming|vocals)\b""",
         RegexOption.IGNORE_CASE,
+    )
+
+    private val ENGLISH_CREDIT_LABEL = Regex(
+        """^(?:lyrics|words|music|written|composed|produced|arranged)\s+by\s*:\s*\S""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    private val QQ_TRANSLATION_NOTICE = Regex(
+        """^(?:QQ音乐享有本翻译作品的著作权|以下歌词翻译由.{1,40}提供)[。.!！]?$""",
     )
 
     private val ISRC = Regex("""^ISRC[\s:：]?""", RegexOption.IGNORE_CASE)
@@ -216,6 +229,9 @@ internal object LyricInfoLines {
         if (line.endsWith(':') && line.length < SPEAKER_LABEL_MAX_CHARS) return null
 
         if (hasKeywordAndColon(line)) return Hit.STRICT
+        if (ENGLISH_CREDIT_LABEL.containsMatchIn(line)) return Hit.STRICT
+        // QQ emits these as timed translation rows, often without an adjacent personnel block.
+        if (titleIsAnchor && QQ_TRANSLATION_NOTICE.matches(line)) return Hit.STRICT
 
         if (copyrightHits(line) >= COPYRIGHT_MIN_HITS) return Hit.LOOSE
         if (ENGLISH_CREDIT.containsMatchIn(line)) return Hit.LOOSE

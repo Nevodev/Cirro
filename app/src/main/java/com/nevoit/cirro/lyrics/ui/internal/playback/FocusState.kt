@@ -6,4 +6,8 @@ internal data class FocusState(
     val activeInterludeIndex: Int?,
     val activeIntro: Boolean,
     val firstWordStartsLater: Boolean = false,
-)
+    val followIndex: Int = firstIndex,
+    val layoutIndices: List<Int> = allIndices,
+) {
+    val followEndIndex: Int get() = maxOf(followIndex, layoutIndices.lastOrNull() ?: firstIndex)
+}

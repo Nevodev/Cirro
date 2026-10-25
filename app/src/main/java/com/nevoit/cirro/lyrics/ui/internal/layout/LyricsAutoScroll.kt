@@ -107,6 +107,8 @@ internal fun lyricsAutoScroll(
                     state.resumeRequest,
                     wordStartsLater(),
                     seeking,
+                    state.followGeometryRevision,
+                    if (seeking) playback?.invoke()?.let { state.seekPositionAt(it) } else null,
                 )
             }
             .collectLatest { request ->
@@ -115,13 +117,25 @@ internal fun lyricsAutoScroll(
                 val extraBounce = !request.seeking && request.firstWordStartsLater && previousIndex >= 0 &&
                     request.index > previousIndex && request.seek == previousSeek &&
                     request.resume == previousResume
+                val continueVelocity = !request.seeking && request.index == previousIndex &&
+                    request.seek == previousSeek && request.resume == previousResume
                 previousSeek = request.seek
                 previousResume = request.resume
                 previousIndex = request.index
                 if (request.index >= 0) {
-                    state.animateFollowToItem(
-                        request.index, request.end, cascade, animationSpec, extraBounce,
-                    )
+                    if (request.seeking) {
+                        val position = request.seekPosition
+                        state.animateSeekToItem(
+                            position?.index ?: request.index,
+                            position?.nextIndex ?: request.index,
+                            position?.fraction ?: 0f,
+                        )
+                    } else {
+                        state.animateFollowToItem(
+                            request.index, request.end, cascade, animationSpec, extraBounce,
+                            continueVelocity = continueVelocity,
+                        )
+                    }
                 }
             }
     }
@@ -135,4 +149,6 @@ private data class FollowTarget(
     val resume: Int,
     val firstWordStartsLater: Boolean,
     val seeking: Boolean,
+    val geometryRevision: Int,
+    val seekPosition: LyricsSeekPosition?,
 )

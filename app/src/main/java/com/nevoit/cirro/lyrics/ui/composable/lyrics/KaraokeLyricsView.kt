@@ -176,7 +176,7 @@ fun KaraokeLyricsView(
         // 与当前位置相同，弹簧成为空操作。scene 就绪那一帧 `timeline.focus` 已被真位置刷过，
         // 所以这一句算出的就是当前行而不是第一行。
         SideEffect {
-            listState.snapToItemOnNextLayout(mapping.itemIndex(timeline.focus.value.firstIndex))
+            listState.snapToItemOnNextLayout(mapping.itemIndex(timeline.focus.value.followIndex))
         }
         val translationShown = rememberUpdatedState(showTranslation)
         LyricsTexturePrefetch(
@@ -184,7 +184,7 @@ fun KaraokeLyricsView(
             scene.resources,
             listState,
         ) {
-            mapping.itemIndex(timeline.focus.value.firstIndex)
+            mapping.itemIndex(timeline.focus.value.followIndex)
         }
         val phoneticShown = rememberUpdatedState(showPhonetic)
         val listItems =
@@ -207,15 +207,18 @@ fun KaraokeLyricsView(
                     }
                     LyricsListItem(
                         key = "${lyrics.lines[index].start}-${lyrics.lines[index].end}-$index",
+                        seekStartMillis = lyrics.lines[index].takeUnless {
+                            it is KaraokeLine.AccompanimentKaraokeLine
+                        }?.start,
                         preserveAnchorOnHeightChange = false,
                         focusHeightPx = line?.let {
                             {
-                                if (index in timeline.focus.value.allIndices) focusHeight else 0
+                                if (index in timeline.focus.value.layoutIndices) focusHeight else 0
                             }
                         },
                         focusLeadingHeightPx = line?.let {
                             {
-                                if (index in timeline.focus.value.allIndices) leadingHeight else 0
+                                if (index in timeline.focus.value.layoutIndices) leadingHeight else 0
                             }
                         },
                         breathingHeightPx = breathingHeight,
@@ -230,12 +233,12 @@ fun KaraokeLyricsView(
                                 translationShown.value,
                                 phoneticShown.value,
                                 density.density,
-                                index in timeline.focus.value.allIndices,
+                                index in timeline.focus.value.layoutIndices,
                             )?.toInt() ?: 0) + breathingHeight()
                         },
                         // Start with the same focus occupancy as the geometry model.
                         estimatedHeightPx =
-                            (if (index in timeline.focus.value.allIndices) focusedHeight
+                            (if (index in timeline.focus.value.layoutIndices) focusedHeight
                             else unfocusedHeight).toInt() + breathingHeight(),
                     )
                 }
@@ -252,14 +255,13 @@ fun KaraokeLyricsView(
             lyricsAutoScroll(
                 listState,
                 targetIndex = {
-                    mapping.itemIndex(timeline.focus.value.firstIndex)
+                    mapping.itemIndex(timeline.focus.value.followIndex)
                 },
                 animationSpec = scrollAnimationSpec,
                 resumeDelayMillis = autoScrollResumeDelayMillis,
                 focusEndIndex = {
                     mapping.itemIndex(
-                        timeline.focus.value.allIndices.lastOrNull()
-                            ?: timeline.focus.value.firstIndex
+                        timeline.focus.value.followEndIndex
                     )
                 },
                 playbackPosition = timeProvider,
@@ -380,7 +382,7 @@ fun KaraokeLyricsView(
                                 prepared,
                                 timeline.state,
                                 scene.resources,
-                                ownerFocused = { index in timeline.focus.value.allIndices },
+                                ownerFocused = { index in timeline.focus.value.layoutIndices },
                                 leadingContentOffset = { listState.chain.leadingOffset(itemIndex) },
                                 verticalPadding = LineVerticalPaddingDp.dp,
                                 // Top-level rows take the inset here; the nested ones inherit the

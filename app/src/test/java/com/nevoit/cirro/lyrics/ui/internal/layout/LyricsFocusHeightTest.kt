@@ -11,6 +11,39 @@ import org.junit.Test
 
 class LyricsFocusHeightTest {
     @Test
+    fun earlyFollowCommitsBackingHeightOnceBeforeRealWordFocusChanges() {
+        var focus = FocusState(0, listOf(0), null, false)
+        val reads = IntArray(2)
+        val items = List(2) { index ->
+            LyricsListItem(
+                key = index,
+                estimatedHeightPx = if (index == 0) 180 else 80,
+                focusHeightPx = {
+                    reads[index]++
+                    if (index in focus.layoutIndices) 100 else 0
+                },
+                focusLeadingHeightPx = { if (index in focus.layoutIndices) 60 else 0 },
+            )
+        }
+        val state = LyricsLazyListState()
+        state.focusHeightUpdates = LyricsFocusHeightUpdates(items, { focus }, { it })
+        state.configure(items, 400, 0, 0, 1000, 1000)
+        reads.fill(0)
+        focus = focus.copy(followIndex = 1, layoutIndices = listOf(1))
+        state.updateFocusHeights()
+        assertEquals(listOf(0), focus.allIndices)
+        assertEquals(80, state.heights.height(0))
+        assertEquals(180, state.heights.height(1))
+        assertEquals(80.0, state.heights.top(1), 0.0)
+        assertEquals(2, reads.sum())
+        reads.fill(0)
+        focus = FocusState(1, listOf(1), null, false)
+        state.updateFocusHeights()
+        assertEquals(0, reads.sum())
+        assertEquals(80.0, state.heights.top(1), 0.0)
+    }
+
+    @Test
     fun upperAndLowerBgvOccupancyIsCommittedAndCompensatedExactlyOnce() {
         var focused = false
         val state = LyricsLazyListState()

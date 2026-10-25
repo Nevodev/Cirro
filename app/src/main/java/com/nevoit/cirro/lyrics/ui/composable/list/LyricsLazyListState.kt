@@ -3,9 +3,12 @@ package com.nevoit.cirro.lyrics.ui.composable.list
 import com.nevoit.cirro.lyrics.ui.internal.layout.LyricsHeightIndex
 import com.nevoit.cirro.lyrics.ui.internal.layout.LyricsFocusHeightUpdates
 import com.nevoit.cirro.lyrics.ui.internal.layout.LyricsScrollChainState
+import com.nevoit.cirro.lyrics.ui.internal.layout.LyricsSeekPosition
+import com.nevoit.cirro.lyrics.ui.internal.layout.LyricsSeekTimeline
 
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.MutatePriority
@@ -31,6 +34,7 @@ data class LyricsListItem(
     val focusLeadingHeightPx: (() -> Int)? = null,
     val breathingHeightPx: (() -> Int)? = null,
     val visualOverflowPx: Int = 0,
+    val seekStartMillis: Int? = null,
 ) {
     init {
         require(estimatedHeightPx >= 0)
@@ -57,6 +61,11 @@ class LyricsLazyListState(
     internal val chain = LyricsScrollChainState()
     private var followingChain = false
     private var predictingFollow = false
+    private var followVelocity = 0f
+    private var velocityTarget = -1
+    private var preparingFollow = false
+    internal var followGeometryRevision by mutableIntStateOf(0)
+        private set
     internal var followAnchorIndex = -1
         private set
 
@@ -90,6 +99,8 @@ class LyricsLazyListState(
         anchoringContentChange = false
         suppressChain = true
         predictingFollow = false
+        followVelocity = 0f
+        velocityTarget = -1
         chain.reset(position)
     }
 
@@ -99,12 +110,24 @@ class LyricsLazyListState(
         cascade: Boolean,
         animationSpec: AnimationSpec<Float>,
         extraBounce: Boolean = false,
+        continueVelocity: Boolean = false,
     ) {
         if (followAnchorIndex != index) anchoringContentChange = false
         followAnchorIndex = index
         animateToItem(
             index, 0, animationSpec, cascade, focusEnd,
             preserveChain = true, extraBounce = extraBounce,
+            continueVelocity = continueVelocity,
+        )
+    }
+
+    internal fun seekPositionAt(time: Int): LyricsSeekPosition? = seekTimeline.positionAt(time)
+
+    internal suspend fun animateSeekToItem(index: Int, nextIndex: Int = index, fraction: Float = 0f) {
+        followAnchorIndex = index
+        animateToItem(
+            index, 0, SeekScrollAnimation, cascade = false, focusEnd = index,
+            seekPosition = LyricsSeekPosition(index, nextIndex, fraction.coerceIn(0f, 1f)),
         )
     }
 
@@ -123,6 +146,7 @@ class LyricsLazyListState(
 
     internal var heights = LyricsHeightIndex(intArrayOf(), 0)
     internal var items: List<LyricsListItem> = emptyList()
+    private var seekTimeline by mutableStateOf(LyricsSeekTimeline(emptyList()))
     private var configuredWidth = -1
     private var configuredSpacing = -1
     private var visualOverflowPx = 0
@@ -205,6 +229,9 @@ class LyricsLazyListState(
             keys = newItems.withIndex().associate { it.value.key to it.index }
             require(keys.size == newItems.size) { "Lyrics list keys must be unique" }
             items = newItems
+            seekTimeline = LyricsSeekTimeline(items.mapIndexedNotNull { index, item ->
+                item.seekStartMillis?.let { index to it }
+            })
             visualOverflowPx = items.maxOfOrNull { it.visualOverflowPx } ?: 0
             heights =
                 LyricsHeightIndex(IntArray(items.size) { items[it].estimatedHeightPx }, spacing)
@@ -214,6 +241,8 @@ class LyricsLazyListState(
             focusHeightUpdates?.takeIf { it.items === items }?.reset()
             configuredWidth = width
             configuredSpacing = spacing
+            followVelocity = 0f
+            velocityTarget = -1
             chain.reset(position)
             if (pendingIndex == null) {
                 val anchor =
@@ -255,14 +284,22 @@ class LyricsLazyListState(
 
     internal fun updateFocusHeights() {
         val changed = focusHeightUpdates?.takeIf { it.items === items }?.consumeChanges()
-        if (changed == null) {
-            for (index in items.indices) updateFocusHeight(index)
-        } else {
-            for (index in changed) updateFocusHeight(index)
+        var prefixDelta = 0
+        fun update(index: Int) {
+            val delta = updateFocusHeight(index)
+            if (index < followAnchorIndex) prefixDelta += delta
         }
+        if (changed == null) {
+            for (index in items.indices) update(index)
+        } else {
+            for (index in changed) update(index)
+        }
+        // Only a changed prefix moves the destination. Ordinary focus changes during an early
+        // follow must not cancel its animation; actual BGV/dot reflow still needs a new target.
+        if (prefixDelta != 0 && !preparingFollow) followGeometryRevision++
     }
 
-    private fun updateFocusHeight(index: Int) {
+    private fun updateFocusHeight(index: Int): Int {
         val expected = items[index].focusHeightPx?.invoke() ?: 0
         val breathing = items[index].breathingHeightPx?.invoke() ?: 0
         val breathingDelta = breathing - breathingHeights[index]
@@ -278,6 +315,7 @@ class LyricsLazyListState(
         val leading = items[index].focusLeadingHeightPx?.invoke() ?: 0
         chain.applyLeadingContentShift(index, (leading - focusLeadingHeights[index]).toDouble())
         focusLeadingHeights[index] = leading
+        return delta
     }
 
     /**
@@ -332,11 +370,17 @@ class LyricsLazyListState(
         focusEnd: Int,
         preserveChain: Boolean = false,
         extraBounce: Boolean = false,
+        continueVelocity: Boolean = false,
+        seekPosition: LyricsSeekPosition? = null,
     ) {
         require(index >= 0)
         snapshotFlow { ready }.first { it }
         if (items.isEmpty()) return
         scroll {
+            val initialVelocity = if (continueVelocity && velocityTarget == index) followVelocity else 0f
+            velocityTarget = if (preserveChain) index else -1
+            followVelocity = 0f
+            if (!preserveChain) suspendChain()
             followingChain = preserveChain || cascade
             suppressChain = !followingChain
             chain.follow(glide = preserveChain && !cascade)
@@ -346,8 +390,14 @@ class LyricsLazyListState(
                 val targetIndex = index.coerceAtMost(items.lastIndex)
                 // The follow coroutine can run before the measure pass for the new focus.
                 // Commit occupancy first so destination and placement use the same prefix heights.
-                updateFocusHeights()
+                preparingFollow = true
+                try {
+                    updateFocusHeights()
+                } finally {
+                    preparingFollow = false
+                }
                 remeasurement?.forceRemeasure()
+                if (!followingChain) chain.reset(position)
                 val start = position
                 val initialCoordinateShift = contentCoordinateShift
                 predictingFollow =
@@ -365,15 +415,25 @@ class LyricsLazyListState(
                         destination += items[targetIndex].focusOffsetPx?.invoke() ?: 0
                         destination.coerceIn(0.0, maxPosition)
                     } else null
-                fun targetPosition() =
-                    settledTarget
+                fun targetPosition(): Double {
+                    if (seekPosition != null) {
+                        val from = heights.top(targetIndex)
+                        val to = heights.top(seekPosition.nextIndex.coerceIn(0, items.lastIndex))
+                        return (from + (to - from) * seekPosition.fraction).coerceIn(0.0, maxPosition)
+                    }
+                    return settledTarget
                         ?: (heights.top(targetIndex) + scrollOffset).coerceIn(0.0, maxPosition)
-                if (kotlin.math.abs(targetPosition() - start) < 0.5) return@scroll
+                }
+                if (kotlin.math.abs(targetPosition() - start) < 0.5) {
+                    if (seekPosition != null) scrollBy((targetPosition() - position).toFloat())
+                    return@scroll
+                }
                 // Re-read measured target geometry without restarting the animation's
                 // duration/curve.
                 val distance = targetPosition() - start
                 // Spring visibility thresholds are physical pixels, never normalized progress.
-                animate(0f, distance.toFloat(), animationSpec = animationSpec) { travelled, _ ->
+                animate(0f, distance.toFloat(), initialVelocity = initialVelocity, animationSpec = animationSpec) { travelled, velocity ->
+                    if (preserveChain) followVelocity = velocity
                     val fraction = travelled / distance
                     val shift = contentCoordinateShift - initialCoordinateShift
                     val shiftedStart = start + shift
@@ -387,6 +447,7 @@ class LyricsLazyListState(
                         if (settledTarget != null) contentCoordinateShift - initialCoordinateShift
                         else 0.0
                 scrollBy((target - position).toFloat())
+                followVelocity = 0f
             } finally {
                 followingChain = false
             }
@@ -394,6 +455,8 @@ class LyricsLazyListState(
     }
 
     companion object {
+        private val SeekScrollAnimation = tween<Float>(100, easing = LinearOutSlowInEasing)
+
         val Saver =
             listSaver<LyricsLazyListState, Int>(
                 save = { listOf(it.firstVisibleItemIndex, it.firstVisibleItemScrollOffset) },
