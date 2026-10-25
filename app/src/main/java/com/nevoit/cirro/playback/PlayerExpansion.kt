@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -31,6 +32,7 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.IntSize
@@ -55,6 +57,7 @@ class PlayerExpansionState internal constructor(
     private var sourceCoverCoordinates by mutableStateOf<LayoutCoordinates?>(null)
     private var underlayCoordinates by mutableStateOf<LayoutCoordinates?>(null)
     private var pageCoordinates by mutableStateOf<LayoutCoordinates?>(null)
+    private var pageTopInWindow by mutableFloatStateOf(0f)
     private var contentCoordinates by mutableStateOf<LayoutCoordinates?>(null)
     private var targetCoverCoordinates by mutableStateOf<LayoutCoordinates?>(null)
     private var pagePlaced by mutableStateOf(false)
@@ -96,6 +99,7 @@ class PlayerExpansionState internal constructor(
 
     internal fun onPagePositioned(coordinates: LayoutCoordinates) {
         pageCoordinates = coordinates
+        pageTopInWindow = coordinates.positionInWindow().y
         pageSize = coordinates.size
         updateGeometry()
     }
@@ -141,6 +145,10 @@ class PlayerExpansionState internal constructor(
             lerp(source.bottom, size.height, progress),
         )
     }
+
+    internal fun overlapsStatusBar(statusBarHeightPx: Int): Boolean =
+        ownsVisual && statusBarHeightPx > 0 && pageSize.height > 0 &&
+            pageTopInWindow + bounds(pageSize.toSize()).top < statusBarHeightPx
 
     private fun updateGeometry() {
         val page = pageCoordinates?.takeIf { it.isAttached } ?: return

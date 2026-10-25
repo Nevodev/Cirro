@@ -2,45 +2,27 @@ package com.nevoit.cirro.library
 
 import android.content.Intent
 import android.widget.Toast
-import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.movableContentOf
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -52,8 +34,6 @@ import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.data.model.forSession
 import com.nevoit.cirro.data.model.hasPendingInserts
-import com.nevoit.cirro.detail.animateCollectionSearchExit
-import com.nevoit.cirro.detail.collectionSearchTransform
 import com.nevoit.cirro.detail.rememberCollectionSongSearchResults
 import com.nevoit.cirro.home.LoginCard
 import com.nevoit.cirro.home.OpenCollection
@@ -118,99 +98,15 @@ fun BoxScope.LibrarySongsRoute(
     val source = remember { QueueSource(title = "歌曲") }
     val subTitle = if (songs.isNotEmpty()) "${songs.size} 首" else null
     val listState = rememberLazyListState()
-    var query by rememberSaveable(content?.userId) { mutableStateOf("") }
-    var searchFocused by remember(content?.userId) { mutableStateOf(false) }
-    var searchFloating by rememberSaveable(content?.userId) { mutableStateOf(false) }
-    var searchClosing by remember(content?.userId) { mutableStateOf(false) }
-    val searchOpacity = remember(content?.userId) { Animatable(1f) }
-    val searchExitProgress = remember(content?.userId) { Animatable(1f) }
-    LaunchedEffect(searchClosing) {
-        if (searchClosing) {
-            // Keep the editor in its floating layer until the exit animation has finished.
-            animateCollectionSearchExit(searchOpacity, searchExitProgress)
-            searchFloating = false
-            searchClosing = false
-        } else {
-            searchOpacity.snapTo(1f)
-            searchExitProgress.snapTo(1f)
-        }
-    }
-    var inlineSearchCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    var listCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    val floatingSearchTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 72.dp
-    val floatingSearchTopPx = with(LocalDensity.current) { floatingSearchTop.roundToPx() }
-    val searchFieldHeightPx = with(LocalDensity.current) { LibrarySongSearchHeight.roundToPx() }
-    val currentFloatingSearchTopPx by rememberUpdatedState(floatingSearchTopPx)
-    var searchLiftStartPx by remember(content?.userId) {
-        mutableFloatStateOf(floatingSearchTopPx.toFloat())
-    }
-    val searchFocusRequester = remember(content?.userId) { FocusRequester() }
-    val searchAvailable = content != null && session != Session.LoggedOut
-    val searchLift = remember(searchFloating, content?.userId) {
-        Animatable(
-            if (searchFloating) searchLiftStartPx
-            else floatingSearchTopPx.toFloat()
-        )
-    }
-    LaunchedEffect(searchFloating, floatingSearchTopPx, searchLift, searchAvailable) {
-        if (searchFloating && searchAvailable) {
-            searchFocusRequester.requestFocus()
-            searchLift.animateTo(floatingSearchTopPx.toFloat(), Springs.crisp())
-        }
-    }
-    val focus = LocalFocusManager.current
-    val keyboard = LocalSoftwareKeyboardController.current
-    val searchActive = searchFloating || searchFocused || query.isNotEmpty()
-    val closeSearch = {
-        if (!searchClosing) {
-            val layout = listState.layoutInfo
-            val inlineVisible = layout.visibleItemsInfo.any {
-                it.key == "search" && it.offset < layout.viewportEndOffset &&
-                    it.offset + searchFieldHeightPx > layout.viewportStartOffset
-            }
-            searchClosing = searchFloating && !inlineVisible
-            if (!searchClosing) searchFloating = false
-            query = ""
-            keyboard?.hide()
-            focus.clearFocus()
-        }
-    }
-    BackHandler(enabled = searchActive, onBack = closeSearch)
-    val currentCloseSearch by rememberUpdatedState(closeSearch)
-    // Move the same editor between the list and the floating layer to retain text selection.
-    // Inline placement belongs to the lazy list; copying its coordinates after layout lags scroll.
-    val searchEditor = remember(content?.userId) {
-        movableContentOf<Modifier> { editorModifier ->
-            LibrarySongSearchField(
-                query = query,
-                focused = searchFocused,
-                onQueryChange = { query = it },
-                onFocusChange = { focused ->
-                    if (focused && !searchFloating && !searchClosing) {
-                        val inline = inlineSearchCoordinates?.takeIf { it.isAttached }
-                        val list = listCoordinates?.takeIf { it.isAttached }
-                        searchLiftStartPx = if (inline != null && list != null) {
-                            list.localPositionOf(inline, Offset.Zero).y
-                        } else currentFloatingSearchTopPx.toFloat()
-                        searchFloating = true
-                        listState.requestScrollToItem(0)
-                    }
-                    searchFocused = focused
-                },
-                onDismiss = { currentCloseSearch() },
-                background = MaterialTheme.colors.scrimNormal,
-                focusRequester = searchFocusRequester,
-                enabled = !searchClosing,
-                modifier = editorModifier,
-            )
-        }
-    }
-    val searchResult = rememberCollectionSongSearchResults(songs, query)
-    val matches = if (query.isNotBlank()) searchResult?.matches else null
+    val search = rememberLibrarySearch(
+        content?.userId, content != null && session != Session.LoggedOut, listState,
+    )
+    val searchResult = rememberCollectionSongSearchResults(songs, search.query)
+    val matches = if (search.query.isNotBlank()) searchResult?.matches else null
     val songCount = matches?.size ?: songs.size
-    val playbackSongs = remember(songs, query, searchResult) {
-        if (query.isBlank()) songs
-        else searchResult?.takeIf { it.query == query }?.matches?.map { it.value }.orEmpty()
+    val playbackSongs = remember(songs, search.query, searchResult) {
+        if (search.query.isBlank()) songs
+        else searchResult?.takeIf { it.query == search.query }?.matches?.map { it.value }.orEmpty()
     }
 
     VerticalStack(
@@ -218,10 +114,10 @@ fun BoxScope.LibrarySongsRoute(
         modifier = Modifier
             .fillMaxSize()
             .imePadding()
-            .onGloballyPositioned { listCoordinates = it }
+            .onGloballyPositioned(search.onListPositioned)
             .background(MaterialTheme.colors.pageBackground),
     ) {
-        if (searchFloating) item(key = "search-header-space") {
+        if (search.floating) item(key = "search-header-space") {
             Spacer(
                 Modifier
                     .animateItem(tween(200), Springs.crisp(), tween(200))
@@ -248,17 +144,11 @@ fun BoxScope.LibrarySongsRoute(
             }
         } else {
             item(key = "search") {
-                Column(
-                    Modifier
-                        .animateItem(tween(200), Springs.crisp(), tween(200))
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp)
-                        .onGloballyPositioned { inlineSearchCoordinates = it }
-                ) {
-                    if (searchFloating) Spacer(Modifier.height(LibrarySongSearchHeight))
-                    else searchEditor(Modifier)
-                    VGap(12.dp)
-                }
+                LibrarySearchInline(
+                    search,
+                    Modifier.animateItem(tween(200), Springs.crisp(), tween(200))
+                        .padding(horizontal = 12.dp),
+                )
             }
             item(key = "play") {
                 Column(
@@ -327,23 +217,13 @@ fun BoxScope.LibrarySongsRoute(
         threshold = { it.calculateTopPadding() + 12.dp },
         listState = listState,
         modifier = Modifier.height(
-            72.dp + 48.dp + if (searchFloating) 12.dp + LibrarySongSearchHeight else 0.dp
+            72.dp + 48.dp + if (search.floating) 12.dp + LibrarySongSearchHeight else 0.dp
         )
     )
-    if (searchAvailable && searchFloating) {
-        searchEditor(
-            Modifier
-                .align(Alignment.TopStart)
-                .graphicsLayer {
-                    translationY = searchLift.value
-                    collectionSearchTransform(searchExitProgress.value, searchOpacity.value)
-                }
-                .padding(horizontal = 12.dp),
-        )
-    }
+    LibrarySearchOverlay(search)
     BottomShade(color = MaterialTheme.colors.pageBackground)
     LibraryBackButton {
-        if (searchActive) closeSearch() else onBack()
+        if (search.active) search.close() else onBack()
     }
 }
 

@@ -1,14 +1,18 @@
 package com.nevoit.cirro.library
 
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -18,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -40,6 +45,7 @@ import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
 import com.nevoit.material.core.layout.VerticalStack
 import com.nevoit.material.theme.MaterialTheme
+import com.nevoit.material.theme.tokens.Springs
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 
@@ -58,15 +64,36 @@ fun BoxScope.LibraryArtistsRoute(
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refresh() }
     val artists = content?.artists.orEmpty()
     val listState = rememberLazyListState()
+    val search = rememberLibrarySearch(
+        content?.userId, content != null && session != Session.LoggedOut, listState,
+    )
+    val searchResult = rememberLibraryCollectionSearchResults(artists, search.query)
+    val visibleArtists = if (search.query.isBlank()) artists else searchResult?.matches.orEmpty()
 
     VerticalStack(
         state = listState,
         modifier = Modifier
             .fillMaxSize()
+            .imePadding()
+            .onGloballyPositioned(search.onListPositioned)
             .background(MaterialTheme.colors.pageBackground)
     ) {
-        item(key = "title") {
-            PageHeader(title = "艺人", modifier = Modifier.padding(horizontal = 12.dp))
+        if (search.floating) item(key = "search-header-space") {
+            Spacer(
+                Modifier.animateItem(tween(200), Springs.crisp(), tween(200))
+                    .statusBarsPadding().height(72.dp)
+            )
+        } else item(key = "title") {
+            PageHeader(
+                title = "艺人",
+                modifier = Modifier.animateItem(tween(200), Springs.crisp(), tween(200)).padding(horizontal = 12.dp),
+            )
+        }
+        if (search.available) item(key = "search") {
+            LibrarySearchInline(
+                search,
+                Modifier.animateItem(tween(200), Springs.crisp(), tween(200)).padding(horizontal = 12.dp),
+            )
         }
         if (error != null) item(key = "library_error") {
             LibraryStatus(error.orEmpty(), viewModel::refresh)
@@ -79,8 +106,11 @@ fun BoxScope.LibraryArtistsRoute(
                 LibraryStatus(if (loading) "正在加载艺人…" else "暂无艺人")
             }
         }
-        itemsIndexed(artists, key = { _, artist -> artist.info.id }) { index, artist ->
-            LibraryArtistRow(artist.info, resolvePosition(artists.size, index)) {
+        itemsIndexed(visibleArtists, key = { _, artist -> artist.info.id }) { index, artist ->
+            LibraryArtistRow(
+                artist.info, resolvePosition(visibleArtists.size, index),
+                modifier = Modifier.animateItem(tween(200), Springs.crisp(), tween(200)),
+            ) {
                 onOpenCollection(
                     artist.info.kind,
                     artist.info.id,
@@ -89,23 +119,27 @@ fun BoxScope.LibraryArtistsRoute(
                     "热门歌曲"
                 )
             }
-            if (index < artists.lastIndex) VGap(4.dp)
+            if (index < visibleArtists.lastIndex) VGap(4.dp)
         }
     }
     TopShade(
         color = MaterialTheme.colors.pageBackground,
         threshold = { it.calculateTopPadding() + 12.dp },
         listState = listState,
-        modifier = Modifier.height(72.dp + 48.dp)
+        modifier = Modifier.height(
+            72.dp + 48.dp + if (search.floating) 12.dp + LibrarySongSearchHeight else 0.dp
+        )
     )
+    LibrarySearchOverlay(search)
     BottomShade(color = MaterialTheme.colors.pageBackground)
-    LibraryBackButton(onBack)
+    LibraryBackButton { if (search.active) search.close() else onBack() }
 }
 
 @Composable
 private fun LibraryArtistRow(
     info: CollectionInfo,
     position: ItemPosition,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
     val palette = koinInject<CoverPalette>()
@@ -113,7 +147,7 @@ private fun LibraryArtistRow(
     val shape = position.roundedShape()
 
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
             .clip(shape)

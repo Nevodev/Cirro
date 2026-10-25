@@ -87,6 +87,7 @@ internal fun BoxScope.LibraryBackButton(onBack: () -> Unit) {
 internal fun LibraryAlbumGridCard(
     album: LibraryCollection,
     onOpenLibraryAlbum: (Long, String, String, String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val title = rememberLibraryCollectionTitle(album.info)
     val palette = koinInject<CoverPalette>()
@@ -94,7 +95,7 @@ internal fun LibraryAlbumGridCard(
     LaunchedEffect(album.info.cover) {
         palette.prefetch(album.info.cover)
     }
-    Column(Modifier.padding(horizontal = 6.dp)) {
+    Column(modifier.padding(horizontal = 6.dp)) {
         CollectionCard(
             title = title,
             subtitle = album.info.author,
