@@ -8,6 +8,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.ImageBitmapConfig
 import androidx.compose.ui.graphics.Paint
@@ -44,21 +45,30 @@ fun Modifier.cornerMaskClip(
     shape: () -> RoundedRectangularShape,
 ): Modifier = then(CornerMaskClipElement(null, true, bounds, shape))
 
+/** Paints over the corners against a known opaque background without an offscreen layer. */
+fun Modifier.cornerMaskCover(
+    shape: RoundedRectangularShape,
+    color: Color,
+    enabled: Boolean = true,
+): Modifier = then(CornerMaskClipElement(shape, enabled, coverColor = color))
+
 private class CornerMaskClipElement(
     val shape: RoundedRectangularShape?,
     val enabled: Boolean,
     val bounds: ((Size) -> Rect)? = null,
     val shapeProducer: (() -> RoundedRectangularShape)? = null,
+    val coverColor: Color = Color.Unspecified,
 ) : ModifierNodeElement<CornerMaskClipNode>() {
 
     override fun create(): CornerMaskClipNode =
-        CornerMaskClipNode(shape, enabled, bounds, shapeProducer)
+        CornerMaskClipNode(shape, enabled, bounds, shapeProducer, coverColor)
 
     override fun update(node: CornerMaskClipNode) {
         node.shape = shape
         node.enabled = enabled
         node.bounds = bounds
         node.shapeProducer = shapeProducer
+        node.coverColor = coverColor
         node.invalidateDraw()
     }
 
@@ -72,7 +82,8 @@ private class CornerMaskClipElement(
         if (this === other) return true
         if (other !is CornerMaskClipElement) return false
         return shape == other.shape && enabled == other.enabled &&
-                bounds == other.bounds && shapeProducer == other.shapeProducer
+                bounds == other.bounds && shapeProducer == other.shapeProducer &&
+                coverColor == other.coverColor
     }
 
     override fun hashCode(): Int {
@@ -80,6 +91,7 @@ private class CornerMaskClipElement(
         result = 31 * result + enabled.hashCode()
         result = 31 * result + (bounds?.hashCode() ?: 0)
         result = 31 * result + (shapeProducer?.hashCode() ?: 0)
+        result = 31 * result + coverColor.hashCode()
         return result
     }
 }
@@ -89,7 +101,15 @@ private class CornerMaskClipNode(
     var enabled: Boolean,
     var bounds: ((Size) -> Rect)?,
     var shapeProducer: (() -> RoundedRectangularShape)?,
+    coverColor: Color,
 ) : Modifier.Node(), DrawModifierNode {
+
+    var coverColor = coverColor
+        set(value) {
+            field = value
+            coverFilter = if (value == Color.Unspecified) null else ColorFilter.tint(value)
+        }
+    private var coverFilter = if (coverColor == Color.Unspecified) null else ColorFilter.tint(coverColor)
 
     private var cornersSize = Size.Zero
     private var cornersShape: RoundedRectangularShape? = null
@@ -135,6 +155,19 @@ private class CornerMaskClipNode(
 
         val shape = shapeProducer?.invoke() ?: checkNotNull(shape)
         val corners = cornersOf(shape, width, height, layoutDirection, this)
+        val filter = coverFilter
+        if (filter != null) {
+            val canvas = drawContext.canvas
+            canvas.save()
+            try {
+                canvas.clipRect(bounds)
+                drawContent()
+                drawCornerMasks(bounds, corners, filter)
+            } finally {
+                canvas.restore()
+            }
+            return
+        }
         drawCornerMaskClipped(bounds, corners) { this@draw.drawContent() }
     }
 }
@@ -173,11 +206,6 @@ private inline fun DrawScope.drawCornerMaskClipped(
         return
     }
 
-    val topLeft = CornerMaskCache.obtain(corners.topLeft, width, height)
-    val topRight = CornerMaskCache.obtain(corners.topRight, width, height)
-    val bottomRight = CornerMaskCache.obtain(corners.bottomRight, width, height)
-    val bottomLeft = CornerMaskCache.obtain(corners.bottomLeft, width, height)
-
     val canvas = drawContext.canvas
     canvas.save()
     try {
@@ -186,20 +214,7 @@ private inline fun DrawScope.drawCornerMaskClipped(
         canvas.saveLayer(bounds, MaskLayerPaint)
         try {
             content()
-            if (topLeft != null) drawCornerMask(topLeft, bounds, mirrorX = false, mirrorY = false)
-            if (topRight != null) drawCornerMask(topRight, bounds, mirrorX = true, mirrorY = false)
-            if (bottomRight != null) drawCornerMask(
-                bottomRight,
-                bounds,
-                mirrorX = true,
-                mirrorY = true
-            )
-            if (bottomLeft != null) drawCornerMask(
-                bottomLeft,
-                bounds,
-                mirrorX = false,
-                mirrorY = true
-            )
+            drawCornerMasks(bounds, corners)
         } finally {
             canvas.restore()
         }
@@ -208,17 +223,34 @@ private inline fun DrawScope.drawCornerMaskClipped(
     }
 }
 
+private fun DrawScope.drawCornerMasks(
+    bounds: Rect,
+    corners: RoundedRectangularShape.Corners,
+    colorFilter: ColorFilter? = null,
+) {
+    val topLeft = CornerMaskCache.obtain(corners.topLeft, bounds.width, bounds.height)
+    val topRight = CornerMaskCache.obtain(corners.topRight, bounds.width, bounds.height)
+    val bottomRight = CornerMaskCache.obtain(corners.bottomRight, bounds.width, bounds.height)
+    val bottomLeft = CornerMaskCache.obtain(corners.bottomLeft, bounds.width, bounds.height)
+    if (topLeft != null) drawCornerMask(topLeft, bounds, false, false, colorFilter)
+    if (topRight != null) drawCornerMask(topRight, bounds, true, false, colorFilter)
+    if (bottomRight != null) drawCornerMask(bottomRight, bounds, true, true, colorFilter)
+    if (bottomLeft != null) drawCornerMask(bottomLeft, bounds, false, true, colorFilter)
+}
+
 private fun DrawScope.drawCornerMask(
     mask: ImageBitmap,
     bounds: Rect,
     mirrorX: Boolean,
     mirrorY: Boolean,
+    colorFilter: ColorFilter?,
 ) {
     if (!mirrorX && !mirrorY) {
         drawImage(
             mask,
             topLeft = bounds.topLeft - Offset(CornerMaskPadding, CornerMaskPadding),
-            blendMode = BlendMode.DstOut,
+            colorFilter = colorFilter,
+            blendMode = if (colorFilter == null) BlendMode.DstOut else BlendMode.SrcOver,
         )
         return
     }
@@ -237,7 +269,8 @@ private fun DrawScope.drawCornerMask(
         drawImage(
             mask,
             topLeft = Offset(-CornerMaskPadding, -CornerMaskPadding),
-            blendMode = BlendMode.DstOut,
+            colorFilter = colorFilter,
+            blendMode = if (colorFilter == null) BlendMode.DstOut else BlendMode.SrcOver,
         )
     } finally {
         canvas.restore()

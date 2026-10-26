@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.toPixelMap
@@ -36,6 +37,31 @@ import kotlin.math.floor
 class CornerMaskClipTest {
     @get:Rule
     val compose = createComposeRule()
+
+    @Test
+    fun opaqueCornerCoverPreservesBackdropBlendingAndCanBeDisabled() {
+        val enabled = mutableStateOf(true)
+        compose.setContent {
+            Box(Modifier.size(120.dp).testTag("covered").background(Color.Green)) {
+                Box(
+                    Modifier.fillMaxSize()
+                        .cornerMaskCover(RoundedRectangle(24.dp), Color.Black, enabled.value)
+                        .drawWithContent { drawRect(Color.Blue, blendMode = BlendMode.Plus) }
+                )
+            }
+        }
+        val covered = compose.onNodeWithTag("covered").captureToImage().toPixelMap()
+        // An isolated layer would blend blue against transparency instead of the green backdrop.
+        assertEquals(Color.Cyan, covered[covered.width / 2, covered.height / 2])
+        for (x in listOf(0, covered.width - 1)) {
+            for (y in listOf(0, covered.height - 1)) {
+                assertEquals(Color.Black, covered[x, y])
+            }
+        }
+        compose.runOnIdle { enabled.value = false }
+        val uncovered = compose.onNodeWithTag("covered").captureToImage().toPixelMap()
+        assertEquals(Color.Cyan, uncovered[0, 0])
+    }
 
     @Test
     fun retainedMaskShowsChildUpdatesWithoutRecordingTheMaskAgain() {

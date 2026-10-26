@@ -76,6 +76,7 @@ import com.nevoit.cirro.playback.PreparePlayerArtwork
 import com.nevoit.cirro.playback.rememberPlayerExpansionState
 import com.nevoit.cirro.ui.BottomShade
 import com.nevoit.material.clip.cornerMaskClip
+import com.nevoit.material.clip.cornerMaskCover
 import com.nevoit.material.core.component.BottomPopupMenuHost
 import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
@@ -368,7 +369,7 @@ fun BoxScope.Main() {
                 scaleX = scale
                 scaleY = scale
             }
-            .cornerMaskClip(shape = navigationPageShape, enabled = clipUnderlay)
+            .cornerMaskCover(shape = navigationPageShape, color = Color.Black, enabled = clipUnderlay)
     }
     RequestNotificationPermissionOnce()
 
