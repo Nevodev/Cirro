@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -89,7 +88,7 @@ fun BoxScope.LibrarySongsRoute(
     val queueActions by remember(playback) {
         playback.queue.map { it.entries.isNotEmpty() to it.hasPendingInserts }
             .distinctUntilChanged()
-    }.collectAsState(initial = false to false)
+    }.collectAsStateWithLifecycle(initialValue = false to false)
     val menu = koinViewModel<SongMenuViewModel>()
     val context = LocalContext.current
     LaunchedEffect(menu) {

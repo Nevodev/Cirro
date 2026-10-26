@@ -71,6 +71,8 @@ import com.nevoit.cirro.playback.MiniPlayer
 import com.nevoit.cirro.playback.PlaybackConnection
 import com.nevoit.cirro.playback.PlayerLayer
 import com.nevoit.cirro.playback.PlayerUiController
+import com.nevoit.cirro.playback.PlayerUnderlay
+import com.nevoit.cirro.playback.PreparePlayerArtwork
 import com.nevoit.cirro.playback.rememberPlayerExpansionState
 import com.nevoit.cirro.ui.BottomShade
 import com.nevoit.material.clip.cornerMaskClip
@@ -216,21 +218,15 @@ sealed interface MainDestination {
 fun BoxScope.Main() {
     val navigator = rememberNavigator<MainDestination>(MainDestination.Tabs)
     var hostHandle by remember { mutableStateOf<NavigationHostHandle?>(null) }
-    // 标签选中状态架在导航外面：底栏（导航外、常驻）和标签页（根页内）都要用它
     var selectedIndex by rememberSaveable { mutableIntStateOf(0) }
     val accountRepository = koinInject<AccountRepository>()
     val playbackConnection = koinInject<PlaybackConnection>()
     val playerUi = koinInject<PlayerUiController>()
     val session by accountRepository.session.collectAsState()
-    // 只订阅"到底有没有歌在放"这一位。订阅整个 state 会让 Main 跟着 500ms 的位置心跳重组，
-    // 连带 NavigationHost、MiniPlayer 和它们底下的整棵树一起——播放位置该由真正需要它的
-    // 那一小块自己去读（MiniPlayer / 播放页）。
-    // `initial` 是首帧快照：StateFlow.value 本来就是零成本的当前值，这里要的是一个**值**不是一份
-    // 订阅，所以刻意同步读一次。观察变化由紧随其后的 collectAsState 负责，不是漏订阅。
-    @Suppress("StateFlowValueCalledInComposition")
+
     val hasSong by remember(playbackConnection) {
         playbackConnection.state.map { it.song != null }.distinctUntilChanged()
-    }.collectAsState(initial = playbackConnection.state.value.song != null)
+    }.collectAsState(initial = remember { playbackConnection.state.value.song != null })
 
     // 底栏 chrome：详情页（Collection）在导航顶上时跟封面种子走，否则跟主题。
     // seed 用 produceState 异步取——缓存命中第一帧就有（首页预取过）；没命中则取完自动
@@ -353,6 +349,7 @@ fun BoxScope.Main() {
         playerUi,
         rememberColorProducer(barContainerColor),
     )
+    PreparePlayerArtwork(playerExpansion, playbackConnection)
     val underlayScale = remember(playerExpansion, playerUi) {
         {
             val progress =
@@ -385,7 +382,10 @@ fun BoxScope.Main() {
         actionContainerColor = rememberColorProducer(menuActionContainerColor),
         actionContentColor = rememberColorProducer(menuActionContentColor),
     ) {
-        Box(playerUnderlay.background(MaterialTheme.colors.pageBackground)) {
+        PlayerUnderlay(
+            sleeping = playerUi.isExpanded,
+            modifier = playerUnderlay.background(MaterialTheme.colors.pageBackground),
+        ) {
             Box(
                 Modifier
                     .fillMaxSize()

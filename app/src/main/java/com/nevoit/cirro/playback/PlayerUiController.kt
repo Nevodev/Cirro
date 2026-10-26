@@ -59,6 +59,10 @@ class PlayerUiController {
     var isDragging: Boolean by mutableStateOf(false)
         private set
 
+    // A settled-state signal keeps underlay lifecycle changes out of the per-frame progress path.
+    internal var isExpanded: Boolean by mutableStateOf(false)
+        private set
+
     val acceptsInput: Boolean get() = present && !isClosing
 
     /**
@@ -82,6 +86,7 @@ class PlayerUiController {
      * `snapTo` 会取消正在跑的开合动画，所以手指一按下去就能接管。
      */
     fun onDrag(deltaProgress: Float) {
+        isExpanded = false
         if (!present) present = true
         isClosing = false
         isDragging = true
@@ -108,6 +113,7 @@ class PlayerUiController {
 
     /** 界面侧这轮动画跑完了（被下一轮打断时不会调到）。 */
     fun onAnimationSettled() {
+        isExpanded = target > 0f
         if (target <= 0f) present = false
     }
 
@@ -125,6 +131,7 @@ class PlayerUiController {
     }
 
     private fun request(open: Boolean, velocity: Float?) {
+        if (!open) isExpanded = false
         present = true
         isClosing = !open
         isDragging = false
@@ -137,7 +144,7 @@ class PlayerUiController {
 
     private companion object {
         val OpenSpec =
-            Springs.smooth(durationMillis = 350, visibilityThreshold = 0.0001f, extraBounce = -0.1)
+            Springs.smooth(durationMillis = 325, visibilityThreshold = 0.0001f, extraBounce = -0.1)
         val CloseSpec = Springs.smooth(durationMillis = 350, visibilityThreshold = 0.0001f)
     }
 }

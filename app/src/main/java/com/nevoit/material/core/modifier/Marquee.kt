@@ -2,6 +2,7 @@ package com.nevoit.material.core.modifier
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.withFrameNanos
@@ -22,6 +23,9 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.constrainHeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlin.time.Duration.Companion.milliseconds
@@ -76,11 +80,14 @@ fun Modifier.marquee(
 
     val content = contentWidth.floatValue
     val viewport = viewportWidth.floatValue
+    val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    val active = lifecycleState.isAtLeast(Lifecycle.State.STARTED)
 
     LaunchedEffect(
         restartKey, velocityPx, acceleratePx, deceleratePx, spacingPx, pauseMillis,
-        fade, fadeLengthPx, fadeAnimMillis, initialDelayMillis, content, viewport
+        fade, fadeLengthPx, fadeAnimMillis, initialDelayMillis, content, viewport, active
     ) {
+        if (!active) return@LaunchedEffect
         // Every (re)start begins at rest: an in-flight pass and its lit left band are
         // dropped, never inherited by the next content.
         scroll.floatValue = 0f

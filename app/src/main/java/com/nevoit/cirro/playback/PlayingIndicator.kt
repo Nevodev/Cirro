@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -22,18 +21,21 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.currentStateAsState
 import com.nevoit.material.core.component.Text
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import org.koin.compose.koinInject
 
 @Composable
-@Suppress("StateFlowValueCalledInComposition")
 internal fun rememberIsCurrentSong(songId: Long): Boolean {
     val connection = koinInject<PlaybackConnection>()
     val current by remember(connection, songId) {
         connection.state.map { it.song?.id == songId }.distinctUntilChanged()
-    }.collectAsState(initial = connection.state.value.song?.id == songId)
+    }.collectAsStateWithLifecycle(initialValue = remember { connection.state.value.song?.id == songId })
     return current
 }
 
@@ -76,7 +78,10 @@ internal fun rememberPlayingOpacity(isCurrent: Boolean): (() -> Float)? {
     if (!isCurrent && !retained) return null
 
     val opacity = remember { Animatable(0f) }
-    LaunchedEffect(isCurrent) {
+    val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    val active = lifecycleState.isAtLeast(Lifecycle.State.STARTED)
+    LaunchedEffect(isCurrent, active) {
+        if (!active) return@LaunchedEffect
         // Keep the old indicator through its fade, including a reversal before it finishes.
         // Ordinary rows never allocate animation or spectrum resources.
         retained = true
@@ -87,7 +92,6 @@ internal fun rememberPlayingOpacity(isCurrent: Boolean): (() -> Float)? {
 }
 
 @Composable
-@Suppress("StateFlowValueCalledInComposition")
 private fun SpectrumCanvas(
     isCurrent: Boolean,
     opacity: () -> Float,
@@ -96,18 +100,20 @@ private fun SpectrumCanvas(
     modifier: Modifier,
 ) {
     val audioAnalysis = koinInject<AudioAnalysisStore>()
+    val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    val active = lifecycleState.isAtLeast(Lifecycle.State.STARTED)
     val levels = remember { mutableStateOf(AudioSpectrum.Silence) }
     val audible = if (isCurrent) {
         val connection = koinInject<PlaybackConnection>()
         val playing by remember(connection) {
             connection.state.map { it.isPlaying }.distinctUntilChanged()
-        }.collectAsState(initial = connection.state.value.isPlaying)
+        }.collectAsStateWithLifecycle(initialValue = remember { connection.state.value.isPlaying })
         playing
     } else {
         false
     }
-    DisposableEffect(audioAnalysis, isCurrent, audible) {
-        if (isCurrent && audible) {
+    DisposableEffect(audioAnalysis, isCurrent, audible, active) {
+        if (isCurrent && audible && active) {
             val listener: (AudioSpectrum) -> Unit = { levels.value = it }
             audioAnalysis.addSpectrumListener(listener)
             onDispose { audioAnalysis.removeSpectrumListener(listener) }
@@ -115,8 +121,8 @@ private fun SpectrumCanvas(
             onDispose {}
         }
     }
-    LaunchedEffect(isCurrent, audible) {
-        if (isCurrent && !audible) {
+    LaunchedEffect(isCurrent, audible, active) {
+        if (isCurrent && !audible && active) {
             // 暂停后 PCM 不再更新，从最后显示的柱高继续释放包络；恢复播放会取消这段下落。
             val decay = AudioSpectrumSmoother(levels.value)
             var previousFrame = withFrameNanos { it }

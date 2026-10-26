@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -24,6 +23,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.kyant.shapes.RoundedRectangle
 import com.kyant.shapes.RoundedRectangularShape
@@ -266,7 +266,7 @@ internal fun rememberIsLiked(songId: Long): Boolean {
     val likes = koinInject<SongLikeRepository>()
     val liked by remember(likes, songId) {
         likes.snapshot.map { it.likedIds?.contains(songId) == true }.distinctUntilChanged()
-    }.collectAsState(initial = remember { likes.snapshot.value.likedIds?.contains(songId) == true })
+    }.collectAsStateWithLifecycle(initialValue = remember { likes.snapshot.value.likedIds?.contains(songId) == true })
     return liked
 }
 

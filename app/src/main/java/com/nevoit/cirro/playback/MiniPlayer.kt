@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
@@ -39,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextMotion
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.kyant.shapes.Capsule
 import com.kyant.shapes.RoundedRectangle
@@ -76,18 +76,15 @@ fun MiniPlayer(
     progressColor: ColorProducer = rememberColorProducer(MaterialTheme.colors.primary),
     expansion: PlayerExpansionState? = null,
 ) {
-    // 按钮跟着「乐观播放」走：切歌缓冲期 `isPlaying` 是 false，直接拿它画会闪一下暂停图标。
-    // `initial` 是首帧快照，同步读一次即可——原先那层 `stateFlow.collectAsState()` 多开了
-    // 一份永不取消的订阅，只为取这一个值。
-    @Suppress("StateFlowValueCalledInComposition")
     val header by remember(stateFlow) {
         stateFlow.map { Triple(it.song, it.isPlayingOptimistic, it.error) }.distinctUntilChanged()
-    }.collectAsState(initial = stateFlow.value.let {
-        Triple(it.song, it.isPlayingOptimistic, it.error)
+    }.collectAsStateWithLifecycle(initialValue = remember {
+        stateFlow.value.let {
+            Triple(it.song, it.isPlayingOptimistic, it.error)
+        }
     })
-    val progressState = stateFlow.collectAsState()
+    val progressState = stateFlow.collectAsStateWithLifecycle()
     val song = header.first ?: return
-    PreparePlayerArtwork(expansion, song.cover.orEmpty())
     val boxWidth = LocalWindowInfo.current.containerDpSize.width - 24.dp
     val boxHeight = 56.dp
     val progressBarWidth = boxWidth - boxHeight

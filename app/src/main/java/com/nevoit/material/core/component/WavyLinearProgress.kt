@@ -12,6 +12,7 @@ import androidx.compose.animation.core.withInfiniteAnimationFrameNanos
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -25,6 +26,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
 import com.nevoit.material.core.utility.rememberColorProducer
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.tokens.Springs
@@ -68,8 +72,10 @@ fun WavyLinearProgress(
     // withFrameNanos and reports to InfiniteAnimationPolicy. The loop below is what keeps the
     // wave moving; leaving it out advances the phase by exactly one frame and stops.
     val phase = remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(rolling, wavelengthPx, speedPx) {
-        if (!rolling || wavelengthPx <= 0f || speedPx <= 0f) return@LaunchedEffect
+    val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    val active = lifecycleState.isAtLeast(Lifecycle.State.STARTED)
+    LaunchedEffect(rolling, wavelengthPx, speedPx, active) {
+        if (!active || !rolling || wavelengthPx <= 0f || speedPx <= 0f) return@LaunchedEffect
         var previous = 0L
         while (true) {
             withInfiniteAnimationFrameNanos { now ->

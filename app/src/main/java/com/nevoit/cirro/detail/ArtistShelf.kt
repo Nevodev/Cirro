@@ -20,7 +20,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -31,6 +30,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import coil3.compose.AsyncImage
 import com.kyant.shapes.RoundedRectangle
@@ -115,7 +115,7 @@ fun BoxScope.ArtistShelfRoute(
     val viewModel: ArtistShelfViewModel = koinViewModel {
         parametersOf(artistId, section)
     }
-    val state by viewModel.state.collectAsState()
+    val state by viewModel.state.collectAsStateWithLifecycle()
     val background = MaterialTheme.colors.pageBackground
     val content = MaterialTheme.colors.content
     val contentVariant = MaterialTheme.colors.contentVariant
@@ -241,7 +241,7 @@ private fun BoxScope.SongShelf(
     val queueActions by remember(playback) {
         playback.queue.map { it.entries.isNotEmpty() to it.hasPendingInserts }
             .distinctUntilChanged()
-    }.collectAsState(initial = false to false)
+    }.collectAsStateWithLifecycle(initialValue = false to false)
     LaunchedEffect(menu) {
         menu.messages.collect { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
     }

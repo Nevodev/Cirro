@@ -4,6 +4,8 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.ExperimentalAnimationApi
+import androidx.compose.animation.core.updateTransition
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector1D
@@ -12,7 +14,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -34,11 +35,11 @@ import androidx.compose.foundation.layout.navigationBarsIgnoringVisibility
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.runtime.Composable
@@ -65,16 +66,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
-import androidx.compose.ui.graphics.layer.setOutline
-import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
@@ -86,6 +85,7 @@ import androidx.compose.ui.util.lerp
 import androidx.compose.ui.zIndex
 import androidx.core.view.WindowCompat
 import coil3.compose.AsyncImagePainter
+import coil3.BitmapImage
 import coil3.compose.rememberAsyncImagePainter
 import com.kyant.shapes.Capsule
 import com.kyant.shapes.RoundedRectangle
@@ -308,7 +308,9 @@ fun PlayerLayer(
                     }
                     insetsController.isAppearanceLightStatusBars = false
                 } else {
-                    defaultLightAppearance?.let { insetsController.isAppearanceLightStatusBars = it }
+                    defaultLightAppearance?.let {
+                        insetsController.isAppearanceLightStatusBars = it
+                    }
                     defaultLightAppearance = null
                 }
             }
@@ -342,11 +344,13 @@ fun PlayerLayer(
     }
 
     Box(
-        modifier = modifier.fillMaxSize().drawBehind {
-            if (expansion.ownsVisual) {
-                drawRect(Color.Black, alpha = 0.6f * expansion.progress.coerceIn(0f, 1f))
-            }
-        },
+        modifier = modifier
+            .fillMaxSize()
+            .drawBehind {
+                if (expansion.ownsVisual) {
+                    drawRect(Color.Black, alpha = 0.6f * expansion.progress.coerceIn(0f, 1f))
+                }
+            },
     )
     PlayerOverlay(
         controller = controller,
@@ -399,11 +403,11 @@ private fun PlayerOverlay(
     // 网格背景也跟着停一下再走（见 `PlaybackState.isPlayingOptimistic`）。
     // `initial` 是首帧快照，同步读一次即可——原先那层 `collectAsState()` 多开了一份
     // 永不取消的订阅，只为取这一个值。
-    @Suppress("StateFlowValueCalledInComposition")
+
     val header by remember(connection) {
         connection.state.map { it.song to it.isPlayingOptimistic }.distinctUntilChanged()
     }.collectAsState(
-        initial = connection.state.value.let { it.song to it.isPlayingOptimistic }
+        initial = remember { connection.state.value.let { it.song to it.isPlayingOptimistic } }
     )
 
     val song = header.first
@@ -1153,6 +1157,7 @@ private fun PlayerStage(
  * 否则交叉淡入的是一块空占位。
  */
 @Composable
+@OptIn(ExperimentalAnimationApi::class)
 private fun PlayerCover(
     cover: String,
     side: Dp,
@@ -1164,18 +1169,31 @@ private fun PlayerCover(
     val coverLayer = rememberGraphicsLayer()
     DisposableEffect(expansion, coverLayer) {
         expansion.targetCoverLayer = coverLayer
-        onDispose { expansion.targetCoverLayer = null }
+        onDispose {
+            expansion.targetCoverLayer = null
+            expansion.targetCoverOpaque = false
+        }
     }
     val painter = rememberAsyncImagePainter(model = target, contentScale = ContentScale.Crop)
     val state by painter.state.collectAsState()
 
     // 已经上画的那张。`State.Success.painter` 每次加载都是新实例，刚好能当 Crossfade 的键。
     var front by remember { mutableStateOf<Painter?>(null) }
+    var frontOpaque by remember { mutableStateOf(false) }
     LaunchedEffect(state, target) {
         val loaded = state as? AsyncImagePainter.State.Success
         // 目标为空时也要跟着清掉，不然上一首的封面会一直留在屏幕上
-        if (target == null) front = null else if (loaded != null) front = loaded.painter
+        if (target == null) {
+            front = null
+            frontOpaque = false
+        } else if (loaded != null) {
+            front = loaded.painter
+            frontOpaque = (loaded.result.image as? BitmapImage)?.bitmap?.hasAlpha() == false
+        }
     }
+    // Creating the transition with the first loaded painter starts at alpha 1. Later painters
+    // update that same transition, preserving crossfades and their interruption behaviour.
+    val coverTransition = if (front != null) updateTransition(front, label = "PlayerCover") else null
 
     // 收起目标：**标题行左缘中点，换算进封面自己的坐标系**。收起时就是拿它跟封面自己的中心
     // （`size/2`）相减，得到 graphicsLayer 要走的位移。封面不参与任何布局搬家，整段收起只有
@@ -1196,45 +1214,60 @@ private fun PlayerCover(
     val expandedShape = remember { RoundedRectangle(16.dp) }
     val coverBackground = MaterialTheme.colors.scrimMedium
     val density = LocalDensity.current
-    val direction = LocalLayoutDirection.current
-    val transform: GraphicsLayer.() -> Unit = remember(expansion, collapse, anchor, density, direction, expandedShape) {
-        {
-            with(density) {
-                val width = size.width.toFloat()
-                val height = size.height.toFloat()
-                val collapseProgress = collapse.value
-                val collapseTarget = anchor
-                val collapsedSide = CollapsedCoverSize.toPx()
-                val panelScale = if (collapseTarget != null) {
-                    lerp(1f, collapsedSide / width, collapseProgress)
-                } else 1f
-                val panelX = if (collapseTarget != null) {
-                    (collapseTarget.x + collapsedSide / 2f - width / 2f) * collapseProgress
-                } else 0f
-                val panelY = if (collapseTarget != null) {
-                    (collapseTarget.y - height / 2f) * collapseProgress
-                } else 0f
-                val progress = expansion.progress.coerceIn(0f, 1f)
-                val source = expansion.sourceCoverBounds
-                val targetBounds = expansion.targetCoverBounds
-                scaleX = lerp(source.width / width, panelScale, progress)
-                scaleY = lerp(source.height / height, panelScale, progress)
-                translationX = lerp(source.center.x - targetBounds.center.x, panelX, progress)
-                // Keep the dip out of measured geometry so reversing follows the same path.
-                val dip = expansion.sourceBounds.top.coerceAtLeast(0f) * ExpandedCoverDipFraction *
-                    progress * (1f - progress) * (1f - collapseProgress.coerceIn(0f, 1f))
-                translationY = lerp(source.center.y - targetBounds.center.y, panelY, progress) + dip
-                val shape = if (progress >= 1f) expandedShape else {
-                    val radius = lerp(MiniPlayerCoverRadius.toPx(), 16.dp.toPx() * panelScale, progress)
-                    RoundedRectangle((radius / scaleX.coerceAtLeast(0.0001f)).toDp())
+    val transform: GraphicsLayer.() -> Unit =
+        remember(expansion, collapse, anchor, density) {
+            {
+                with(density) {
+                    val width = size.width.toFloat()
+                    val height = size.height.toFloat()
+                    val collapseProgress = collapse.value
+                    val collapseTarget = anchor
+                    val collapsedSide = CollapsedCoverSize.toPx()
+                    val panelScale = if (collapseTarget != null) {
+                        lerp(1f, collapsedSide / width, collapseProgress)
+                    } else 1f
+                    val panelX = if (collapseTarget != null) {
+                        (collapseTarget.x + collapsedSide / 2f - width / 2f) * collapseProgress
+                    } else 0f
+                    val panelY = if (collapseTarget != null) {
+                        (collapseTarget.y - height / 2f) * collapseProgress
+                    } else 0f
+                    val progress = expansion.progress.coerceIn(0f, 1f)
+                    val source = expansion.sourceCoverBounds
+                    val targetBounds = expansion.targetCoverBounds
+                    scaleX = lerp(source.width / width, panelScale, progress)
+                    scaleY = lerp(source.height / height, panelScale, progress)
+                    translationX = lerp(source.center.x - targetBounds.center.x, panelX, progress)
+                    // Keep the dip out of measured geometry so reversing follows the same path.
+                    val dip =
+                        expansion.sourceBounds.top.coerceAtLeast(0f) * ExpandedCoverDipFraction *
+                                progress * (1f - progress) * (1f - collapseProgress.coerceIn(
+                            0f,
+                            1f
+                        ))
+                    translationY =
+                        lerp(source.center.y - targetBounds.center.y, panelY, progress) + dip
                 }
-                setOutline(shape.createOutline(Size(width, height), direction, density))
-                clip = true
+            }
+        }
+    val coverShape = remember(expansion, collapse, anchor, density, expandedShape) {
+        { size: Size ->
+            with(density) {
+                val progress = expansion.progress.coerceIn(0f, 1f)
+                if (progress >= 1f) expandedShape else {
+                    val panelScale = if (anchor != null) {
+                        lerp(1f, CollapsedCoverSize.toPx() / size.width, collapse.value)
+                    } else 1f
+                    val scale = lerp(expansion.sourceCoverBounds.width / size.width, panelScale, progress)
+                    val radius = lerp(MiniPlayerCoverRadius.toPx(), 16.dp.toPx() * panelScale, progress)
+                    RoundedRectangle((radius / scale.coerceAtLeast(0.0001f)).toDp())
+                }
             }
         }
     }
     SideEffect {
         expansion.targetCoverTransform = transform
+        expansion.targetCoverShape = coverShape
         expansion.targetCoverBackground = coverBackground
         expansion.hasCover = target != null
     }
@@ -1264,12 +1297,12 @@ private fun PlayerCover(
             }
             .drawWithContent {
                 coverLayer.record { this@drawWithContent.drawContent() }
+                expansion.targetCoverOpaque = frontOpaque && coverTransition != null &&
+                    coverTransition.currentState == coverTransition.targetState && !coverTransition.isRunning
             },
     ) {
-        Crossfade(
-            targetState = front,
+        coverTransition?.Crossfade(
             animationSpec = tween(durationMillis = CoverCrossfadeMs),
-            label = "PlayerCover",
         ) { shown ->
             if (shown != null) {
                 Image(

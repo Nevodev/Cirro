@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.util.lerp
 import com.kyant.shapes.RoundedRectangle
+import com.kyant.shapes.RoundedRectangularShape
 import com.kyant.shapes.UnevenRoundedRectangle
 import com.nevoit.material.clip.cornerMaskClip
 import com.nevoit.material.navigation.shape.deviceCornerShape
@@ -72,8 +73,10 @@ class PlayerExpansionState internal constructor(
         private set
     internal var targetCoverLayer by mutableStateOf<GraphicsLayer?>(null)
     internal var targetCoverTransform by mutableStateOf<(GraphicsLayer.() -> Unit)?>(null)
+    internal var targetCoverShape by mutableStateOf<((Size) -> RoundedRectangularShape)?>(null)
     internal var targetCoverBackground by mutableStateOf(Color.Transparent)
     internal var hasCover by mutableStateOf(false)
+    internal var targetCoverOpaque by mutableStateOf(false)
     internal var artwork by mutableStateOf<PlayerArtwork?>(null)
     // Latch for this opening: surface recreation or exit must not reset visible progress.
     internal var backgroundReady by mutableStateOf(false)
@@ -136,6 +139,8 @@ class PlayerExpansionState internal constructor(
         targetCoverCoordinates = null
         targetCoverLayer = null
         targetCoverTransform = null
+        targetCoverShape = null
+        targetCoverOpaque = false
         targetCoverBounds = Rect.Zero
     }
 
@@ -174,6 +179,17 @@ class PlayerExpansionState internal constructor(
     }
 }
 
+private class CoverReplayCache {
+    var fallbackSource: GraphicsLayer? = null
+    var fallbackSourceSize = IntSize.Zero
+    var composedCover: GraphicsLayer? = null
+    var composedFallback: GraphicsLayer? = null
+    var composedBackground = Color.Unspecified
+    var composedProgress = Float.NaN
+    var presentedContent: GraphicsLayer? = null
+    var presentedShape: RoundedRectangularShape? = null
+}
+
 @Composable
 internal fun rememberPlayerExpansionState(
     controller: PlayerUiController,
@@ -198,9 +214,11 @@ internal fun PlayerExpansion(
     val rectangle = remember { RoundedRectangle(0.dp) }
     val pageLayer = rememberGraphicsLayer()
     val coverPresentation = rememberGraphicsLayer()
+    val coverContent = rememberGraphicsLayer()
     val coverFallback = rememberGraphicsLayer()
+    val coverReplay = remember(density, direction) { CoverReplayCache() }
     val interactive = state.controller.acceptsInput
-    val expansion = remember(state, deviceShape, density, direction, interactive, pageLayer, coverPresentation, coverFallback) {
+    val expansion = remember(state, deviceShape, density, direction, interactive, pageLayer, coverPresentation, coverContent, coverFallback, coverReplay) {
         Modifier
             .onGloballyPositioned(state::onPagePositioned)
             .layout { measurable, constraints ->
@@ -259,21 +277,56 @@ internal fun PlayerExpansion(
                 val target = state.targetCoverBounds
                 state.targetCoverLayer?.let { cover ->
                     if (cover.size.width > 0 && cover.size.height > 0) {
-                        coverPresentation.record(size = cover.size) {
-                            drawRect(state.targetCoverBackground, alpha = progress)
+                        val content = if (state.targetCoverOpaque) cover else {
                             val source = state.sourceCoverLayer
-                            if (source.size.width > 0 && source.size.height > 0) {
-                                coverFallback.record(size = cover.size) {
-                                    scale(
-                                        size.width / source.size.width,
-                                        size.height / source.size.height,
-                                        pivot = Offset.Zero,
-                                    ) { drawLayer(source) }
+                            val fallbackAlpha = if (state.hasCover) 1f else 1f - progress
+                            val fallback = if (fallbackAlpha > 0f && source.size.width > 0 && source.size.height > 0) {
+                                if (coverFallback.size != cover.size || coverReplay.fallbackSource !== source ||
+                                    coverReplay.fallbackSourceSize != source.size
+                                ) {
+                                    // Pure layer replay must use a concrete density, not the mutable
+                                    // LayoutNodeDrawScope retained by the implicit record overload.
+                                    coverFallback.record(density, direction, cover.size) {
+                                        scale(
+                                            size.width / source.size.width,
+                                            size.height / source.size.height,
+                                            pivot = Offset.Zero,
+                                        ) { drawLayer(source) }
+                                    }
+                                    coverReplay.fallbackSource = source
+                                    coverReplay.fallbackSourceSize = source.size
                                 }
-                                coverFallback.alpha = if (state.hasCover) 1f else 1f - progress
-                                drawLayer(coverFallback)
+                                coverFallback.alpha = fallbackAlpha
+                                coverFallback
+                            } else null
+                            if (coverContent.size != cover.size || coverReplay.composedCover !== cover ||
+                                coverReplay.composedFallback !== fallback ||
+                                coverReplay.composedBackground != state.targetCoverBackground ||
+                                coverReplay.composedProgress != progress
+                            ) {
+                                coverContent.record(density, direction, cover.size) {
+                                    drawRect(state.targetCoverBackground, alpha = progress)
+                                    if (fallback != null) drawLayer(fallback)
+                                    drawLayer(cover)
+                                }
+                                coverReplay.composedCover = cover
+                                coverReplay.composedFallback = fallback
+                                coverReplay.composedBackground = state.targetCoverBackground
+                                coverReplay.composedProgress = progress
                             }
-                            drawLayer(cover)
+                            coverContent
+                        }
+                        val shape = state.targetCoverShape?.invoke(cover.size.toSize()) ?: rectangle
+                        if (coverPresentation.size != cover.size || coverReplay.presentedContent !== content ||
+                            coverReplay.presentedShape != shape
+                        ) {
+                            // Child GraphicsLayers stay live when their recording changes. Position
+                            // and scale alone do not require rebuilding this masked display list.
+                            coverPresentation.record(density, direction, cover.size) {
+                                cornerMaskClip(shape) { drawLayer(content) }
+                            }
+                            coverReplay.presentedContent = content
+                            coverReplay.presentedShape = shape
                         }
                         state.targetCoverTransform?.invoke(coverPresentation)
                         translate(target.left, target.top) { drawLayer(coverPresentation) }

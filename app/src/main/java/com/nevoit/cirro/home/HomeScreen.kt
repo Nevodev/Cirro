@@ -31,7 +31,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableIntState
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -57,6 +56,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
@@ -156,7 +156,7 @@ fun BoxScope.HomeRoute(
     // 网络往返回来再建，磁盘缓存就白存了。VM 自己会等 cookie 进原生层才发请求。
     val viewModel = if (session != Session.LoggedOut) koinViewModel<HomeViewModel>() else null
     val playback = koinInject<PlaybackConnection>()
-    val state = viewModel?.state?.collectAsState()?.value
+    val state = viewModel?.state?.collectAsStateWithLifecycle()?.value
 
     // 列表期把封面的主色预取好：用户点进详情页时背景色已经在缓存里，第一帧就有
     val palette = koinInject<CoverPalette>()

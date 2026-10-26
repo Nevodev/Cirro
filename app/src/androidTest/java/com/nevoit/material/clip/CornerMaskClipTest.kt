@@ -5,16 +5,23 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.toIntSize
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.kyant.shapes.RoundedRectangle
 import org.junit.Assert.assertEquals
@@ -29,6 +36,68 @@ import kotlin.math.floor
 class CornerMaskClipTest {
     @get:Rule
     val compose = createComposeRule()
+
+    @Test
+    fun retainedMaskShowsChildUpdatesWithoutRecordingTheMaskAgain() {
+        val color = mutableStateOf(Color.Blue)
+        var maskRecordings = 0
+        compose.setContent {
+            val density = LocalDensity.current
+            val direction = LocalLayoutDirection.current
+            val child = rememberGraphicsLayer()
+            val masked = rememberGraphicsLayer()
+            Box(Modifier.size(120.dp).testTag("retained").background(Color.Magenta)) {
+                Box(Modifier.fillMaxSize().drawWithContent {
+                    child.record(density, direction, size.toIntSize()) { drawRect(color.value) }
+                    if (masked.size != child.size) {
+                        maskRecordings++
+                        masked.record(density, direction, child.size) {
+                            cornerMaskClip(RoundedRectangle(24.dp)) { drawLayer(child) }
+                        }
+                    }
+                    drawLayer(masked)
+                })
+            }
+        }
+        val before = compose.onNodeWithTag("retained").captureToImage().toPixelMap()
+        assertEquals(Color.Blue, before[before.width / 2, before.height / 2])
+        val recordings = compose.runOnIdle { maskRecordings }
+        compose.runOnIdle { color.value = Color.Green }
+        val after = compose.onNodeWithTag("retained").captureToImage().toPixelMap()
+        assertEquals(Color.Green, after[after.width / 2, after.height / 2])
+        assertEquals(Color.Magenta, after[0, 0])
+        compose.runOnIdle { assertEquals(recordings, maskRecordings) }
+    }
+
+    @Test
+    fun recordedMaskAndNestedReplayReadDensityWithoutRecursion() {
+        compose.setContent {
+            val density = LocalDensity.current
+            val direction = LocalLayoutDirection.current
+            val presentation = rememberGraphicsLayer()
+            val fallback = rememberGraphicsLayer()
+            Box(Modifier.size(120.dp).testTag("recorded").background(Color.Magenta)) {
+                Box(Modifier.fillMaxSize().drawWithContent {
+                    presentation.record(density, direction, size.toIntSize()) {
+                        assertEquals(density.density, this.density, 0f)
+                        cornerMaskClip(RoundedRectangle(24.dp)) {
+                            fallback.record(density, direction, size.toIntSize()) {
+                                assertEquals(density.density, this.density, 0f)
+                                drawRect(Color.Blue)
+                            }
+                            drawLayer(fallback)
+                            assertEquals(24f * density.density, 24.dp.toPx(), 0.001f)
+                        }
+                    }
+                    drawLayer(presentation)
+                    assertEquals(density.density, this.density, 0f)
+                })
+            }
+        }
+        val pixels = compose.onNodeWithTag("recorded").captureToImage().toPixelMap()
+        assertEquals(Color.Blue, pixels[pixels.width / 2, pixels.height / 2])
+        assertEquals(Color.Magenta, pixels[0, 0])
+    }
 
     @Test
     fun movingBoundsClipAllFourEdgesAndCornersWithoutRemeasuring() {

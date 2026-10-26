@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -55,6 +54,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.nevoit.cirro.R
 import com.nevoit.cirro.data.AccountRepository
@@ -134,11 +134,11 @@ fun CollectionRoute(
     }
     val playback = koinInject<PlaybackConnection>()
     val songMenu: SongMenuViewModel = koinViewModel()
-    val remoteState by viewModel.state.collectAsState()
+    val remoteState by viewModel.state.collectAsStateWithLifecycle()
     val libraryRepository = koinInject<LibraryRepository>()
-    val library by libraryRepository.snapshot.collectAsState()
-    val libraryError by libraryRepository.error.collectAsState()
-    val session by koinInject<AccountRepository>().session.collectAsState()
+    val library by libraryRepository.snapshot.collectAsStateWithLifecycle()
+    val libraryError by libraryRepository.error.collectAsStateWithLifecycle()
+    val session by koinInject<AccountRepository>().session.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var tracksRevealed by rememberSaveable(kind, id) { mutableStateOf(false) }
     var showFullAlbum by rememberSaveable(kind, id) { mutableStateOf(false) }
@@ -233,15 +233,14 @@ fun CollectionRoute(
     val headerInfo = if (tracksRevealed) state.info.dataOrNull else null
 
     val songs = state.songs.dataOrNull.orEmpty()
-    // 这里是误报，不改
-    @Suppress("StateFlowValueCalledInComposition")
+
     val playingId by remember(playback) {
         playback.state.map { it.song?.id }.distinctUntilChanged()
-    }.collectAsState(initial = playback.state.value.song?.id)
+    }.collectAsStateWithLifecycle(initialValue = remember { playback.state.value.song?.id })
     val queueActions by remember(playback) {
         playback.queue.map { it.entries.isNotEmpty() to it.hasPendingInserts }
             .distinctUntilChanged()
-    }.collectAsState(initial = false to false)
+    }.collectAsStateWithLifecycle(initialValue = false to false)
     // 这一页的出身：随歌一起交给队列，打卡时回传 sourceId（每日推荐没有服务端集合，QueueSource 会留空）
     val queueSource = QueueSource(kind, id.toString(), title = viewModel.displayTitle)
 
@@ -448,7 +447,8 @@ private fun CollectionScreen(
         saver = CollectionSearchState.saver(searchThresholdPx, dismissThresholdPx),
     ) { CollectionSearchState(searchThresholdPx, dismissThresholdPx) }
     val searching = search.query.isNotBlank()
-    val searchResult = rememberCollectionSongSearchResults(state.songs.dataOrNull.orEmpty(), search.query)
+    val searchResult =
+        rememberCollectionSongSearchResults(state.songs.dataOrNull.orEmpty(), search.query)
     val offsetEffect = rememberOffsetOverscrollEffect(listState)
     val searchEffect = remember(offsetEffect, search, listState) {
         CollectionSearchOverscrollEffect(offsetEffect, search) { listState.canScrollBackward }
@@ -504,6 +504,7 @@ private fun CollectionScreen(
                     is Section.Loading -> item(key = "search-loading") {
                         ListHint(text = "正在加载歌曲…", contentVariant = contentVariantColor())
                     }
+
                     is Section.Failed -> item(key = "search-failed") {
                         ListHint(
                             text = "加载失败 · 点按重试",
@@ -511,6 +512,7 @@ private fun CollectionScreen(
                             onClick = onRetry,
                         )
                     }
+
                     is Section.Ready -> Unit
                 }
             }
@@ -585,7 +587,11 @@ private fun CollectionScreen(
                     val songCount = matches?.size ?: songs.size
                     if (songCount > 0) {
                         if (!searching) item(key = "tracks-gap") {
-                            Box(Modifier.animateItem(tween(200), Springs.crisp(), tween(200)).height(24.dp))
+                            Box(
+                                Modifier
+                                    .animateItem(tween(200), Springs.crisp(), tween(200))
+                                    .height(24.dp)
+                            )
                         }
                         // 必须给 key：`animateItem()` 靠它做增删/位移，没 key 就只有默认的 index。
                         items(

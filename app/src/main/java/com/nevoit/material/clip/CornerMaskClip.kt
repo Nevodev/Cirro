@@ -72,7 +72,7 @@ private class CornerMaskClipElement(
         if (this === other) return true
         if (other !is CornerMaskClipElement) return false
         return shape == other.shape && enabled == other.enabled &&
-            bounds == other.bounds && shapeProducer == other.shapeProducer
+                bounds == other.bounds && shapeProducer == other.shapeProducer
     }
 
     override fun hashCode(): Int {
@@ -135,43 +135,76 @@ private class CornerMaskClipNode(
 
         val shape = shapeProducer?.invoke() ?: checkNotNull(shape)
         val corners = cornersOf(shape, width, height, layoutDirection, this)
-        if (corners.topLeft <= 0f && corners.topRight <= 0f &&
-            corners.bottomRight <= 0f && corners.bottomLeft <= 0f
-        ) {
-            val canvas = drawContext.canvas
-            canvas.save()
-            try {
-                canvas.clipRect(bounds)
-                drawContent()
-            } finally {
-                canvas.restore()
-            }
-            return
-        }
+        drawCornerMaskClipped(bounds, corners) { this@draw.drawContent() }
+    }
+}
 
-        val topLeft = CornerMaskCache.obtain(corners.topLeft, width, height)
-        val topRight = CornerMaskCache.obtain(corners.topRight, width, height)
-        val bottomRight = CornerMaskCache.obtain(corners.bottomRight, width, height)
-        val bottomLeft = CornerMaskCache.obtain(corners.bottomLeft, width, height)
+// Recorded layers need the same mask without introducing a second layout or outline clip.
+internal fun DrawScope.cornerMaskClip(
+    shape: RoundedRectangularShape,
+    content: DrawScope.() -> Unit,
+) {
+    drawCornerMaskClipped(
+        Rect(Offset.Zero, size),
+        shape.corners(size, layoutDirection, this),
+        content,
+    )
+}
 
+private inline fun DrawScope.drawCornerMaskClipped(
+    bounds: Rect,
+    corners: RoundedRectangularShape.Corners,
+    content: DrawScope.() -> Unit,
+) {
+    val width = bounds.width
+    val height = bounds.height
+    if (width <= 0f || height <= 0f) return
+    if (corners.topLeft <= 0f && corners.topRight <= 0f &&
+        corners.bottomRight <= 0f && corners.bottomLeft <= 0f
+    ) {
         val canvas = drawContext.canvas
         canvas.save()
         try {
-            // saveLayer bounds are allocation hints; the moving rectangle must also clip content.
             canvas.clipRect(bounds)
-            canvas.saveLayer(bounds, MaskLayerPaint)
-            try {
-                drawContent()
-                if (topLeft != null) drawCornerMask(topLeft, bounds, mirrorX = false, mirrorY = false)
-                if (topRight != null) drawCornerMask(topRight, bounds, mirrorX = true, mirrorY = false)
-                if (bottomRight != null) drawCornerMask(bottomRight, bounds, mirrorX = true, mirrorY = true)
-                if (bottomLeft != null) drawCornerMask(bottomLeft, bounds, mirrorX = false, mirrorY = true)
-            } finally {
-                canvas.restore()
-            }
+            content()
         } finally {
             canvas.restore()
         }
+        return
+    }
+
+    val topLeft = CornerMaskCache.obtain(corners.topLeft, width, height)
+    val topRight = CornerMaskCache.obtain(corners.topRight, width, height)
+    val bottomRight = CornerMaskCache.obtain(corners.bottomRight, width, height)
+    val bottomLeft = CornerMaskCache.obtain(corners.bottomLeft, width, height)
+
+    val canvas = drawContext.canvas
+    canvas.save()
+    try {
+        // saveLayer bounds are allocation hints; the moving rectangle must also clip content.
+        canvas.clipRect(bounds)
+        canvas.saveLayer(bounds, MaskLayerPaint)
+        try {
+            content()
+            if (topLeft != null) drawCornerMask(topLeft, bounds, mirrorX = false, mirrorY = false)
+            if (topRight != null) drawCornerMask(topRight, bounds, mirrorX = true, mirrorY = false)
+            if (bottomRight != null) drawCornerMask(
+                bottomRight,
+                bounds,
+                mirrorX = true,
+                mirrorY = true
+            )
+            if (bottomLeft != null) drawCornerMask(
+                bottomLeft,
+                bounds,
+                mirrorX = false,
+                mirrorY = true
+            )
+        } finally {
+            canvas.restore()
+        }
+    } finally {
+        canvas.restore()
     }
 }
 

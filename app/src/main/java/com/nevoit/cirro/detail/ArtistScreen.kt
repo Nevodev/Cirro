@@ -51,6 +51,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
 import coil3.compose.rememberAsyncImagePainter
@@ -94,8 +95,8 @@ import com.nevoit.material.core.component.VGap
 import com.nevoit.material.core.layout.LocalOverscrollVisualOffset
 import com.nevoit.material.core.layout.VerticalStack
 import com.nevoit.material.core.layout.isScrolledPast
-import com.nevoit.material.navigation.LocalPageTransitionState
 import com.nevoit.material.core.utility.rememberColorProducer
+import com.nevoit.material.navigation.LocalPageTransitionState
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.local.ProvideContentColor
 import com.nevoit.material.theme.tokens.Springs
@@ -179,11 +180,11 @@ fun ArtistRoute(
     }
     val playback = koinInject<PlaybackConnection>()
     val songMenu: SongMenuViewModel = koinViewModel()
-    val remoteState by viewModel.state.collectAsState()
+    val remoteState by viewModel.state.collectAsStateWithLifecycle()
     val libraryRepository = koinInject<LibraryRepository>()
-    val library by libraryRepository.snapshot.collectAsState()
-    val libraryError by libraryRepository.error.collectAsState()
-    val session by koinInject<AccountRepository>().session.collectAsState()
+    val library by libraryRepository.snapshot.collectAsStateWithLifecycle()
+    val libraryError by libraryRepository.error.collectAsStateWithLifecycle()
+    val session by koinInject<AccountRepository>().session.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var tracksRevealed by rememberSaveable(kind, id) { mutableStateOf(false) }
     var showFullAlbum by rememberSaveable(kind, id) { mutableStateOf(false) }
@@ -269,15 +270,14 @@ fun ArtistRoute(
     }
 
     val songs = state.songs.dataOrNull.orEmpty()
-    // 这里是误报，不改
-    @Suppress("StateFlowValueCalledInComposition")
+
     val playingId by remember(playback) {
         playback.state.map { it.song?.id }.distinctUntilChanged()
-    }.collectAsState(initial = playback.state.value.song?.id)
+    }.collectAsStateWithLifecycle(initialValue = remember { playback.state.value.song?.id })
     val queueActions by remember(playback) {
         playback.queue.map { it.entries.isNotEmpty() to it.hasPendingInserts }
             .distinctUntilChanged()
-    }.collectAsState(initial = false to false)
+    }.collectAsStateWithLifecycle(initialValue = false to false)
     // 这一页的出身：随歌一起交给队列，打卡时回传 sourceId（每日推荐没有服务端集合，QueueSource 会留空）
     val queueSource = QueueSource(kind, id.toString(), title = viewModel.displayTitle)
 
