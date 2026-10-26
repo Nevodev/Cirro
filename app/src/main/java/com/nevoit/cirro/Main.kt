@@ -356,7 +356,7 @@ fun BoxScope.Main() {
     val underlayScale = remember(playerExpansion, playerUi) {
         {
             val progress =
-                if (playerExpansion.ownsVisual) playerUi.progress.coerceIn(0f, 1f) else 0f
+                if (playerExpansion.ownsVisual) playerExpansion.progress.coerceIn(0f, 1f) else 0f
             1f - (1f - PlayerUnderlayScale) * progress
         }
     }

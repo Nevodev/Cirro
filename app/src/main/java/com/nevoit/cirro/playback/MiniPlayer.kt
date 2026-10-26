@@ -87,6 +87,7 @@ fun MiniPlayer(
     })
     val progressState = stateFlow.collectAsState()
     val song = header.first ?: return
+    PreparePlayerArtwork(expansion, song.cover.orEmpty())
     val boxWidth = LocalWindowInfo.current.containerDpSize.width - 24.dp
     val boxHeight = 56.dp
     val progressBarWidth = boxWidth - boxHeight
@@ -124,7 +125,8 @@ fun MiniPlayer(
             .onGloballyPositioned(expansion::onSourceCoverPositioned)
             .drawWithContent {
                 expansion.sourceCoverLayer.record { this@drawWithContent.drawContent() }
-                drawLayer(expansion.sourceCoverLayer)
+                // Exclude the cover from foreground replay instead of cutting out fractional edges.
+                if (!expansion.ownsVisual) drawLayer(expansion.sourceCoverLayer)
             }
     }
 

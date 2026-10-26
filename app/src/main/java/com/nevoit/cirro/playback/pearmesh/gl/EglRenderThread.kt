@@ -30,6 +30,7 @@ class EglRenderThread(
     private val maxContinuousRenderMillis: Long? = null,
     initiallyRenderingEnabled: Boolean = true,
     private val frameCaptureRequest: AtomicReference<((Bitmap) -> Unit)?>? = null,
+    private val onRenderError: () -> Unit = {},
 ) {
     private val rendererId = nextRendererId.incrementAndGet()
     private val running = AtomicBoolean(false)
@@ -188,7 +189,7 @@ class EglRenderThread(
                     if (!EGL14.eglSwapBuffers(display, eglSurface)) {
                         val error = EGL14.eglGetError()
                         if (error == EGL14.EGL_BAD_SURFACE || error == EGL14.EGL_BAD_NATIVE_WINDOW) {
-                            break
+                            if (!running.get()) break
                         }
                         error("eglSwapBuffers failed: 0x${error.toString(16)}")
                     }
@@ -253,6 +254,7 @@ class EglRenderThread(
         } catch (throwable: Throwable) {
             if (running.get()) {
                 Log.e(TAG, "EGL renderer stopped", throwable)
+                onRenderError()
             }
         } finally {
             renderer?.close()

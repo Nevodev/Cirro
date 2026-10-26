@@ -70,29 +70,29 @@ class PearMeshFirstArtworkTest {
     }
 
     @Test
-    fun missingArtworkMatchesThePageBackdropIncludingColorUpdates() {
+    fun missingArtworkDrawsAnOpaqueGrayBackdrop() {
         val state = PearMeshState()
         PearMeshGlRenderer(appContext, state.snapshot()).use { renderer ->
-            for (rgb in listOf(floatArrayOf(0.2f, 0.4f, 0.6f), floatArrayOf(0.6f, 0.3f, 0.1f))) {
-                state.setBackdropWashColor(rgb[0], rgb[1], rgb[2])
-                val pixels = render(renderer, state)
-                for (pixel in 0 until Width * Height) {
-                    for (channel in 0..2) {
-                        assertTrue(abs((pixels[pixel * 4 + channel].toInt() and 255) - rgb[channel] * 255) <= 1)
-                    }
-                    assertEquals(255, pixels[pixel * 4 + 3].toInt() and 255)
-                }
+            val pixels = render(renderer, state)
+            for (pixel in 0 until Width * Height) {
+                val red = pixels[pixel * 4].toInt() and 255
+                val green = pixels[pixel * 4 + 1].toInt() and 255
+                val blue = pixels[pixel * 4 + 2].toInt() and 255
+                assertTrue(abs(red - green) <= 2 && abs(red - blue) <= 2)
+                assertEquals(255, pixels[pixel * 4 + 3].toInt() and 255)
             }
+            val brightest = (0 until Width * Height).maxOf { pixels[it * 4].toInt() and 255 }
+            assertTrue(brightest in 32..223)
         }
     }
 
     @Test
-    fun firstArtworkMatchesPreloadedArtworkWhetherItArrivesBeforeOrAfterFirstDraw() {
+    fun firstLateArtworkStartsFromTheDefaultBackdropWhetherItArrivesBeforeOrAfterFirstDraw() {
         val artwork = createBitmap(8, 8).apply { eraseColor(Color.RED) }
         try {
-            val readyState = PearMeshState().apply { setArtwork(artwork) }
-            val expected = PearMeshGlRenderer(appContext, readyState.snapshot()).use {
-                render(it, readyState)
+            val emptyState = PearMeshState()
+            val expected = PearMeshGlRenderer(appContext, emptyState.snapshot()).use {
+                render(it, emptyState)
             }
             for (drawBeforeArtwork in listOf(false, true)) {
                 val state = PearMeshState()

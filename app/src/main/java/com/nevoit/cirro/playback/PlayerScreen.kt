@@ -1,6 +1,5 @@
 package com.nevoit.cirro.playback
 
-import android.graphics.Bitmap
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
@@ -88,11 +87,6 @@ import androidx.compose.ui.zIndex
 import androidx.core.view.WindowCompat
 import coil3.compose.AsyncImagePainter
 import coil3.compose.rememberAsyncImagePainter
-import coil3.imageLoader
-import coil3.request.ImageRequest
-import coil3.request.SuccessResult
-import coil3.request.allowHardware
-import coil3.toBitmap
 import com.kyant.shapes.Capsule
 import com.kyant.shapes.RoundedRectangle
 import com.nevoit.cirro.R
@@ -117,7 +111,6 @@ import com.nevoit.material.core.utility.rememberColorProducer
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.local.ProvideContentColor
 import com.nevoit.material.theme.tokens.Springs
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
@@ -126,15 +119,11 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import java.util.Locale
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
-
-/** 喂给网格背景的封面纹理边长。背景要被放大很多倍又始终在糊，再大的分辨率是纯浪费。 */
-private const val CoverTextureSize = 512
 
 /** 换封面时新旧两张大图的交叉时长。 */
 private const val CoverCrossfadeMs = 300
@@ -342,6 +331,9 @@ fun PlayerLayer(
                 if (controller.isDragging || controller.animationTarget().first > 0f) {
                     snapshotFlow { expansion.ready }.first { it }
                     expansion.takeOver()
+                    if (!controller.isDragging) {
+                        snapshotFlow { expansion.backgroundReady }.first { it }
+                    }
                 }
                 if (controller.isDragging) return@collectLatest
                 controller.animate()
@@ -352,7 +344,7 @@ fun PlayerLayer(
     Box(
         modifier = modifier.fillMaxSize().drawBehind {
             if (expansion.ownsVisual) {
-                drawRect(Color.Black, alpha = 0.6f * controller.progress.coerceIn(0f, 1f))
+                drawRect(Color.Black, alpha = 0.6f * expansion.progress.coerceIn(0f, 1f))
             }
         },
     )
@@ -424,16 +416,23 @@ private fun PlayerOverlay(
 
     // 空串比 null 好使：取色、纹理、大图三条链路都只认非空串，归一化一次省掉到处散布的判空。
     val cover = song.cover.orEmpty()
-    val context = LocalContext.current
 
     // ---- 主题色 ----
     // 跟详情页同一套取色：种子进 HCT 生成 primary 色带，再按深浅取固定明度档。
     // 缓存命中（首页/详情页预取过同一张封面）时第一帧就有颜色，所以不会出现"先灰一下再上色"。
     val palette = koinInject<CoverPalette>()
     var seed by remember(cover) { mutableStateOf(palette.cached(cover)) }
+    var seedReady by remember(cover) { mutableStateOf(cover.isEmpty() || seed != null) }
     LaunchedEffect(cover) {
-        if (cover.isEmpty()) return@LaunchedEffect
-        seed = palette.seed(cover)
+        if (cover.isNotEmpty()) seed = palette.seed(cover)
+        seedReady = true
+    }
+    var themeInitialized by remember { mutableStateOf(false) }
+    if (!themeInitialized) {
+        // Initialise animated colours from the resolved palette, so the first mesh frame's wash
+        // cannot tween from the fallback. Once visible, song changes retain their colour transition.
+        if (!seedReady) return
+        SideEffect { themeInitialized = true }
     }
 
     // 深浅判定跟详情页一致：种子本身暗（或系统是深色）就整页走深色。这一页的底色就是种子给的，
@@ -499,23 +498,11 @@ private fun PlayerOverlay(
         }
     }
 
-    // 封面 → 纹理。必须关掉硬件位图：GLUtils.texImage2D 读不了 HARDWARE 位图（Coil 在 API 26+
-    // 默认就给这种），而这里正是要把它交给 GL。拿到之后再 copy 一份，因为换封面时渲染器会短暂
-    // 持住上一张，Coil 的缓存回收不能把渲染线程手上的位图抽走。
-    LaunchedEffect(cover) {
-        if (cover.isEmpty()) return@LaunchedEffect
-        val result = context.imageLoader.execute(
-            ImageRequest.Builder(context)
-                .data(cover)
-                .size(CoverTextureSize)
-                .allowHardware(false)
-                .build(),
-        )
-        val image = (result as? SuccessResult)?.image ?: return@LaunchedEffect
-        val bitmap = withContext(Dispatchers.Default) {
-            image.toBitmap(image.width, image.height).copy(Bitmap.Config.ARGB_8888, false)
-        }
-        meshBackdrop.setArtwork(bitmap)
+    val artwork = expansion.artwork?.takeIf { it.cover == cover }
+    var meshStarted by remember { mutableStateOf(false) }
+    if (artwork != null) SideEffect { meshStarted = true }
+    val onBackgroundReady = remember(expansion) {
+        { ready: Boolean -> if (ready) expansion.backgroundReady = true }
     }
 
     // 暂停时网格也停住——跟波浪落定是同一条规矩：动的东西只属于"正在播放"。
@@ -820,10 +807,14 @@ private fun PlayerOverlay(
                 .fillMaxSize()
                 .drawBackground(backgroundColor)
         )
-        PearMeshSurface(
-            state = meshBackdrop,
-            modifier = Modifier.fillMaxSize(),
-        )
+        if (meshStarted || artwork != null) {
+            PearMeshSurface(
+                state = meshBackdrop,
+                modifier = Modifier.fillMaxSize(),
+                artwork = artwork?.bitmap,
+                onFrameReady = onBackgroundReady,
+            )
+        }
         val onTogglePlay = remember(connection) { { connection.togglePlayPause() } }
         val onPrevious = remember(connection) { { connection.skipToPrevious() } }
         val onNext = remember(connection) { { connection.skipToNext() } }
@@ -1223,7 +1214,7 @@ private fun PlayerCover(
                 val panelY = if (collapseTarget != null) {
                     (collapseTarget.y - height / 2f) * collapseProgress
                 } else 0f
-                val progress = expansion.controller.progress.coerceIn(0f, 1f)
+                val progress = expansion.progress.coerceIn(0f, 1f)
                 val source = expansion.sourceCoverBounds
                 val targetBounds = expansion.targetCoverBounds
                 scaleX = lerp(source.width / width, panelScale, progress)

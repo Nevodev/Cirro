@@ -16,11 +16,9 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.layer.GraphicsLayer
@@ -76,6 +74,11 @@ class PlayerExpansionState internal constructor(
     internal var targetCoverTransform by mutableStateOf<(GraphicsLayer.() -> Unit)?>(null)
     internal var targetCoverBackground by mutableStateOf(Color.Transparent)
     internal var hasCover by mutableStateOf(false)
+    internal var artwork by mutableStateOf<PlayerArtwork?>(null)
+    // Latch for this opening: surface recreation or exit must not reset visible progress.
+    internal var backgroundReady by mutableStateOf(false)
+
+    internal val progress: Float get() = if (backgroundReady) controller.progress else 0f
 
     internal val ownsVisual: Boolean get() = controller.present && takenOver
     internal val ready: Boolean
@@ -125,6 +128,7 @@ class PlayerExpansionState internal constructor(
 
     internal fun releasePage() {
         takenOver = false
+        backgroundReady = false
         pagePlaced = false
         targetCoverPlaced = false
         pageCoordinates = null
@@ -136,7 +140,7 @@ class PlayerExpansionState internal constructor(
     }
 
     internal fun bounds(size: Size): Rect {
-        val progress = controller.progress.coerceIn(0f, 1f)
+        val progress = progress.coerceIn(0f, 1f)
         val source = sourceBounds
         return Rect(
             lerp(source.left, 0f, progress),
@@ -209,7 +213,7 @@ internal fun PlayerExpansion(
             .cornerMaskClip(
                 bounds = state::bounds,
                 shape = {
-                    val progress = state.controller.progress.coerceIn(0f, 1f)
+                    val progress = state.progress.coerceIn(0f, 1f)
                     if (progress >= 1f) {
                         rectangle
                     } else {
@@ -235,7 +239,7 @@ internal fun PlayerExpansion(
                     translate(top = state.bounds(size).top) { drawLayer(pageLayer) }
                 }
 
-                val progress = state.controller.progress.coerceIn(0f, 1f)
+                val progress = state.progress.coerceIn(0f, 1f)
                 val bounds = state.bounds(size)
                 // Dissolve a solid colour over the already opaque page. Fading the page itself
                 // would reveal the home screen and isolate the lyrics' additive blend layers.
@@ -244,12 +248,9 @@ internal fun PlayerExpansion(
 
                 val foregroundAlpha = 1f - expansionFraction(progress, 0f, 0.3f)
                 if (foregroundAlpha > 0f) {
-                    val cover = state.sourceCoverBounds.translate(-state.sourceBounds.topLeft)
                     state.foregroundLayer.alpha = foregroundAlpha
                     translate(bounds.left, bounds.top) {
-                        clipRect(cover.left, cover.top, cover.right, cover.bottom, ClipOp.Difference) {
-                            drawLayer(state.foregroundLayer)
-                        }
+                        drawLayer(state.foregroundLayer)
                     }
                 }
 

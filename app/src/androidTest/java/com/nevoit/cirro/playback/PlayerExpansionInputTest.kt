@@ -102,6 +102,7 @@ class PlayerExpansionInputTest {
             }
         }
         compose.runOnIdle {
+            expansion.backgroundReady = true
             expansion.controller.onDrag(1f)
             expansion.takeOver()
         }
