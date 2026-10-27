@@ -66,13 +66,13 @@ class LyricsStore(context: Context) {
         const val MaxFiles = 150
 
         /**
-         * 快照版本；模型字段或解析语义改变时递增，避免旧结果绕过新解析器。
+         * 快照版本；模型字段、解析语义或取词策略改变时递增，避免旧结果绕过新逻辑。
          *
          * 🔴 **`Lyrics` 里任何会落盘的字段有变动就 +1。** 不加的话老快照照样能解出来 ——
          * `ignoreUnknownKeys` 管的是「多出来的键」，缺的键会**静默走默认值**，于是新字段在
          * 已经播过的歌上永远不生效，还要等缓存自然淘汰（150 份，靠 mtime 挤）。
          */
-        const val Version = 9
+        const val Version = 10
     }
 }
 

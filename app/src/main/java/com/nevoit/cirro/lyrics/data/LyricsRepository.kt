@@ -4,6 +4,7 @@ import android.util.Log
 import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.lyrics.model.Lyrics
 import com.nevoit.cirro.lyrics.model.LyricsSource
+import com.nevoit.cirro.lyrics.model.SyncLevel
 import com.nevoit.cirro.lyrics.parser.LrcLyricsParser
 import com.nevoit.cirro.lyrics.parser.LyricTrackRef
 import com.nevoit.cirro.lyrics.parser.QrcLyricsParser
@@ -24,13 +25,14 @@ import java.util.concurrent.ConcurrentHashMap
  * 歌词的唯一入口：按登录态选择取词链，解析成统一模型，并缓存 / 落盘。
  *
  * ## 取词链
- * 1. 已登录时取 **Apple Music 官方 TTML**；
+ * 1. 已登录时优先取 **Apple Music 官方逐字 TTML**；
  * 2. **AMLL TTML DB** —— 用网易歌曲 id 直取，**一次请求同时拿到 TTML 和 `appleMusicId`**；
- * 3. 未登录时取 **QQ 音乐 QRC / LRC**；
+ * 3. Apple / AMLL 未命中或只有逐行时取 **QQ 音乐 QRC / LRC**；
  * 4. **网易 LRC**（只逐行）；
  * 5. **lrclib**。
  *
- * Apple、AMLL 和网易并发请求，按以上优先级采用结果。
+ * Apple、AMLL、QQ 和网易并发请求，按以上优先级采用结果。
+ * QQ 也未命中时保留 Apple / AMLL 的逐行歌词，再回落其他来源。
  * 已登录时，AMLL 提供的 Apple id 仍可补充搜索未命中的结果。
  *
  * ## 缓存
@@ -114,14 +116,23 @@ class LyricsRepository(
 
     private suspend fun resolve(song: Song): Result<Lyrics> {
         val amll = fetchAsync { LyricsBridge.amll(song.id) }
+        val qq = fetchAsync { fetchQq(song) }
         val netease = fetchAsync { LyricsBridge.netease(song.id) }
         try {
-            return resolve(song, amll, netease)
+            return resolve(song, amll, qq, netease)
         } finally {
             amll.cancel()
+            qq.cancel()
             netease.cancel()
         }
     }
+
+    private fun fetchQq(song: Song): Result<QqLyric?> =
+        LyricsBridge.qqSearch(searchTerm(song)).mapCatching { candidates ->
+            val picked = QqSongMatcher.best(candidates, song)
+            Log.d(Tag, "QQ搜索 ${song.id}=${candidates.size}条/" + (picked?.id ?: "无够格候选"))
+            picked?.let { LyricsBridge.qqLyric(it.id).getOrThrow() }
+        }
 
     // JNI 调用无法被协程取消。使用应用作用域，避免官方词已到手还要等其他阻塞调用退出。
     private fun <T> fetchAsync(block: () -> Result<T>): Deferred<Result<T>> =
@@ -135,6 +146,7 @@ class LyricsRepository(
     private suspend fun resolve(
         song: Song,
         amllRequest: Deferred<Result<AmllTtml?>>,
+        qqRequest: Deferred<Result<QqLyric?>>,
         neteaseRequest: Deferred<Result<NeteaseLyric?>>,
     ): Result<Lyrics> {
         val failures = mutableListOf<String>()
@@ -160,10 +172,25 @@ class LyricsRepository(
             "primary=${if (configured) "apple-official" else "amll"}"
 
         val tried = LinkedHashSet<String>()
+        var appleLine: Lyrics? = null
 
         // 曲目身份：LRC 清洗靠它认「歌名 - 歌手」那条标题行（网易会把它混在 credit 中间）。
         // 来源是界面正在播的这首，与取词命中的是哪一首无关 —— 它只参与一段很弱的判据。
         val track = LyricTrackRef(song.name, song.artists)
+        val term = searchTerm(song)
+
+        suspend fun takeQq(): Lyrics? {
+            val hit = attempt("QQ", failures) { qqRequest.await() }
+            if (hit == null) {
+                trail += "QQ=未命中"
+                return null
+            }
+            val parsed = QrcLyricsParser.parse(hit.qrc, hit.translation, hit.roman, track)
+                .onFailure { failure -> failures += "QQ解析: ${failure.message}" }
+                .getOrNull()?.takeIf { it.lines.isNotEmpty() }
+            trail += "QQ解析=${parsed?.syncLevel ?: "失败"}"
+            return parsed
+        }
 
         suspend fun takeApple(id: String, via: String): Lyrics? {
             if (!configured || id.isEmpty() || !tried.add(id)) return null
@@ -186,10 +213,15 @@ class LyricsRepository(
                 "命中(${hit.ttml.length}B, $where, $via)"
             }
             if (hit.ttml.isBlank()) return null
-            return parseTtml(hit.ttml, LyricsSource.APPLE_MUSIC, failures)
+            val parsed = parseTtml(hit.ttml, LyricsSource.APPLE_MUSIC, failures) ?: return null
+            if (parsed.syncLevel == SyncLevel.LINE) {
+                trail += "Apple($id)=仅逐行，保留兜底"
+                appleLine = appleLine ?: parsed
+                return null
+            }
+            return parsed
         }
 
-        val term = searchTerm(song)
         if (configured && term.isEmpty()) {
             trail += "Apple搜索=跳过(无可搜信息)"
         } else if (configured) {
@@ -212,31 +244,22 @@ class LyricsRepository(
         } else {
             "AMLL=命中(${amll.ttml.length}B, appleIds=${amll.appleMusicIds})"
         }
-        // takeApple 同时守住 AMLL 提供的 id 入口，匿名时只采用 AMLL 自身的 TTML。
-        for (appleId in amll?.appleMusicIds.orEmpty()) {
-            takeApple(appleId, via = "via=amll")?.let { return deliver(it) }
-        }
-
-        if (amll != null) {
-            val parsed = parseTtml(amll.ttml, LyricsSource.AMLL_TTML_DB, failures)
-            trail += "AMLL解析=${if (parsed == null) "失败" else "成功"}"
-            parsed?.let { return deliver(it) }
-        }
-
-        if (!configured) {
-            val candidates = attempt("QQ搜索", failures) { LyricsBridge.qqSearch(term) }.orEmpty()
-            val picked = QqSongMatcher.best(candidates, song)
-            trail += "QQ搜索=${candidates.size}条/" + (picked?.id ?: "无够格候选")
-            if (picked != null) {
-                val hit = attempt("QQ歌词", failures) { LyricsBridge.qqLyric(picked.id) }
-                hit?.let {
-                    QrcLyricsParser.parse(it.qrc, it.translation, it.roman, track)
-                        .onFailure { failure -> failures += "QQ解析: ${failure.message}" }
-                        .getOrNull()?.takeIf { lyrics -> lyrics.lines.isNotEmpty() }
-                        ?.let { lyrics -> return deliver(lyrics) }
-                }
+        // 已取得 Apple 逐行时直接比较 AMLL，不再依次探测其他 Apple id 延迟回落。
+        if (appleLine == null) {
+            for (appleId in amll?.appleMusicIds.orEmpty()) {
+                takeApple(appleId, via = "via=amll")?.let { return deliver(it) }
+                if (appleLine != null) break
             }
         }
+
+        val amllLyrics = amll?.let { parseTtml(it.ttml, LyricsSource.AMLL_TTML_DB, failures) }
+        trail += "AMLL解析=${amllLyrics?.syncLevel ?: "失败"}"
+        if (amllLyrics?.syncLevel == SyncLevel.SYLLABLE) {
+            return deliver(amllLyrics)
+        }
+
+        takeQq()?.let { return deliver(it) }
+        (appleLine ?: amllLyrics)?.let { return deliver(it) }
 
         // ④ 网易 LRC（只逐行）
         val netease = attempt("网易", failures) { neteaseRequest.await() }
