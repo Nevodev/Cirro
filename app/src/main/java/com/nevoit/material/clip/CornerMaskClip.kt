@@ -162,10 +162,12 @@ private class CornerMaskClipNode(
             try {
                 canvas.clipRect(bounds)
                 drawContent()
-                drawCornerMasks(bounds, corners, filter)
             } finally {
                 canvas.restore()
             }
+            // The masks extend past both adjacent edges by CornerMaskPadding. Clipping them to
+            // the content rectangle would discard that overlap and expose fractional edge seams.
+            drawCornerMasks(bounds, corners, filter)
             return
         }
         drawCornerMaskClipped(bounds, corners) { this@draw.drawContent() }
