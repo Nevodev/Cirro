@@ -932,6 +932,7 @@ private fun PlayerOverlay(
                                 connection = connection,
                                 seekPreviewPosition = seekState.previewPosition,
                                 isSeeking = seekState.isDragging,
+                                inputEnabled = lyricsVisible && controller.acceptsInput,
                                 modifier = Modifier
                                     .padding(12.dp)
                                     .fillMaxSize(),

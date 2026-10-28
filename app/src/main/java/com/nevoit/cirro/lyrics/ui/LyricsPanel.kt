@@ -83,6 +83,7 @@ fun LyricsPanel(
      * 「场景还没发布、无物可画」的空白期里，等真出画面时已经跑完了。
      */
     onContentReady: () -> Unit = {},
+    inputEnabled: Boolean = true,
 ) {
     val listState = key(songId) { rememberLyricsLazyListState() }
     val position = rememberLyricsPosition(connection)
@@ -124,6 +125,7 @@ fun LyricsPanel(
             lyrics = model,
             currentPosition = currentPosition,
             isSeeking = seeking,
+            inputEnabled = inputEnabled,
             onLineClicked = onLineClicked,
             onLinePressed = onLinePressed,
             textColor = textColor,

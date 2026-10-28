@@ -117,6 +117,8 @@ fun KaraokeLyricsView(
     panelScale: () -> Float = { 1f },
     /** 歌词内容**测量完成**时回调一次（每帧布局都会调，调用方自己保证幂等）。*/
     contentReady: (() -> Unit)? = null,
+    // 退场仍需绘制；输入必须在面板取消选中时释放，不能等到动画结束再摘子树。
+    inputEnabled: Boolean = true,
 ) {
     val currentProvider by rememberUpdatedState(currentPosition)
     val timeProvider = remember { { currentProvider() } }
@@ -279,6 +281,7 @@ fun KaraokeLyricsView(
         LyricsLazyColumn(
             items = listItems,
             state = listState,
+            userScrollEnabled = inputEnabled,
             itemSpacing = itemSpacing,
             scrollChain = scrollChain,
             beyondBounds = keepAliveZone,
@@ -360,6 +363,7 @@ fun KaraokeLyricsView(
                             prepared?.settledHeight(true, true, density.density, true) ?: 0f,
                         ) { listState.chain.breathingOffset(itemIndex) },
                         isFocused = focused,
+                        isInteractive = inputEnabled,
                         inactiveAlpha = if ((line as? KaraokeLine)?.hasSyllableTiming == true) 0.4f else 0.3f,
                         isRightAligned =
                             prepared?.rightAligned
