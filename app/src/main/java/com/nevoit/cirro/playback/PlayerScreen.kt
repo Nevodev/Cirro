@@ -2,8 +2,6 @@ package com.nevoit.cirro.playback
 
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.Crossfade
-import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.core.updateTransition
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
@@ -49,8 +47,10 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -66,7 +66,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
-import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -289,13 +288,21 @@ fun PlayerLayer(
     expansion: PlayerExpansionState,
     modifier: Modifier = Modifier,
 ) {
-    val motionSongId by remember(connection) {
-        connection.state.map { it.song?.id }.distinctUntilChanged()
-    }.collectAsState(initial = remember(connection) { connection.state.value.song?.id })
+    val header by remember(connection) {
+        connection.state.map { it.song to it.isPlayingOptimistic }.distinctUntilChanged()
+    }.collectAsState(initial = remember(connection) { connection.state.value.let { it.song to it.isPlayingOptimistic } })
     // 链接解析留在常驻层；收起页面后保留匹配结果，视频和 GL 资源仍随播放页释放。
-    val motionUrl = rememberPlayerMotionArtworkUrl(
-        motionSongId, controller.motionArtworkEnabled, controller.present, connection,
+    val motionSources = rememberPlayerMotionArtworkSources(
+        header.first?.id, controller.motionArtworkEnabled, controller.present, connection,
     )
+    val motionSource = motionSources.current
+    val frameContext = LocalContext.current.applicationContext
+    val frameScope = rememberCoroutineScope()
+    val motionFrames = remember(controller, frameContext, frameScope) {
+        val store = PlayerMotionFrameStore(java.io.File(frameContext.filesDir, "apple-music/player-motion"))
+        PlayerMotionFrameCache(frameScope, store::read, store::write)
+    }
+    SideEffect { if (motionSource.resolved) motionFrames.select(motionSource.url, motionSources.next.url) }
     if (!controller.present) return
 
     BackHandler(enabled = controller.acceptsInput) { controller.close() }
@@ -335,7 +342,11 @@ fun PlayerLayer(
         controller = controller,
         connection = connection,
         expansion = expansion,
-        motionUrl = motionUrl,
+        song = header.first,
+        isPlaying = header.second,
+        motionSource = motionSource,
+        nextMotionSource = motionSources.next,
+        motionFrames = motionFrames,
         modifier = modifier,
     )
 }
@@ -374,30 +385,25 @@ private fun PlayerOverlay(
     controller: PlayerUiController,
     connection: PlaybackConnection,
     expansion: PlayerExpansionState,
-    motionUrl: String?,
+    song: NowPlaying?,
+    isPlaying: Boolean,
+    motionSource: PlayerMotionSource,
+    nextMotionSource: PlayerMotionSource,
+    motionFrames: PlayerMotionFrameCache,
     modifier: Modifier = Modifier,
 ) {
-    // 粗粒度订阅：只有换歌、或播放/暂停翻转，才让这一层重组。位置心跳（500ms 一次）不进这里，
+    // 外层只传换歌和播放状态。位置心跳（500ms 一次）不进这里，
     // 它只喂给进度条那一小块（见 PlayerProgress）——整页重组会重新 subcompose 封面区，
     // 而 BoxWithConstraints 是 SubcomposeLayout，那是这一页最贵的一步。
     // 播放状态取「乐观播放」：切歌缓冲期 `isPlaying` 是 false，直接拿它画会让播放键闪一下暂停，
     // 网格背景也跟着停一下再走（见 `PlaybackState.isPlayingOptimistic`）。
-    // `initial` 是首帧快照，同步读一次即可——原先那层 `collectAsState()` 多开了一份
-    // 永不取消的订阅，只为取这一个值。
 
-    val header by remember(connection) {
-        connection.state.map { it.song to it.isPlayingOptimistic }.distinctUntilChanged()
-    }.collectAsState(
-        initial = remember { connection.state.value.let { it.song to it.isPlayingOptimistic } }
-    )
-
-    val song = header.first
-    val isPlaying = header.second
     val seekState = remember(connection, song?.id) { PlayerSeekState() }
 
     // 队列被清空（进程回收后服务重建、歌放完被清掉）时别留一张空壳在这
     LaunchedEffect(song) { if (song == null) controller.close() }
     if (song == null) return
+    val motionUrl = motionSource.url
 
     // 空串比 null 好使：取色、纹理、大图三条链路都只认非空串，归一化一次省掉到处散布的判空。
     val cover = song.cover.orEmpty()
@@ -420,13 +426,16 @@ private fun PlayerOverlay(
         SideEffect { themeInitialized = true }
     }
 
-    val motionOpacity = remember { Animatable(if (motionUrl != null) 1f else 0f) }
+    val motionOpacity = remember { Animatable(0f) }
     var motionReady by remember { mutableStateOf(false) }
-    var motionReplacesCover by remember { mutableStateOf(motionUrl != null) }
+    var reportedMotion by remember { mutableStateOf(motionUrl != null) }
+    var reportedMotionUrl by remember { mutableStateOf(motionUrl) }
+    val motionReplacesCover = motionSource.keepsMotionLayout(reportedMotionUrl, reportedMotion)
     val onMotionStateChanged = remember {
-        { ready: Boolean, replacesCover: Boolean ->
+        { ready: Boolean, replacesCover: Boolean, shownUrl: String? ->
             motionReady = ready
-            motionReplacesCover = replacesCover
+            reportedMotion = replacesCover
+            reportedMotionUrl = shownUrl
         }
     }
 
@@ -660,11 +669,48 @@ private fun PlayerOverlay(
         ),
         label = "PlayerCollapse",
     )
-    val latestMotionReplacesCover by rememberUpdatedState(motionReplacesCover)
-    DisposableEffect(expansion, motionOpacity, collapseCover) {
+    val motionPanelCover = animateFloatAsState(
+        targetValue = if (collapsed) 1f else 0f,
+        animationSpec = tween(PlayerMotionArtworkDefaults.PanelTransitionMillis),
+        label = "PlayerMotionPanelCover",
+    )
+    val staticCoverArtwork = remember { PlayerStaticCoverArtwork(motionReplacesCover) }
+    SideEffect { if (motionReplacesCover) staticCoverArtwork.reserveMotion() }
+    val staticCoverOpacity = animateFloatAsState(
+        targetValue = if (motionReplacesCover || staticCoverArtwork.preparingReturn) 0f else 1f,
+        animationSpec = tween(PlayerMotionArtworkDefaults.PanelTransitionMillis),
+        label = "PlayerStaticCoverHandoff",
+    )
+    // 开合时沿用普通封面轨迹，淡出完成后才转到页内小封面的固定位置。
+    val currentMotionReplacesCover by rememberUpdatedState(motionReplacesCover)
+    val holdCoverArtwork = remember(expansion, staticCoverOpacity, motionPanelCover) {
+        derivedStateOf {
+            currentMotionReplacesCover && staticCoverOpacity.value > 0f &&
+                motionPanelCover.value < 1f && expansion.progress >= 1f
+        }
+    }
+    val coverPlacement = remember(expansion, collapseCover, staticCoverOpacity) {
+        derivedStateOf {
+            if (currentMotionReplacesCover && staticCoverOpacity.value <= 0f) {
+                lerp(collapseCover.value, 1f, expansionFraction(expansion.progress, 0.7f, 1f))
+            } else collapseCover.value
+        }
+    }
+    val panelCoverProgress = remember(collapseCover, motionPanelCover) {
+        derivedStateOf { if (currentMotionReplacesCover) motionPanelCover.value else collapseCover.value }
+    }
+    val panelCoverScale = remember(staticCoverOpacity, motionPanelCover) {
+        derivedStateOf {
+            if (currentMotionReplacesCover && staticCoverOpacity.value <= 0f) {
+                lerp(PlayerMotionArtworkDefaults.PanelCoverHiddenScale, 1f, motionPanelCover.value.coerceIn(0f, 1f))
+            } else 1f
+        }
+    }
+    DisposableEffect(expansion, motionPanelCover, staticCoverOpacity) {
         expansion.targetCoverAlpha = {
-            val motion = if (latestMotionReplacesCover) motionOpacity.value else 0f
-            1f - motion * (1f - collapseCover.value.coerceIn(0f, 1f))
+            // 静态封面先原地淡出，透明后再改变隐藏位置；开合仍从迷你条的完整封面交接。
+            val pageAlpha = lerp(staticCoverOpacity.value, 1f, motionPanelCover.value.coerceIn(0f, 1f))
+            lerp(1f, pageAlpha, expansionFraction(expansion.progress, 0f, 0.7f))
         }
         onDispose { expansion.targetCoverAlpha = { 1f } }
     }
@@ -753,12 +799,12 @@ private fun PlayerOverlay(
                     // 未预热的首次光栅化仍避开封面收缩；面板互切时先发布目标场景。
                     if (lyricsFromCover && !lyricsEnterTogether) {
                         collapsed = true
-                        snapshotFlow { collapseCover.value }.first { it >= CollapseSettled }
+                        snapshotFlow { panelCoverProgress.value }.first { it >= CollapseSettled }
                     }
                     lyricsCompositionAllowed = true
                     snapshotFlow { lyricsReady }.first { it }
                     if (lyricsFromCover && lyricsCoverWaitExpired) {
-                        snapshotFlow { collapseCover.value }.first { it >= CollapseSettled }
+                        snapshotFlow { panelCoverProgress.value }.first { it >= CollapseSettled }
                     }
                 } else {
                     if (lyricsFromCover) collapsed = true
@@ -828,8 +874,12 @@ private fun PlayerOverlay(
         }
         PlayerMotionArtwork(
             url = motionUrl,
+            albumId = motionSource.albumId,
+            nextUrl = nextMotionSource.url,
+            nextAlbumId = nextMotionSource.albumId,
+            sourceResolved = motionSource.resolved,
+            frameCache = motionFrames,
             active = motionActive,
-            isPlaying = isPlaying,
             opacity = motionOpacity,
             backdropWashColor = backgroundColor,
             onStateChanged = onMotionStateChanged,
@@ -932,7 +982,11 @@ private fun PlayerOverlay(
                         modifier = Modifier
                             .padding(24.dp),
                         cover = cover,
-                        collapse = collapseCover,
+                        holdArtwork = holdCoverArtwork,
+                        artwork = staticCoverArtwork,
+                        motion = motionReplacesCover,
+                        collapse = coverPlacement,
+                        appearanceScale = panelCoverScale,
                         metaRow = metaRow,
                         expansion = expansion,
                     )
@@ -1138,7 +1192,11 @@ private fun PlayerPanelIcon(
 private fun PlayerStage(
     modifier: Modifier = Modifier,
     cover: String,
+    holdArtwork: State<Boolean>,
+    artwork: PlayerStaticCoverArtwork,
+    motion: Boolean,
     collapse: State<Float>,
+    appearanceScale: State<Float>,
     metaRow: LayoutCoordinates?,
     expansion: PlayerExpansionState,
 ) {
@@ -1154,8 +1212,12 @@ private fun PlayerStage(
         val side = minOf(maxWidth, maxHeight).coerceAtMost(CoverSideCap)
         PlayerCover(
             cover = cover,
+            holdArtwork = holdArtwork,
+            artwork = artwork,
+            motion = motion,
             side = side,
             collapse = collapse,
+            appearanceScale = appearanceScale,
             metaRow = metaRow,
             expansion = expansion,
         )
@@ -1173,11 +1235,14 @@ private fun PlayerStage(
  * 否则交叉淡入的是一块空占位。
  */
 @Composable
-@OptIn(ExperimentalAnimationApi::class)
 private fun PlayerCover(
     cover: String,
+    holdArtwork: State<Boolean>,
+    artwork: PlayerStaticCoverArtwork,
+    motion: Boolean,
     side: Dp,
     collapse: State<Float>,
+    appearanceScale: State<Float>,
     metaRow: LayoutCoordinates?,
     expansion: PlayerExpansionState,
 ) {
@@ -1194,22 +1259,29 @@ private fun PlayerCover(
     val state by painter.state.collectAsState()
 
     // 已经上画的那张。`State.Success.painter` 每次加载都是新实例，刚好能当 Crossfade 的键。
-    var front by remember { mutableStateOf<Painter?>(null) }
-    var frontOpaque by remember { mutableStateOf(false) }
-    LaunchedEffect(state, target) {
+    val front = artwork.painter
+    val frontOpaque = artwork.opaque
+    val holdingArtwork = holdArtwork.value
+    LaunchedEffect(state, target, holdingArtwork, motion) {
+        // 退场时保留原图；完全隐藏后才接收新歌封面，供面板和收起动画使用。
+        if (holdingArtwork) return@LaunchedEffect
         val loaded = state as? AsyncImagePainter.State.Success
         // 目标为空时也要跟着清掉，不然上一首的封面会一直留在屏幕上
         if (target == null) {
-            front = null
-            frontOpaque = false
-        } else if (loaded != null) {
-            front = loaded.painter
-            frontOpaque = (loaded.result.image as? BitmapImage)?.bitmap?.hasAlpha() == false
+            artwork.show(null, opaque = false, motion = motion)
+        } else if (loaded != null && loaded.result.request.data == target) {
+            artwork.show(
+                loaded.painter,
+                opaque = (loaded.result.image as? BitmapImage)?.bitmap?.hasAlpha() == false,
+                motion = motion,
+            )
         }
     }
     // Creating the transition with the first loaded painter starts at alpha 1. Later painters
     // update that same transition, preserving crossfades and their interruption behaviour.
-    val coverTransition = if (front != null) updateTransition(front, label = "PlayerCover") else null
+    val coverTransition = key(artwork.transitionGeneration) {
+        if (front != null) updateTransition(front, label = "PlayerCover") else null
+    }
 
     // 收起目标：**标题行左缘中点，换算进封面自己的坐标系**。收起时就是拿它跟封面自己的中心
     // （`size/2`）相减，得到 graphicsLayer 要走的位移。封面不参与任何布局搬家，整段收起只有
@@ -1231,7 +1303,7 @@ private fun PlayerCover(
     val coverBackground = MaterialTheme.colors.scrimMedium
     val density = LocalDensity.current
     val transform: GraphicsLayer.() -> Unit =
-        remember(expansion, collapse, anchor, density) {
+        remember(expansion, collapse, appearanceScale, anchor, density) {
             {
                 with(density) {
                     val width = size.width.toFloat()
@@ -1240,7 +1312,7 @@ private fun PlayerCover(
                     val collapseTarget = anchor
                     val collapsedSide = CollapsedCoverSize.toPx()
                     val panelScale = if (collapseTarget != null) {
-                        lerp(1f, collapsedSide / width, collapseProgress)
+                        lerp(1f, collapsedSide / width, collapseProgress) * appearanceScale.value
                     } else 1f
                     val panelX = if (collapseTarget != null) {
                         (collapseTarget.x + collapsedSide / 2f - width / 2f) * collapseProgress
@@ -1266,13 +1338,13 @@ private fun PlayerCover(
                 }
             }
         }
-    val coverShape = remember(expansion, collapse, anchor, density, expandedShape) {
+    val coverShape = remember(expansion, collapse, appearanceScale, anchor, density, expandedShape) {
         { size: Size ->
             with(density) {
                 val progress = expansion.progress.coerceIn(0f, 1f)
                 if (progress >= 1f) expandedShape else {
                     val panelScale = if (anchor != null) {
-                        lerp(1f, CollapsedCoverSize.toPx() / size.width, collapse.value)
+                        lerp(1f, CollapsedCoverSize.toPx() / size.width, collapse.value) * appearanceScale.value
                     } else 1f
                     val scale = lerp(expansion.sourceCoverBounds.width / size.width, panelScale, progress)
                     val radius = lerp(MiniPlayerCoverRadius.toPx(), 16.dp.toPx() * panelScale, progress)
@@ -1317,17 +1389,8 @@ private fun PlayerCover(
                     coverTransition.currentState == coverTransition.targetState && !coverTransition.isRunning
             },
     ) {
-        coverTransition?.Crossfade(
-            animationSpec = tween(durationMillis = CoverCrossfadeMs),
-        ) { shown ->
-            if (shown != null) {
-                Image(
-                    painter = shown,
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
-            }
+        key(artwork.transitionGeneration) {
+            coverTransition?.let { PlayerCoverCrossfade(it, CoverCrossfadeMs) }
         }
     }
 }

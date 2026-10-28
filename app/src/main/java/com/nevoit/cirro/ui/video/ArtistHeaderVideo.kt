@@ -1,6 +1,7 @@
 package com.nevoit.cirro.ui.video
 
 import android.util.Log
+import android.graphics.Bitmap
 import android.view.TextureView
 import androidx.annotation.OptIn
 import androidx.compose.animation.core.animateFloatAsState
@@ -32,6 +33,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
+import java.util.concurrent.atomic.AtomicReference
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -48,11 +50,15 @@ internal fun ArtistHeaderVideo(
     revealDurationMillis: Int = 500,
     onReadyChanged: (Boolean) -> Unit = {},
     onFailure: () -> Unit = {},
+    onFirstFrame: ((Bitmap, Int) -> Unit)? = null,
+    needsFrameCapture: ((Int) -> Boolean)? = null,
 ) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val reportReady by rememberUpdatedState(onReadyChanged)
     val reportFailure by rememberUpdatedState(onFailure)
+    val captureFrame by rememberUpdatedState(onFirstFrame)
+    val shouldCaptureFrame by rememberUpdatedState(needsFrameCapture)
     val player = remember(context, url, riseRatio, referenceSide, lifecycle, fitSourceWidth, bleedRatio, matchStaticCoverBlur, playerLayout) {
         runCatching {
             ExoPlayer.Builder(context).build().apply {
@@ -61,6 +67,7 @@ internal fun ArtistHeaderVideo(
                 trackSelectionParameters = trackSelectionParameters.buildUpon()
                     .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
                     .setMaxVideoSize(referenceSide, if (fitSourceWidth) Int.MAX_VALUE else referenceSide)
+                    .apply { if (playerLayout != null) setForceHighestSupportedBitrate(true) }
                     .build()
             }
         }.onFailure { Log.w("ArtistVideo", "无法初始化艺人视频", it) }.getOrNull()
@@ -71,14 +78,17 @@ internal fun ArtistHeaderVideo(
     }
     var firstFrame by remember(player) { mutableStateOf(false) }
     var failed by remember(player) { mutableStateOf(false) }
+    val frameView = remember(player) { AtomicReference<FirstFrameVideoTextureView?>(null) }
     if (failed) return
 
-    val videoAlpha by key(player) {
-        animateFloatAsState(
+    // 播放页由外层统一淡入；独立的零时长动画仍会晚一帧更新，让外层先露出空纹理。
+    val videoAlpha = if (revealDurationMillis == 0) 1f else key(player) {
+        val alpha by animateFloatAsState(
             targetValue = if (firstFrame) 1f else 0f,
             animationSpec = tween(revealDurationMillis),
             label = "artistVideoAlpha",
         )
+        alpha
     }
 
     // LazyColumn 回收头部会连同 TextureView 和首帧状态一起销毁；保留这一项才能在滚回时沿用原画面。
@@ -95,18 +105,32 @@ internal fun ArtistHeaderVideo(
     key(player) {
         AndroidView(
             factory = { viewContext ->
-                TextureView(viewContext).apply {
+                if (playerLayout != null) FirstFrameVideoTextureView(
+                    context = viewContext,
+                    player = player,
+                    maxCaptureWidth = referenceSide,
+                    onReadyChanged = { ready -> firstFrame = ready; reportReady(ready) },
+                    onFirstFrame = if (onFirstFrame != null) { bitmap, width -> captureFrame?.invoke(bitmap, width) } else null,
+                    needsFrameCapture = { width -> shouldCaptureFrame?.invoke(width) ?: true },
+                ).also { frameView.set(it) } else TextureView(viewContext).apply {
                     isOpaque = false
                     player.setVideoTextureView(this)
                 }
             },
             modifier = modifier.graphicsLayer { alpha = videoAlpha },
-            onRelease = { player.clearVideoTextureView(it) },
+            onRelease = {
+                if (it is FirstFrameVideoTextureView) {
+                    frameView.compareAndSet(it, null)
+                    it.release()
+                } else player.clearVideoTextureView(it)
+            },
         )
     }
     DisposableEffect(player, lifecycle) {
         val listener = object : Player.Listener {
-            override fun onRenderedFirstFrame() { firstFrame = true; reportReady(true) }
+            override fun onRenderedFirstFrame() {
+                if (playerLayout == null) { firstFrame = true; reportReady(true) }
+            }
             override fun onPlayerError(error: PlaybackException) {
                 Log.w("ArtistVideo", "艺人视频播放失败，保留封面", error)
                 failed = true
@@ -136,6 +160,7 @@ internal fun ArtistHeaderVideo(
         onDispose {
             lifecycle.removeObserver(observer)
             player.removeListener(listener)
+            frameView.getAndSet(null)?.release()
             player.release()
             reportReady(false)
         }

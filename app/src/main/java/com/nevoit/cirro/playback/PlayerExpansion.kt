@@ -281,7 +281,8 @@ internal fun PlayerExpansion(
                     if (cover.size.width > 0 && cover.size.height > 0) {
                         val content = if (state.targetCoverOpaque) cover else {
                             val source = state.sourceCoverLayer
-                            val fallbackAlpha = if (state.hasCover) 1f else 1f - progress
+                            // 迷你条在播放页展开后会休眠，它保留的旧图不能透过页内封面交叉淡入露出。
+                            val fallbackAlpha = if (progress < 1f && state.hasCover) 1f else 1f - progress
                             val fallback = if (fallbackAlpha > 0f && source.size.width > 0 && source.size.height > 0) {
                                 if (coverFallback.size != cover.size || coverReplay.fallbackSource !== source ||
                                     coverReplay.fallbackSourceSize != source.size
@@ -378,7 +379,7 @@ internal fun PlayerExpansion(
     }
 }
 
-private fun expansionFraction(progress: Float, start: Float, end: Float): Float {
+internal fun expansionFraction(progress: Float, start: Float, end: Float): Float {
     val fraction = ((progress - start) / (end - start)).coerceIn(0f, 1f)
     return fraction * fraction * (3f - 2f * fraction)
 }
