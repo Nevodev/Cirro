@@ -11,6 +11,11 @@ use num_bigint::BigUint;
 use rand::RngCore;
 use std::collections::HashMap;
 use std::io::Read;
+use std::io::Write;
+
+use crate::error::{NcmError, Result};
+use crate::request::{ApiClient, ApiResponse};
+use serde_json::{json, Value};
 
 // ---- ChaCha20（纯实现，与标准 RFC 8439 一致，mode=原始流）----
 
@@ -176,6 +181,233 @@ const FIELD_SEP: char = '\u{1}';
 /// 单条记录：`时间\x01动作\x01JSON`
 pub fn build_record(time: i64, action: &str, data_json: &str) -> String {
     format!("{time}{FIELD_SEP}{action}{FIELD_SEP}{data_json}")
+}
+
+fn android_record(event: &Value) -> Result<String> {
+    let action = event["action"]
+        .as_str()
+        .filter(|action| matches!(*action, "_plv" | "_pld"))
+        .ok_or_else(|| NcmError::InvalidParam("不支持的 Android 播放事件".into()))?;
+    let fields = event["json"]
+        .as_object()
+        .ok_or_else(|| NcmError::InvalidParam("播放事件缺少 json 对象".into()))?;
+    let id = fields.get("id").and_then(|value| {
+        value.as_i64().or_else(|| value.as_str()?.parse::<i64>().ok())
+    });
+    if !id.is_some_and(|id| id > 0) || event["json"]["type"].as_str() != Some("song") {
+        return Err(NcmError::InvalidParam("播放事件歌曲身份无效".into()));
+    }
+    for key in ["time", "realtime", "resource_time", "progressTime", "startlogtime"] {
+        if let Some(value) = fields.get(key) {
+            if !value.as_f64().is_some_and(|number| number.is_finite() && number >= 0.0) {
+                return Err(NcmError::InvalidParam(format!("播放事件 {key} 无效")));
+            }
+        }
+    }
+    if fields.get("play_speed").is_some_and(|value| {
+        !value.as_f64().is_some_and(|number| number.is_finite() && number > 0.0)
+    }) || fields.get("errorcode").is_some_and(|value| value.as_i64().is_none()) {
+        return Err(NcmError::InvalidParam("播放事件速度或错误码无效".into()));
+    }
+    let time = fields.get("_logTime").and_then(Value::as_u64)
+        .ok_or_else(|| NcmError::InvalidParam("播放事件缺少原始记录时间".into()))?;
+    let record = format!("{}{FIELD_SEP}{action}{FIELD_SEP}{}\n", time / 1000, event["json"]);
+    if record.len() > 32_000 {
+        return Err(NcmError::InvalidParam("播放事件超过日志长度限制".into()));
+    }
+    Ok(record)
+}
+
+fn android_meta(cookie: &str, context: &Value) -> Result<Value> {
+    let appver = context["appver"].as_str().filter(|value| !value.is_empty())
+        .ok_or_else(|| NcmError::InvalidParam("缺少客户端版本".into()))?;
+    let buildver = context["buildver"].as_str().map(str::to_owned)
+        .or_else(|| context["buildver"].as_u64().map(|value| value.to_string()))
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| NcmError::InvalidParam("缺少客户端构建版本".into()))?;
+    let cookies = crate::util::cookie::cookie_to_json(cookie);
+    let mut meta = serde_json::Map::new();
+    for key in ["MUSIC_U", "MUSIC_A", "URS_APPID"] {
+        if let Some(value) = cookies.get(key).filter(|value| !value.is_empty()) {
+            meta.insert(key.into(), Value::String(value.clone()));
+        }
+    }
+    if meta.is_empty() {
+        return Err(NcmError::InvalidParam("播放上报缺少登录凭据".into()));
+    }
+    meta.insert("appver".into(), Value::String(appver.into()));
+    meta.insert("buildver".into(), Value::String(buildver));
+    Ok(Value::Object(meta))
+}
+
+fn android_compress(record: &[u8]) -> Result<Vec<u8>> {
+    let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), 3)
+        .map_err(|error| NcmError::Unknown(format!("日志压缩失败: {error}")))?;
+    encoder.write_all(record)
+        .and_then(|()| encoder.flush())
+        .map_err(|error| NcmError::Unknown(format!("日志压缩失败: {error}")))?;
+    // bilog flushes each append with ZSTD_e_flush and never emits ZSTD_e_end.
+    Ok(encoder.get_ref().clone())
+}
+
+fn android_envelope(meta: &[u8], compressed: &[u8], key_a: &[u8; 32], uuid: &[u8; 16], seq: u32) -> Result<Vec<u8>> {
+    let header_len = HEADER_FIXED_LEN + 4 + meta.len();
+    if header_len > u16::MAX as usize || compressed.is_empty() || compressed.len() > u16::MAX as usize {
+        return Err(NcmError::InvalidParam("Android 日志帧长度无效".into()));
+    }
+    let key_b = rsa_wrap(key_a);
+    let counter = u32::from_le_bytes(uuid[12..16].try_into().unwrap()) >> 2;
+    let nonce = &uuid[..12];
+    let mut out = vec![0u8; HEADER_FIXED_LEN];
+    out[..4].copy_from_slice(b"NCBL");
+    out[4..8].copy_from_slice(&3u32.to_le_bytes());
+    out[8..10].copy_from_slice(&(header_len as u16).to_le_bytes());
+    out[10..26].copy_from_slice(uuid);
+    out[26..58].copy_from_slice(&key_b);
+    out[58..62].copy_from_slice(&seq.to_le_bytes());
+    out[62..66].copy_from_slice(&seq.to_le_bytes());
+    out[66..70].copy_from_slice(&((compressed.len() + 6) as u32).to_le_bytes());
+    out.extend_from_slice(&META_BLOCK_TYPE.to_le_bytes());
+    out.extend_from_slice(&(meta.len() as u16).to_le_bytes());
+    out.extend_from_slice(&chacha20(&key_b, counter, nonce, meta));
+    out.extend_from_slice(&(compressed.len() as u16).to_le_bytes());
+    out.extend_from_slice(&seq.to_le_bytes());
+    out.extend_from_slice(&chacha20(key_a, counter, nonce, compressed));
+    Ok(out)
+}
+
+/// Encodes one Android bilog append while keeping the desktop codec unchanged.
+pub fn encrypt_android_ncbl(meta: &[u8], record: &[u8]) -> Result<Vec<u8>> {
+    encrypt_android_record(meta, record, 0)
+}
+
+fn encrypt_android_record(meta: &[u8], record: &[u8], seq: u32) -> Result<Vec<u8>> {
+    let mut key_a = [0u8; 32];
+    let mut uuid = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut key_a);
+    rand::thread_rng().fill_bytes(&mut uuid);
+    if key_a[0] >= 0xa3 { key_a[0] = 0xa2; }
+    uuid[6] = (uuid[6] & 0x0f) | 0x40;
+    uuid[8] = (uuid[8] & 0x3f) | 0x80;
+    android_envelope(meta, &android_compress(record)?, &key_a, &uuid, seq)
+}
+
+fn android_upload_ack(status: u16, body: &Value, filename: &str) -> Result<()> {
+    let data = match &body["data"] {
+        Value::String(value) => serde_json::from_str(value)?,
+        value => value.clone(),
+    };
+    if status != 200 || body["code"].as_i64() != Some(200)
+        || !data["successfiles"].as_array().is_some_and(|files| {
+            files.iter().any(|value| value.as_str() == Some(filename))
+        })
+    {
+        return Err(NcmError::Api {
+            code: body["code"].as_i64().unwrap_or(status as i64),
+            msg: "Android 播放日志未被接收".into(),
+        });
+    }
+    Ok(())
+}
+
+fn prepared_android_upload(event: &Value, seq: u32) -> Result<(&str, Vec<u8>)> {
+    use base64::Engine;
+    let invalid = || NcmError::InvalidParam("缓存的 Android 日志文件无效".into());
+    let filename = event["_upload"]["filename"].as_str().ok_or_else(invalid)?;
+    let parts: Vec<_> = filename.split('_').collect();
+    if filename.len() > 100 || parts.len() != 4 || parts[0] != "ua"
+        || parts[1..].iter().any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return Err(invalid());
+    }
+    let encoded = event["_upload"]["body"].as_str().ok_or_else(invalid)?;
+    let max_payload = 2 * u16::MAX as usize + HEADER_FIXED_LEN + 10;
+    if encoded.len() > max_payload.div_ceil(3) * 4 {
+        return Err(invalid());
+    }
+    let payload = base64::engine::general_purpose::STANDARD.decode(encoded)
+        .map_err(|_| invalid())?;
+    if payload.len() < 81 || payload.len() > max_payload
+        || &payload[..4] != b"NCBL" || payload[4..8] != 3u32.to_le_bytes()
+    {
+        return Err(invalid());
+    }
+    let header_len = u16::from_le_bytes(payload[8..10].try_into().unwrap()) as usize;
+    let trailing_len = u32::from_le_bytes(payload[66..70].try_into().unwrap()) as usize;
+    if header_len < 74 || header_len > payload.len() - 7
+        || trailing_len != payload.len() - header_len
+        || payload[70..72] != META_BLOCK_TYPE.to_le_bytes()
+        || u16::from_le_bytes(payload[72..74].try_into().unwrap()) as usize != header_len - 74
+        || payload[58..62] != seq.to_le_bytes() || payload[62..66] != seq.to_le_bytes()
+        || payload[header_len+2..header_len+6] != seq.to_le_bytes()
+        || u16::from_le_bytes(payload[header_len..header_len+2].try_into().unwrap()) as usize + 6 != trailing_len
+    {
+        return Err(invalid());
+    }
+    Ok((filename, payload))
+}
+
+impl ApiClient {
+    /// Prepares one immutable log file so retries retain the original filename and ciphertext.
+    pub fn prepare_android_event(&self, mut event: Value) -> Result<Value> {
+        use base64::Engine;
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static FILE_COUNTER: AtomicU32 = AtomicU32::new(0);
+        let record = android_record(&event)?;
+        let context = &event["context"];
+        let cookie = self.raw_cookie().unwrap_or_default();
+        let meta = android_meta(cookie, context)?;
+        context["userAgent"].as_str().filter(|value| !value.is_empty())
+            .ok_or_else(|| NcmError::InvalidParam("缺少客户端标识".into()))?;
+        let seq = context["seq"].as_u64().and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| NcmError::InvalidParam("缺少日志序列".into()))?;
+        if event.get("_upload").is_some() {
+            prepared_android_upload(&event, seq)?;
+            return Ok(event);
+        }
+        let payload = encrypt_android_record(meta.to_string().as_bytes(), record.as_bytes(), seq)?;
+        let filename = format!("ua_{}_{}_{}", std::process::id(), FILE_COUNTER.fetch_add(1, Ordering::Relaxed), rand::random::<u32>());
+        event["_upload"] = json!({"filename":filename,"body":base64::engine::general_purpose::STANDARD.encode(payload)});
+        Ok(event)
+    }
+
+    /// Uploads only a persisted prepared file; the caller retains independent channel acknowledgments.
+    pub async fn scrobble_android_event(&self, event: Value) -> Result<ApiResponse> {
+        android_record(&event)?;
+        let context = &event["context"];
+        let user_agent = context["userAgent"].as_str().filter(|value| !value.is_empty())
+            .ok_or_else(|| NcmError::InvalidParam("缺少客户端标识".into()))?;
+        let seq = context["seq"].as_u64().and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| NcmError::InvalidParam("缺少日志序列".into()))?;
+        let (filename, payload) = prepared_android_upload(&event, seq)?;
+        let cookie = self.raw_cookie().unwrap_or_default();
+        android_meta(cookie, context)?;
+        let boundary = random_uuid_hex();
+        let mut multipart = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: multipart/form-data\r\n\r\n"
+        ).into_bytes();
+        multipart.extend_from_slice(&payload);
+        multipart.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        let response = self.client.post("https://clientlogsf.music.163.com/api/clientlog/encrypt/upload?multiupload=true")
+            .header("Content-Type", format!("multipart/form-data; boundary={boundary}"))
+            .header("User-Agent", user_agent)
+            .header("Cookie", cookie)
+            .header("Accept-Encoding", "gzip")
+            .body(multipart)
+            .timeout(std::time::Duration::from_secs(15))
+            .send().await.map_err(NcmError::Http)?;
+        let status = response.status().as_u16();
+        let raw = response.bytes().await.map_err(NcmError::Http)?;
+        let decoded = if raw.starts_with(&[0x1f, 0x8b]) {
+            let mut output = Vec::new();
+            flate2::read::GzDecoder::new(&raw[..]).read_to_end(&mut output)
+                .map_err(|error| NcmError::Unknown(format!("日志响应解压失败: {error}")))?;
+            output
+        } else { raw.to_vec() };
+        let body: Value = serde_json::from_slice(&decoded)?;
+        android_upload_ack(status, &body, &filename)?;
+        Ok(ApiResponse { status: status as i64, body: json!({"code":200,"details":body}), cookie: Vec::new() })
+    }
 }
 
 // ---- Cookie 上下文 ----
@@ -502,6 +734,99 @@ pub async fn do_upload(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn android_record_retains_event_time_and_ends_with_one_linefeed() {
+        let event = json!({"action":"_pld","json":{
+            "id":42,"type":"song","_logTime":1234567,"time":17,"realtime":12,"end":"ui"
+        }});
+        let record = android_record(&event).unwrap();
+        let fields: Vec<_> = record.trim_end_matches('\n').split(FIELD_SEP).collect();
+        assert_eq!(&fields[..2], &["1234", "_pld"]);
+        assert_eq!(serde_json::from_str::<Value>(fields[2]).unwrap(), event["json"]);
+        assert!(record.ends_with("}\n"));
+        for (key, value) in [("time", json!(-1)), ("realtime", json!("12")), ("play_speed", json!(0)), ("errorcode", json!(1.5))] {
+            let mut invalid = event.clone();
+            invalid["json"][key] = value;
+            assert!(android_record(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn android_meta_contains_only_authentication_and_real_client_version() {
+        let meta = android_meta("MUSIC_U=test; os=pc; deviceId=ignored; other=ignored",
+            &json!({"appver":"cirro-version","buildver":42})).unwrap();
+        assert_eq!(meta, json!({"MUSIC_U":"test","appver":"cirro-version","buildver":"42"}));
+        assert!(android_meta("deviceId=no-login", &json!({"appver":"cirro","buildver":42})).is_err());
+    }
+
+    #[test]
+    fn android_envelope_decrypts_to_a_flush_only_zstd_append() {
+        use zstd::stream::raw::{Decoder, InBuffer, Operation, OutBuffer};
+        let record = b"1234\x01_pld\x01{\"id\":42}\n";
+        let compressed = android_compress(record).unwrap();
+        assert_eq!(&compressed[..4], &[0x28, 0xb5, 0x2f, 0xfd]);
+        let key_a = [0x12;32];
+        let uuid = [0x34;16];
+        let meta = b"{\"MUSIC_U\":\"test\"}";
+        let payload = android_envelope(meta, &compressed, &key_a, &uuid, 42).unwrap();
+        let header_len = u16::from_le_bytes(payload[8..10].try_into().unwrap()) as usize;
+        assert_eq!(header_len, 74 + meta.len());
+        assert_eq!(&payload[58..66], &[42,0,0,0,42,0,0,0]);
+        assert_eq!(u32::from_le_bytes(payload[66..70].try_into().unwrap()) as usize, compressed.len()+6);
+        let counter = u32::from_le_bytes(uuid[12..16].try_into().unwrap()) >> 2;
+        assert_eq!(chacha20(&rsa_wrap(&key_a), counter, &uuid[..12], &payload[74..header_len]), meta);
+        assert_eq!(u16::from_le_bytes(payload[header_len..header_len+2].try_into().unwrap()) as usize, compressed.len());
+        assert_eq!(u32::from_le_bytes(payload[header_len+2..header_len+6].try_into().unwrap()), 42);
+        let decrypted = chacha20(&key_a, counter, &uuid[..12], &payload[header_len+6..]);
+        assert_eq!(decrypted, compressed);
+        let mut decoder = Decoder::new().unwrap();
+        let mut input = InBuffer::around(&decrypted);
+        let mut plain = [0u8;128];
+        let mut output = OutBuffer::around(&mut plain[..]);
+        let remaining = decoder.run(&mut input, &mut output).unwrap();
+        assert_eq!(&output.as_slice()[..output.pos()], record);
+        assert!(remaining > 0, "native bilog leaves the Zstd frame open after flush");
+        assert_eq!(input.pos, decrypted.len());
+    }
+
+    #[test]
+    fn android_ack_requires_the_uploaded_file_even_with_success_code() {
+        assert!(android_upload_ack(200, &json!({"code":200,"data":{"successfiles":["ua_1_2_3"]}}), "ua_1_2_3").is_ok());
+        assert!(android_upload_ack(200, &json!({"code":200,"data":"{\"successfiles\":[\"ua_1_2_3\"]}"}), "ua_1_2_3").is_ok());
+        for body in [json!({"code":200,"data":{"successfiles":["another"]}}),json!({"code":200}),json!({"code":401,"data":{"successfiles":["ua_1_2_3"]}})] {
+            assert!(android_upload_ack(200, &body, "ua_1_2_3").is_err());
+        }
+        assert!(android_upload_ack(503, &json!({"code":200,"data":{"successfiles":["ua_1_2_3"]}}), "ua_1_2_3").is_err());
+    }
+
+    #[test]
+    fn prepared_android_file_survives_repeated_preparation_and_serialization() {
+        let client = ApiClient::new(Some("MUSIC_U=test".into()));
+        let event = json!({"action":"_pld","json":{
+            "id":42,"type":"song","_logTime":1234567,"time":17
+        },"context":{"appver":"cirro","buildver":42,"userAgent":"Cirro/test","seq":9}});
+        assert!(prepared_android_upload(&event, 9).is_err());
+        let prepared = client.prepare_android_event(event).unwrap();
+        let restored: Value = serde_json::from_str(&prepared.to_string()).unwrap();
+        let prepared_again = client.prepare_android_event(restored).unwrap();
+        assert_eq!(prepared, prepared_again);
+        let (filename, bytes) = prepared_android_upload(&prepared, 9).unwrap();
+        let (retry_filename, retry_bytes) = prepared_android_upload(&prepared_again, 9).unwrap();
+        assert_eq!(filename, retry_filename);
+        assert_eq!(bytes, retry_bytes);
+        assert!(!prepared["_upload"]["body"].as_str().unwrap().contains("MUSIC_U"));
+        assert!(prepared_android_upload(&prepared, 10).is_err());
+        let mut invalid = prepared.clone();
+        invalid["_upload"]["filename"] = json!("ua_1_2_3\r\nInjected");
+        assert!(client.prepare_android_event(invalid).is_err());
+        let mut invalid = prepared.clone();
+        invalid["_upload"]["body"] = json!("bm90IGEgbG9n");
+        assert!(client.prepare_android_event(invalid).is_err());
+        let mut invalid = prepared;
+        invalid["_upload"]["body"] = json!("A".repeat(200_000));
+        assert!(client.prepare_android_event(invalid).is_err());
+    }
 
     #[test]
     fn chacha20_reference() {

@@ -7,6 +7,7 @@ import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
@@ -20,10 +21,12 @@ import androidx.media3.session.MediaSessionService
 import com.nevoit.cirro.MainActivity
 import com.nevoit.cirro.data.AudioQualityStore
 import com.nevoit.cirro.data.NcmBridge
+import com.nevoit.cirro.data.AccountRepository
 import com.nevoit.cirro.data.PlayQueueStore
 import com.nevoit.cirro.data.SongUnavailableException
 import com.nevoit.cirro.data.model.Song
-import com.nevoit.cirro.data.model.sourceIdAt
+import com.nevoit.cirro.data.model.Session
+import com.nevoit.cirro.data.model.PlayMode
 import com.nevoit.cirro.data.model.withCurrent
 import com.nevoit.cirro.lyrics.data.LyricsRepository
 import kotlinx.coroutines.CoroutineScope
@@ -62,18 +65,13 @@ class PlaybackService : MediaSessionService(), KoinComponent {
 
     private var session: MediaSession? = null
 
-    /** 听歌打卡是尽力而为的后台请求，走 IO 线程，服务销毁时随之取消。 */
-    private val scrobbleScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    /** 当前（或刚切走的）那首歌的 id，配合 [playingDurationMs] 做打卡。 */
-    private var playingSongId: Long? = null
-
-    /** 当前这首的出身（歌单/专辑 id），打卡时一起报。没有上下文就是空串。 */
-    private var playingSourceId: String = ""
-
-    /** 当前这首的完整时长，在第一次 READY 后取一次。 */
-    private var playingDurationMs: Long = C.TIME_UNSET
-    private var playingStarted = false
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val account: AccountRepository by inject()
+    private val reports: PlaybackReportRepository by inject()
+    private val listening by lazy {
+        PlaybackListeningSession(emit = reports::enqueue, checkpoint = reports::checkpoint)
+    }
+    private val outputAccounting by lazy { PlaybackOutputAccounting(listening) }
 
     /** 响度归一挂在音频输出链上，换歌时由数据源那层喂 gain（见 [mediaSourceFactory]）。 */
     private val loudness = LoudnessAudioProcessor()
@@ -82,7 +80,7 @@ class PlaybackService : MediaSessionService(), KoinComponent {
 
     override fun onCreate() {
         super.onCreate()
-        val player = ExoPlayer.Builder(this, AudioRenderersFactory(this, loudness, beatAnalyzer))
+        val player = ExoPlayer.Builder(this, AudioRenderersFactory(this, loudness, beatAnalyzer, outputAccounting))
             .setMediaSourceFactory(mediaSourceFactory())
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -94,32 +92,26 @@ class PlaybackService : MediaSessionService(), KoinComponent {
             .setHandleAudioBecomingNoisy(true)
             .build()
 
-        // 听歌打卡：开始播报 startplay，完整听完才报 play——跟官方客户端一样是两条，
-        // 且都带上这首歌的来源（歌单/专辑 id）。
         player.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 queueStore.finishPlaybackHistory(
                     nextUid = mediaItem?.queueEntryUid,
                     repeated = reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT,
                 )
-                // 上一首完整播完了，涨听歌排行。两种都算：
-                // AUTO = 自动切下一首；REPEAT = 单曲循环自然放完又从头来。
-                if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO ||
-                    reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT
+                if (reason != Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED ||
+                    mediaItem?.queueEntryUid != queueStore.queue.value.entries.getOrNull(queueStore.queue.value.currentIndex)?.uid
                 ) {
-                    reportPlayed()
+                    listening.transition(mediaItem?.queueEntryUid, when (reason) {
+                        Player.MEDIA_ITEM_TRANSITION_REASON_AUTO, Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT -> ListeningEnd.Natural
+                        Player.MEDIA_ITEM_TRANSITION_REASON_SEEK -> ListeningEnd.User
+                        else -> ListeningEnd.Interrupted
+                    })
                 }
-
-                playingSongId = mediaItem?.mediaId?.toLongOrNull()
-                playingStarted = false
-                playingDurationMs = C.TIME_UNSET
-                // 出身现在就记下来：打卡要等播完才发，那会儿播放器早指到别处了。
-                playingSourceId = queueStore.queue.value.sourceIdAt(player.currentMediaItemIndex)
 
                 // 歌词预取：切歌就后台取一次，不阻塞播放。
                 // 队列里能拿到完整歌曲信息就用它（lrclib 那级要靠曲名/歌手模糊查）；
                 // 拿不到（如 Activity 重建后模型为空）就只给 id —— 前三级只用 id，照样能取。
-                playingSongId?.let { songId ->
+                mediaItem?.mediaId?.toLongOrNull()?.let { songId ->
                     val entry = queueStore.queue.value.entries.getOrNull(
                         player.currentMediaItemIndex
                     )
@@ -128,30 +120,33 @@ class PlaybackService : MediaSessionService(), KoinComponent {
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_READY && playingDurationMs == C.TIME_UNSET) {
-                    playingDurationMs = session?.player?.duration ?: C.TIME_UNSET
-                }
-                // 队列的最后一首播完会停在 ENDED（不再触发 AUTO 切换），单独补上报
                 if (playbackState == Player.STATE_ENDED) {
                     queueStore.finishPlaybackHistory()
-                    reportPlayed()
+                    sampleListening(player)
+                    listening.finish(ListeningEnd.Natural)
+                } else if (playbackState == Player.STATE_IDLE) {
+                    sampleListening(player)
+                    listening.finish(ListeningEnd.Interrupted)
                 }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                sampleListening(player)
+                listening.finish(ListeningEnd.Error, error.errorCode)
+            }
+
+            override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+                listening.observePosition(oldPosition.mediaItem?.queueEntryUid, oldPosition.positionMs)
             }
 
             override fun onEvents(player: Player, events: Player.Events) {
                 savePlayback(player)
+                sampleListening(player)
                 if (!player.isPlaying) return
                 val uid = player.currentMediaItem?.queueEntryUid ?: return
                 // 同一首歌可重复入队，索引也会因拖拽改变，必须按条目身份匹配实际出声的歌曲。
                 val entry = queueStore.queue.value.entries.firstOrNull { it.uid == uid } ?: return
                 queueStore.markPlaying(entry)
-                // 恢复队列只展示暂停态，真正出声后才记为一次播放。
-                if (!playingStarted) {
-                    playingStarted = true
-                    val startedId = entry.song.id
-                    val sourceId = playingSourceId
-                    scrobbleScope.launch { NcmBridge.scrobbleStart(startedId, sourceId).getOrNull() }
-                }
             }
         })
 
@@ -169,30 +164,39 @@ class PlaybackService : MediaSessionService(), KoinComponent {
             .setSessionActivity(openApp)
             .setCallback(PlaybackSessionCallback())
             .build()
-        scrobbleScope.launch(Dispatchers.Main) {
+        serviceScope.launch {
+            account.session.collect { sampleListening(player) }
+        }
+        serviceScope.launch {
             while (isActive) {
                 delay(5_000L)
                 if (player.isPlaying) savePlayback(player)
+                sampleListening(player)
             }
         }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
-    /**
-     * 上报"这一首听完了"，涨听歌排行。
-     *
-     * 时长优先用整首长度（READY 后取到的那份）；拿不到才退回落当前进度。
-     * `sourceId` 用这首歌**开始播时**记下的出身——切歌之后播放器已经指到别处，现问是问不到的。
-     */
-    private fun reportPlayed() {
-        if (!playingStarted) return
-        val id = playingSongId ?: return
-        val played = playingDurationMs.takeIf { it != C.TIME_UNSET }
-            ?: (session?.player?.currentPosition ?: 0L)
-        val time = (played / 1000).coerceAtLeast(1)
-        val sourceId = playingSourceId
-        scrobbleScope.launch { NcmBridge.scrobble(id, sourceId, time).getOrNull() }
+    private fun sampleListening(player: Player) {
+        val queue = queueStore.queue.value
+        val uid = player.currentMediaItem?.queueEntryUid
+        val userId = (account.session.value as? Session.LoggedIn)?.profile?.userId ?: 0L
+        val tracks = queue.entries.map {
+            ListeningTrack(it.uid, it.song.id, userId,
+                if (queue.radio) "userfm" else "list", it.source?.scrobbleId.orEmpty(),
+                if (it.uid == uid) player.duration.takeIf { duration -> duration != C.TIME_UNSET } ?: it.song.durationMs
+                    else it.song.durationMs,
+                when {
+                    queue.infinite -> "infinite"
+                    queue.mode == PlayMode.REPEAT_ONE -> "single"
+                    queue.shuffle -> "ai_random"
+                    queue.mode == PlayMode.REPEAT_ALL -> "circulation"
+                    else -> "loop"
+                })
+        }
+        listening.setTracks(tracks)
+        listening.update(uid, player.currentPosition)
     }
 
     /** 用户把任务从最近应用里划掉：正在播就继续播，已经停了才收掉服务。 */
@@ -203,9 +207,13 @@ class PlaybackService : MediaSessionService(), KoinComponent {
     }
 
     override fun onDestroy() {
-        session?.player?.let(::savePlayback)
+        session?.player?.let {
+            savePlayback(it)
+            sampleListening(it)
+        }
+        listening.finish(ListeningEnd.Interrupted)
         queueStore.finishPlaybackHistory()
-        scrobbleScope.cancel()
+        serviceScope.cancel()
         session?.run {
             player.release()
             release()

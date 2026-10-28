@@ -32,6 +32,7 @@ import com.nevoit.cirro.lyrics.data.LyricsStore
 import com.nevoit.cirro.palette.CoverPalette
 import com.nevoit.cirro.playback.AudioAnalysisStore
 import com.nevoit.cirro.playback.PlaybackConnection
+import com.nevoit.cirro.playback.PlaybackReportRepository
 import com.nevoit.cirro.playback.PlayerLikeViewModel
 import com.nevoit.cirro.playback.PlayerUiController
 import kotlinx.coroutines.CoroutineScope
@@ -67,6 +68,7 @@ val appModule = module {
     single { PlayQueueStore(get<PlaybackStore>()::save) }
 
     single { AccountRepository(get(), get(ApplicationScope)) }
+    single { PlaybackReportRepository(androidContext(), get(ApplicationScope), get<AccountRepository>().session) }
 
     single { IntelligenceRepository() }
     single { RadioRepository() }

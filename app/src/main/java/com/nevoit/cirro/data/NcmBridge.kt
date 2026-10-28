@@ -169,6 +169,10 @@ object NcmBridge {
         decode(nativeHomeBlocks()).getOrThrow().blocks
     }
 
+    fun homeFeed(params: String): Result<String> = runCatching {
+        decode(nativeHomeFeed(params)).getOrThrow().payload
+    }
+
     /**
      * 私人 FM（需登录）。
      *
@@ -261,10 +265,10 @@ object NcmBridge {
     }
 
     /**
-     * 听歌打卡：一首歌完整听完（或自然结束）后上报给网易，涨听歌排行计数。
+     * 旧参数形式的结束上报；新会话使用 [scrobbleEvent] 保留独立累计量和结束原因。
      *
      * [sourceId] 是来源歌单 id，没有就传空串；[timeSeconds] 是实际播放的秒数。
-     * 上报是尽力而为——失败只体现在返回值里，调用方（播放服务）不处理、不重试。
+     * 接收成功不代表服务端已经计入时长或排行。
      */
     fun scrobble(songId: Long, sourceId: String, timeSeconds: Long): Result<Boolean> =
         runCatching {
@@ -275,10 +279,19 @@ object NcmBridge {
     /**
      * 开始播放的上报（进「最近播放」）。歌一开始播就调，不等结束。
      *
-     * 跟 [scrobble] 是官方的两条独立日志：startplay 在开头，play 在完整听完之后。
+     * 开始与结束分别发送，结束不能额外补发一次开始。
      */
     fun scrobbleStart(songId: Long, sourceId: String): Result<Boolean> = runCatching {
         decode(nativeScrobbleStart(songId.toString(), sourceId)).getOrThrow().reported
+    }
+
+    fun scrobbleEvent(userId: Long, payload: String): Result<Boolean> = runCatching {
+        decode(nativeScrobbleEvent(userId, payload)).getOrThrow().reported
+    }
+
+    fun prepareScrobbleEvent(userId: Long, payload: String): Result<String> = runCatching {
+        decode(nativePrepareScrobbleEvent(userId, payload)).getOrThrow().payload
+            .ifEmpty { throw IllegalStateException("播放事件准备结果为空") }
     }
 
     /**
@@ -489,6 +502,8 @@ object NcmBridge {
 
     private external fun nativeHomeBlocks(): String
 
+    private external fun nativeHomeFeed(params: String): String
+
     private external fun nativeRecentSongs(): String
 
     private external fun nativeIntelligenceSongs(id: String, pid: String, sid: String): String
@@ -508,6 +523,10 @@ object NcmBridge {
     private external fun nativeScrobble(id: String, sourceid: String, time: String): String
 
     private external fun nativeScrobbleStart(id: String, sourceid: String): String
+
+    private external fun nativeScrobbleEvent(userId: Long, payload: String): String
+
+    private external fun nativePrepareScrobbleEvent(userId: Long, payload: String): String
 
     private external fun nativePlaylistDetail(id: String): String
 
@@ -565,6 +584,7 @@ private data class BridgeResponse(
     val blocks: List<HomeBlock> = emptyList(),
     val recent: List<RecentSong> = emptyList(),
     val reported: Boolean = false,
+    val payload: String = "",
     val likedSongIds: List<Long>? = null,
     val libraryItems: List<LibraryCollection> = emptyList(),
     val libraryTracks: List<LibraryTrack> = emptyList(),

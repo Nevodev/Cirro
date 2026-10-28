@@ -19,8 +19,74 @@ static RUNTIME: Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
         .expect("tokio runtime 初始化失败")
 });
 
-/// 全局客户端，持有 cookie 与设备信息。
-static CLIENT: Lazy<Mutex<ApiClient>> = Lazy::new(|| Mutex::new(create_client(None)));
+struct ClientState {
+    client: ApiClient,
+    generation: u64,
+    owner_id: Option<i64>,
+}
+
+impl ClientState {
+    fn new() -> Self {
+        Self { client: create_client(None), generation: 0, owner_id: None }
+    }
+
+    fn set_cookie(&mut self, cookie: String) {
+        self.client.set_cookie(cookie);
+        self.invalidate_owner();
+    }
+
+    fn clear_cookie(&mut self) {
+        self.client = create_client(None);
+        self.invalidate_owner();
+    }
+
+    fn invalidate_owner(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.owner_id = None;
+    }
+
+    fn bind_owner(&mut self, generation: u64, owner_id: Option<i64>) -> bool {
+        if self.generation != generation {
+            return false;
+        }
+        self.owner_id = owner_id.filter(|id| *id > 0);
+        true
+    }
+
+    fn playback_client(&self, expected_owner: i64) -> Option<ApiClient> {
+        (expected_owner > 0 && self.owner_id == Some(expected_owner)).then(|| self.client.clone())
+    }
+}
+
+// 凭据与已验证账号必须一起快照，不能用另一个账号的 cookie 发送持久化播放事件。
+static CLIENT: Lazy<Mutex<ClientState>> = Lazy::new(|| Mutex::new(ClientState::new()));
+
+#[cfg(test)]
+mod playback_account_tests {
+    use super::ClientState;
+
+    #[test]
+    fn credential_replacement_invalidates_owner_and_rejects_stale_profile() {
+        let mut state = ClientState::new();
+        state.set_cookie("test=first".to_string());
+        let first_generation = state.generation;
+        assert!(state.playback_client(7).is_none());
+        assert!(state.bind_owner(first_generation, Some(7)));
+        assert!(state.playback_client(7).is_some());
+        assert!(state.playback_client(8).is_none());
+
+        state.set_cookie("test=second".to_string());
+        assert!(state.playback_client(7).is_none());
+        assert!(!state.bind_owner(first_generation, Some(7)));
+        assert!(state.bind_owner(state.generation, Some(8)));
+        assert!(state.playback_client(8).is_some());
+
+        state.clear_cookie();
+        assert!(state.playback_client(8).is_none());
+        assert!(state.bind_owner(state.generation, Some(0)));
+        assert!(state.playback_client(0).is_none());
+    }
+}
 
 fn to_c(s: String) -> *mut c_char {
     CString::new(s)
@@ -66,7 +132,7 @@ pub unsafe extern "C" fn ncm_search(ptr: *const u8, len: usize) -> *mut c_char {
         .param("keywords", kw)
         .param("type", "1")
         .param("limit", "10");
-    let client = CLIENT.lock().unwrap().clone();
+    let client = client_snapshot();
     match RUNTIME.block_on(client.cloudsearch(&q)) {
         Ok(r) => to_c(r.body.to_string()),
         Err(e) => to_c(format!(r#"{{"error":"{}"}}"#, e)),
@@ -84,7 +150,7 @@ pub unsafe extern "C" fn ncm_free(ptr: *mut c_char) {
 /// 单元自检：确认 tokio 运行时与客户端可正常构建。
 #[no_mangle]
 pub extern "C" fn ncm_selftest() -> i32 {
-    let client = CLIENT.lock().unwrap().clone();
+    let client = client_snapshot();
     match RUNTIME.block_on(client.cloudsearch(&Query::new().param("keywords", "test").param("limit", "1"))) {
         Ok(_) => 1,
         Err(_) => 0,
@@ -102,12 +168,12 @@ pub extern "C" fn ncm_selftest() -> i32 {
 // ---------------------------------------------------------------------------
 
 use jni::objects::{JObject, JString};
-use jni::sys::{jboolean, jint, jstring};
+use jni::sys::{jboolean, jint, jlong, jstring};
 use jni::JNIEnv;
 
 /// 快照当前客户端。请求期间持锁会和 set_cookie 死等，所以先 clone 再 await。
 fn client_snapshot() -> ApiClient {
-    CLIENT.lock().unwrap().clone()
+    CLIENT.lock().unwrap().client.clone()
 }
 
 fn jni_out(env: &mut JNIEnv, value: serde_json::Value) -> jstring {
@@ -452,7 +518,7 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeClearCookie<'l
     _env: JNIEnv<'local>,
     _this: JObject<'local>,
 ) {
-    *CLIENT.lock().unwrap() = create_client(None);
+    CLIENT.lock().unwrap().clear_cookie();
 }
 
 /// 查登录态并取用户资料。
@@ -465,7 +531,10 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeLoginStatus<'l
     mut env: JNIEnv<'local>,
     _this: JObject<'local>,
 ) -> jstring {
-    let client = client_snapshot();
+    let (client, generation) = {
+        let state = CLIENT.lock().unwrap();
+        (state.client.clone(), state.generation)
+    };
     let value = match RUNTIME.block_on(client.login_status(&Query::new())) {
         Ok(r) => {
             let profile = &r.body["profile"];
@@ -478,6 +547,14 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeLoginStatus<'l
         Err(NcmError::AuthRequired(_)) => serde_json::json!({ "ok": true, "loggedIn": false }),
         Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
     };
+    if value["ok"].as_bool() == Some(true) {
+        let owner = value["profile"]["userId"].as_i64();
+        if !CLIENT.lock().unwrap().bind_owner(generation, owner) {
+            return jni_out(&mut env, serde_json::json!({
+                "ok": false, "message": "登录凭据已变化，请重新验证登录态",
+            }));
+        }
+    }
     jni_out(&mut env, value)
 }
 
@@ -1911,9 +1988,38 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeHomeBlocks<'lo
     jni_out(&mut env, value)
 }
 
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeHomeFeed<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    params: JString<'local>,
+) -> jstring {
+    let params = jni_in(&mut env, &params);
+    let data: serde_json::Value = match serde_json::from_str(&params) {
+        Ok(data) => data,
+        Err(_) => return jni_out(&mut env, serde_json::json!({"ok":false,"message":"首页参数无效"})),
+    };
+    let client = client_snapshot();
+    let result = RUNTIME.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            if data["inspectConfig"].as_bool() == Some(true) {
+                client.homepage_block_config().await
+            } else {
+                client.homepage_feed(data).await
+            }
+        }).await
+    });
+    let value = match result {
+        Ok(Ok(response)) => serde_json::json!({"ok":true,"payload":response.body.to_string()}),
+        Ok(Err(error)) => serde_json::json!({"ok":false,"message":error.to_string()}),
+        Err(_) => serde_json::json!({"ok":false,"message":"首页请求超时"}),
+    };
+    jni_out(&mut env, value)
+}
 
 
-/// 听歌打卡（把一次完整播放上报给网易，计入听歌排行/最近播放）。
+
+/// 旧参数形式的结束上报，不再在结束时重复发送开始事件。
 ///
 /// 入参：`id`（歌曲 id）、`sourceid`（来源歌单 id，可为空串）、`time`（播放秒数）。
 /// 上报失败不影响播放，Kotlin 侧只管尽力而为。
@@ -1941,19 +2047,18 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeScrobble<'loca
         .param("id", &id)
         .param("sourceid", &sourceid)
         .param("time", &time);
-    let value = match RUNTIME.block_on(client.scrobble(&query)) {
+    let value = match RUNTIME.block_on(client.scrobble_end(&query)) {
         Ok(r) => {
-            // 两条日志（startplay/play）各自的 code，都 200 才算上报成功
-            let startplay_ok = r.body.pointer("/details/startplay/code").and_then(|v| v.as_i64())
-                == Some(200);
-            let play_ok = r.body.pointer("/details/play/code").and_then(|v| v.as_i64()) == Some(200);
-            if startplay_ok && play_ok {
+            let code = r.body.pointer("/details/code").and_then(|v| {
+                v.as_i64().or_else(|| v.as_str().and_then(|code| code.parse::<i64>().ok()))
+            });
+            if code == Some(200) {
                 serde_json::json!({ "ok": true, "reported": true })
             } else {
                 serde_json::json!({
                     "ok": true,
                     "reported": false,
-                    "message": format!("startplay_ok={startplay_ok} play_ok={play_ok}"),
+                    "message": format!("播放结束事件未被接收 code={code:?}"),
                 })
             }
         }
@@ -1986,7 +2091,9 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeScrobbleStart<
     let query = Query::new().param("id", &id).param("sourceid", &sourceid);
     let value = match RUNTIME.block_on(client.scrobble_start(&query)) {
         Ok(r) => {
-            let code = r.body.pointer("/details/code").and_then(|v| v.as_i64());
+            let code = r.body.pointer("/details/code").and_then(|v| {
+                v.as_i64().or_else(|| v.as_str().and_then(|code| code.parse::<i64>().ok()))
+            });
             if code == Some(200) {
                 serde_json::json!({ "ok": true, "reported": true })
             } else {
@@ -1994,6 +2101,68 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeScrobbleStart<
             }
         }
         Err(e) => serde_json::json!({ "ok": false, "message": e.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativePrepareScrobbleEvent<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    expected_user_id: jlong,
+    payload: JString<'local>,
+) -> jstring {
+    let payload = jni_in(&mut env, &payload);
+    let event = match serde_json::from_str::<serde_json::Value>(&payload) {
+        Ok(event) => event,
+        Err(_) => return jni_out(&mut env, serde_json::json!({
+            "ok": false, "message": "播放事件 JSON 无效",
+        })),
+    };
+    let client = match CLIENT.lock().unwrap().playback_client(expected_user_id) {
+        Some(client) => client,
+        None => return jni_out(&mut env, serde_json::json!({
+            "ok": false, "message": "播放事件账号与已验证登录态不一致",
+        })),
+    };
+    let value = match client.prepare_android_event(event) {
+        Ok(prepared) => serde_json::json!({ "ok": true, "payload": prepared.to_string() }),
+        Err(error) => serde_json::json!({ "ok": false, "message": error.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeScrobbleEvent<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    expected_user_id: jlong,
+    payload: JString<'local>,
+) -> jstring {
+    let payload = jni_in(&mut env, &payload);
+    let event = match serde_json::from_str::<serde_json::Value>(&payload) {
+        Ok(event) => event,
+        Err(_) => return jni_out(&mut env, serde_json::json!({
+            "ok": false, "message": "播放事件 JSON 无效",
+        })),
+    };
+    let client = match CLIENT.lock().unwrap().playback_client(expected_user_id) {
+        Some(client) => client,
+        None => return jni_out(&mut env, serde_json::json!({
+            "ok": false, "message": "播放事件账号与已验证登录态不一致",
+        })),
+    };
+    let android_log = matches!(event["action"].as_str(), Some("_plv" | "_pld"));
+    let result = RUNTIME.block_on(async {
+        if android_log {
+            client.scrobble_android_event(event).await
+        } else {
+            client.scrobble_event(event).await
+        }
+    });
+    let value = match result {
+        Ok(_) => serde_json::json!({ "ok": true, "reported": true }),
+        Err(error) => serde_json::json!({ "ok": false, "message": error.to_string() }),
     };
     jni_out(&mut env, value)
 }
