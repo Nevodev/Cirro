@@ -90,9 +90,7 @@ class PlaybackService : MediaSessionService(), KoinComponent {
             .setHandleAudioBecomingNoisy(true)
             .build()
 
-        // 响度数据是跟着 resolve 来的，但"该用哪一首的"只有这里知道：ExoPlayer 会预读下一首，
-        // 下一首的 resolve 可能在当前这首还没放完时就跑完了。所以切换时按 id 选一次。
-        // 顺带做听歌打卡：开始播报 startplay，完整听完才报 play——跟官方客户端一样是两条，
+        // 听歌打卡：开始播报 startplay，完整听完才报 play——跟官方客户端一样是两条，
         // 且都带上这首歌的来源（歌单/专辑 id）。
         player.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -100,8 +98,6 @@ class PlaybackService : MediaSessionService(), KoinComponent {
                     nextUid = mediaItem?.queueEntryUid,
                     repeated = reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT,
                 )
-                loudness.selectTrack(mediaItem?.mediaId?.toLongOrNull(), qualityStore.current.wire)
-
                 // 上一首完整播完了，涨听歌排行。两种都算：
                 // AUTO = 自动切下一首；REPEAT = 单曲循环自然放完又从头来。
                 if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO ||
@@ -223,7 +219,7 @@ class PlaybackService : MediaSessionService(), KoinComponent {
                 ?: throw SongUnavailableException("无法识别的歌曲地址")
             val quality = qualityStore.current
             val audio = NcmBridge.songUrl(id, quality.wire).getOrThrow()
-            loudness.rememberTrack(id, quality.wire, audio.gainDb, audio.peak)
+            loudness.rememberTrack(spec.key ?: id.toString(), audio.gainDb, audio.peak)
             // 服务端可能降级，如实记下实得档位
             qualityStore.reportResolved(id, audio.level)
             spec.withUri(audio.url.toUri())

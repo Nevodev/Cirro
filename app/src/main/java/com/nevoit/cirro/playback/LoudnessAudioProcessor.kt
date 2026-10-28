@@ -1,6 +1,7 @@
 package com.nevoit.cirro.playback
 
 import androidx.media3.common.C
+import androidx.media3.common.Timeline
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.util.UnstableApi
@@ -26,49 +27,48 @@ private const val BaseGain = 1f
  * 最后用 `peak` 兜底：输出峰值 = 原始峰值 × 总增益，越过 1.0 就削波，所以总增益封顶 `1 / peak`。
  * 实测有约 4% 的歌 `peak × 10^(gain/20)` 会过 1.0，这一钳省不得。
  *
- * ## 为什么要分 [rememberTrack] 和 [selectTrack] 两个入口
- *
- * 响度数据是跟着 `song_url_v1` 来的，也就是只有数据源那层才知道；而"现在该用哪一首的增益"
- * 只有播放器知道。**这两件事不是同一个时刻**：ExoPlayer 会预读下一首，下一首的 resolve
- * 常常在当前这首还在放的时候就跑完了。所以数据源只能"记下来"，切换曲目时再"选出来"，
- * 直接拿 resolve 的结果去设当前增益会让当前这首在结尾几十秒突然变成下一首的音量。
+ * 数据源只用 [rememberTrack] 记下增益：预读下一首时不能改变当前音频。
+ * [onFlush] 根据实际输入流的条目身份选取增益，此时旧流已排空，新流还未进入处理器。
+ * 不能依赖主线程的切歌通知：下一首开头可能已经按旧增益写入音频缓冲，通知后再切换
+ * 会让下一首播放一段后突然变音量。
  */
 @UnstableApi
 class LoudnessAudioProcessor : BaseAudioProcessor() {
 
-    /** `"<id>@<level>"` → 线性增益。写入在加载线程，读在音频线程。 */
+    /** 数据源的条目 key → 实际加载音质的线性增益。写入在加载线程，读在音频线程。 */
     private val tracks = ConcurrentHashMap<String, Float>()
 
-    @Volatile
-    private var currentKey: String? = null
-
-    @Volatile
     private var gain = BaseGain
+    private val period = Timeline.Period()
+    private val window = Timeline.Window()
 
     /**
      * 换直链时顺手记下这首歌的响度，**不代表它正在播放**（可能是预读的下一首）。
      *
-     * 🔴 [level] 必须带上：`gain` 是**跟着档位变的**（实测 lossless 比 standard 低约
-     * 0.4 dB），只按 id 记会让切档后响度对不上。
+     * [key] 与 MediaItem 的 customCacheKey 一致，同一首歌的不同入队条目也要分开。
+     * 增益跟随这次直链响应，不能在开始播放时重新读取设置档位：已预读的音频可能还是旧档位。
      *
      * [gainDb] / [peak] 可能为 null，表示网易云没给这首歌算过，那就只乘基线。
      */
-    fun rememberTrack(id: Long, level: String, gainDb: Double?, peak: Double?) {
-        val key = trackKey(id, level)
-        val value = linearGain(gainDb, peak)
-        tracks[key] = value
-        // 预读那首正好就是当前这首（首次播放、重试、跳播都会这样）时，记下就该立刻生效。
-        if (currentKey == key) gain = value
+    fun rememberTrack(key: String, gainDb: Double?, peak: Double?) {
+        tracks[key] = linearGain(gainDb, peak)
     }
 
-    /**
-     * 切换曲目。[level] 传**当前档位**：切档后同一首歌的增益和已记账的那份对不上，
-     * 查不到就先按基线走，等它下次换直链时 [rememberTrack] 补上。
-     */
-    fun selectTrack(id: Long?, level: String) {
-        val key = id?.let { trackKey(it, level) }
-        currentKey = key
+    override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) {
+        val timeline = streamMetadata.timeline
+        val periodUid = streamMetadata.periodUid
+        val key = if (periodUid != null && timeline.getIndexOfPeriod(periodUid) != C.INDEX_UNSET) {
+            timeline.getPeriodByUid(periodUid, period)
+            val item = timeline.getWindow(period.windowIndex, window).mediaItem
+            item.localConfiguration?.customCacheKey ?: item.mediaId
+        } else {
+            null
+        }
         gain = key?.let { tracks[it] } ?: BaseGain
+    }
+
+    override fun onReset() {
+        gain = BaseGain
     }
 
     // 父类的实现是"configure 是否已经配出输出格式"，不是空壳，所以必须转给它——
@@ -110,9 +110,6 @@ class LoudnessAudioProcessor : BaseAudioProcessor() {
     }
 
     private companion object {
-        // 档位也要进 key：同一首歌在不同档位下 gain 不同（见 rememberTrack 注释）。
-        fun trackKey(id: Long, level: String): String = "$id@$level"
-
         fun linearGain(gainDb: Double?, peak: Double?): Float {
             var value = BaseGain * if (gainDb == null) 1.0 else 10.0.pow(gainDb / 20.0)
             if (peak != null && peak > 0.0) {

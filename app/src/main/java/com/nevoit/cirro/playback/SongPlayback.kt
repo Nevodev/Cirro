@@ -38,6 +38,7 @@ internal val MediaItem.queueEntryUid: Long?
 internal fun Song.toMediaItem(queueEntryUid: Long): MediaItem = MediaItem.Builder()
     .setMediaId(id.toString())
     .setUri(songUri(id))
+    .setCustomCacheKey("$id@$queueEntryUid")
     .setMediaMetadata(
         MediaMetadata.Builder()
             .setExtras(Bundle().apply { putLong(QueueEntryUidKey, queueEntryUid) })
