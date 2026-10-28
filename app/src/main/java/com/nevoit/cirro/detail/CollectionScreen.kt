@@ -75,6 +75,8 @@ import com.nevoit.cirro.data.model.hasPendingInserts
 import com.nevoit.cirro.data.model.likedPlaylistInfo
 import com.nevoit.cirro.data.model.tracksForAlbum
 import com.nevoit.cirro.home.OpenCollection
+import com.nevoit.cirro.playback.pearmesh.memoryCoverPaletteKey
+import com.nevoit.cirro.playback.pearmesh.prepareMemoryCoverPalette
 import com.nevoit.cirro.home.Section
 import com.nevoit.cirro.home.dataOrNull
 import com.nevoit.cirro.palette.CoverPalette
@@ -137,6 +139,7 @@ fun CollectionRoute(
     likedPlaylist: Boolean = false,
     authorHint: String = "",
     onStatusBarAppearanceChanged: (Boolean?) -> Unit = {},
+    memoryCover: Boolean = false,
 ) {
     val viewModel: CollectionViewModel = koinViewModel {
         parametersOf(kind, id, titleHint)
@@ -272,11 +275,12 @@ fun CollectionRoute(
     val coverUrl = coverHint.takeUnless { coverHintFailed }.orEmpty()
         .ifEmpty { state.info.dataOrNull?.cover.orEmpty() }
     val palette = koinInject<CoverPalette>()
-    val paletteKey = coverUrl
+    val paletteKey = if (memoryCover) memoryCoverPaletteKey(LocalContext.current, coverUrl) else coverUrl
     var seed by remember(paletteKey) { mutableStateOf(palette.cached(paletteKey)) }
     LaunchedEffect(paletteKey) {
         if (paletteKey.isEmpty()) return@LaunchedEffect
-        palette.prefetch(paletteKey)
+        if (memoryCover) prepareMemoryCoverPalette(context, coverUrl, palette)
+        else palette.prefetch(paletteKey)
         seed = palette.seed(paletteKey)
     }
 
@@ -290,6 +294,7 @@ fun CollectionRoute(
         displayTitle = viewModel.displayTitle,
         authorHint = authorHint,
         coverUrl = coverUrl,
+        memoryCover = memoryCover,
         videoUrl = videoUrl,
         onCoverError = { coverHintFailed = true },
         playingId = playingId,
@@ -394,6 +399,7 @@ private fun CollectionScreen(
     displayTitle: String,
     authorHint: String,
     coverUrl: String,
+    memoryCover: Boolean,
     videoUrl: String?,
     onCoverError: () -> Unit,
     playingId: Long?,
@@ -565,6 +571,7 @@ private fun CollectionScreen(
                         displayTitle = displayTitle,
                         authorHint = authorHint,
                         coverUrl = coverUrl,
+                        memoryCover = memoryCover,
                         videoUrl = videoUrl,
                         videoVisible = videoVisible,
                         onCoverError = onCoverError,
@@ -802,6 +809,7 @@ private fun HeaderBlock(
     displayTitle: String,
     authorHint: String,
     coverUrl: String,
+    memoryCover: Boolean,
     videoUrl: String?,
     videoVisible: Boolean,
     onCoverError: () -> Unit,
@@ -836,11 +844,11 @@ private fun HeaderBlock(
                 .fillMaxSize(),
         ) {
             if (coverUrl.isNotEmpty()) {
-                AsyncImage(
-                    model = headerCoverModel(coverUrl, screenWidth.value.toInt()),
-                    contentDescription = null,
-                    onError = { onCoverError() },
-                    contentScale = ContentScale.Crop,
+                HeaderCoverImage(
+                    url = coverUrl,
+                    widthDp = screenWidth.value.toInt(),
+                    memoryCover = memoryCover,
+                    onError = onCoverError,
                     modifier = Modifier.fillMaxSize(),
                 )
             }

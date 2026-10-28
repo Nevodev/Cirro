@@ -9,6 +9,7 @@ import com.nevoit.cirro.data.RadioRepository
 import com.nevoit.cirro.data.contentDay
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.HomeBlock
+import com.nevoit.cirro.data.model.MemoryPlaylists
 import com.nevoit.cirro.data.model.Playlist
 import com.nevoit.cirro.data.model.RecentAlbum
 import com.nevoit.cirro.data.model.Session
@@ -156,7 +157,7 @@ sealed interface HomeCard {
  * 封面跟 [EntryDetail.covers] 一样是**候选表**：正常用歌单里第一首的专辑图，
  * 那张挂了就顺延下一首，最后一张兜底是运营给歌单配的宣传图（有张图也好过一片空白）。
  *
- * [subtitle] 只有「最近播放」那排给（是歌手）；雷达歌单那排没有可说的第二行，留 null ——
+ * [subtitle] 在最近播放和回忆歌单中显示歌手；雷达歌单留 null ——
  * 卡片会因此短一行，这是有意的，不是漏了。
  *
  * [id] 是卡片的**稳定身份**（歌单 id / 专辑 id）：`LazyRow` 的 `items(key=)` 靠它识别 item，
@@ -185,6 +186,7 @@ data class HomeUiState(
     val shelf: Section<List<ShelfCard>> = Section.Loading,
     val style: Section<StylePicks> = Section.Loading,
     val recent: Section<List<ShelfCard>> = Section.Loading,
+    val memories: Section<MemoryPlaylists> = Section.Loading,
     /**
      * 电台卡。
      *
@@ -224,6 +226,9 @@ data class HomeUiState(
      */
     val showRecent: Boolean
         get() = recent is Section.Failed || !recent.dataOrNull.isNullOrEmpty()
+
+    val showMemories: Boolean
+        get() = memories is Section.Failed || !memories.dataOrNull?.playlists.isNullOrEmpty()
 }
 
 /**
@@ -307,6 +312,7 @@ class HomeViewModel(
             recent = lastRecent
                 ?.let { recentAlbumsShelf(it) { id -> repository.albumTypeSnapshot(id) } }
                 .toSectionOrNull(),
+            memories = repository.memoryPlaylistsSnapshot().toSectionOrNull(),
         )
     }
 
@@ -356,6 +362,7 @@ class HomeViewModel(
                     async { loadDaily() },
                     async { loadRadar() },
                     async { loadBlocks() },
+                    async { loadMemories() },
                 ).awaitAll().all { it }
             }
             if (ok) loadedDay = day
@@ -368,6 +375,12 @@ class HomeViewModel(
     private suspend fun loadDaily(): Boolean {
         val result = repository.dailySongs().map(::dailyDetail)
         _state.update { it.copy(daily = mergeFailure(result.toSection(), it.daily)) }
+        return result.isSuccess
+    }
+
+    private suspend fun loadMemories(): Boolean {
+        val result = repository.memoryPlaylists()
+        _state.update { it.copy(memories = mergeFailure(result.toSection(), it.memories)) }
         return result.isSuccess
     }
 

@@ -62,6 +62,7 @@ fun rememberKineticSnapFlingBehavior(
 
 internal interface ScrollBounds {
     fun canScroll(direction: Float): Boolean
+
     /** Nonnegative physical distance, or null if the corresponding edge is not laid out yet. */
     fun distanceToEdge(direction: Float): Float?
 }
@@ -80,7 +81,8 @@ internal class LazyListBounds(private val state: LazyListState) : ScrollBounds {
             return if (state.firstVisibleItemIndex == 0) state.firstVisibleItemScrollOffset.toFloat() else null
         }
         val info = state.layoutInfo
-        val last = info.visibleItemsInfo.lastOrNull { it.index == info.totalItemsCount - 1 } ?: return null
+        val last =
+            info.visibleItemsInfo.lastOrNull { it.index == info.totalItemsCount - 1 } ?: return null
         return (last.offset + last.size - info.viewportEndOffset + info.afterContentPadding)
             .toFloat().coerceAtLeast(0f)
     }
@@ -135,14 +137,22 @@ internal class KineticSnapFlingBehavior(
         val rawApproach = provider.calculateApproachOffset(initialVelocity, projected)
         check(rawApproach.isFinite())
         var approach = abs(rawApproach) * sign(initialVelocity)
-        val selectionVelocity = (sign(initialVelocity) * max(0.0,
-            abs(initialVelocity.toDouble()) - decay.lambda * abs(approach))).toFloat()
-        if (willReachEdge(state.velocity)) return runDecay(state, scale, 0f, 0f, false).remainingVelocity
+        val selectionVelocity = (sign(initialVelocity) * max(
+            0.0,
+            abs(initialVelocity.toDouble()) - decay.lambda * abs(approach)
+        )).toFloat()
+        if (willReachEdge(state.velocity)) return runDecay(
+            state,
+            scale,
+            0f,
+            0f,
+            false
+        ).remainingVelocity
 
         // Apply the platform's directional/closest policy at its planned approach point, before
         // crossing that anchor. Selecting around the full decay endpoint would pick an extra item.
         var target = if (approach == 0f) provider.calculateSnapOffset(initialVelocity)
-            else targets.calculateTarget(approach, selectionVelocity, false)
+        else targets.calculateTarget(approach, selectionVelocity, false)
         var carry = 0L
         while (target == null && abs(state.velocity) > decay.absVelocityThreshold) {
             val result = runDecay(state, scale, approach, selectionVelocity, true)
@@ -154,16 +164,20 @@ internal class KineticSnapFlingBehavior(
             if (result.decayFinished) break
         }
         if (willReachEdge(state.velocity)) return runDecayToEdge(state, scale, carry)
-        val distance = target ?: provider.calculateSnapOffset(sign(initialVelocity) * 400f * density)
+        val distance =
+            target ?: provider.calculateSnapOffset(sign(initialVelocity) * 400f * density)
         check(distance.isFinite())
         if (distance == 0f && state.velocity == 0f) return 0f
         val initialSnapVelocity = state.velocity
         val baseSpec = RetargetedDecaySpec(distance, initialSnapVelocity, snapStiffness, density)
-        val baseCurve = TargetBasedAnimation(baseSpec, Float.VectorConverter, 0f, distance,
-            AnimationVector1D(initialSnapVelocity))
+        val baseCurve = TargetBasedAnimation(
+            baseSpec, Float.VectorConverter, 0f, distance,
+            AnimationVector1D(initialSnapVelocity)
+        )
         carry = minOf(carry, baseCurve.durationNanos)
         if (carry > 0L) {
-            val firstStepper = ScrollStepper(this, bounds, baseCurve, scale, reportVelocity = ::reportVelocity)
+            val firstStepper =
+                ScrollStepper(this, bounds, baseCurve, scale, reportVelocity = ::reportVelocity)
             val x = baseCurve.getValueFromNanos(carry)
             val v = baseCurve.getVelocityVectorFromNanos(carry).value
             val collision = firstStepper.step(x, v, (carry * (scale?.scaleFactor ?: 1f)).toLong())
@@ -171,13 +185,26 @@ internal class KineticSnapFlingBehavior(
             if (carry >= baseCurve.durationNanos) return 0f
             state = state.copy(value = x, velocity = v)
         }
-        val spec = if (carry == 0L) baseSpec else ContinuedSnapSpec(baseSpec, distance, initialSnapVelocity, carry)
-        val curve = TargetBasedAnimation(spec, Float.VectorConverter, state.value, distance,
-            AnimationVector1D(state.velocity))
-        val stepper = ScrollStepper(this, bounds, curve, scale, startValue = state.value,
-            reportVelocity = ::reportVelocity)
+        val spec = if (carry == 0L) baseSpec else ContinuedSnapSpec(
+            baseSpec,
+            distance,
+            initialSnapVelocity,
+            carry
+        )
+        val curve = TargetBasedAnimation(
+            spec, Float.VectorConverter, state.value, distance,
+            AnimationVector1D(state.velocity)
+        )
+        val stepper = ScrollStepper(
+            this, bounds, curve, scale, startValue = state.value,
+            reportVelocity = ::reportVelocity
+        )
         var remaining = 0f
-        state.animateTo(distance, spec, sequentialAnimation = state.lastFrameTimeNanos != Long.MIN_VALUE) {
+        state.animateTo(
+            distance,
+            spec,
+            sequentialAnimation = state.lastFrameTimeNanos != Long.MIN_VALUE
+        ) {
             val collision = stepper.step(value, velocity, lastFrameTimeNanos - startTimeNanos)
             if (collision != null) {
                 remaining = collision
@@ -207,7 +234,13 @@ internal class KineticSnapFlingBehavior(
         val collision = stepper.step(x, v, (time * (scale?.scaleFactor ?: 1f)).toLong())
         if (collision != null) return collision
         if (time >= curve.durationNanos) return 0f
-        return runDecay(state.copy(value = 0f, velocity = v), scale, 0f, 0f, false).remainingVelocity
+        return runDecay(
+            state.copy(value = 0f, velocity = v),
+            scale,
+            0f,
+            0f,
+            false
+        ).remainingVelocity
     }
 
     private fun willReachEdge(velocity: Float): Boolean {
@@ -233,7 +266,10 @@ internal class KineticSnapFlingBehavior(
         var actualVelocity = initialVelocity
         var carry = 0L
         var interrupted = false
-        state.animateDecay(decaySpec, sequentialAnimation = state.lastFrameTimeNanos != Long.MIN_VALUE) {
+        state.animateDecay(
+            decaySpec,
+            sequentialAnimation = state.lastFrameTimeNanos != Long.MIN_VALUE
+        ) {
             val elapsed = lastFrameTimeNanos - startTimeNanos
             if (!findTarget) {
                 val collision = stepper.step(value, velocity, elapsed)
@@ -252,11 +288,13 @@ internal class KineticSnapFlingBehavior(
                     val direction = sign(initialVelocity)
                     val safe = targets.safeAdvance(direction).coerceAtLeast(.5f)
                     val next = actualValue + direction * minOf(abs(value - actualValue), safe)
-                    val ratio = (decay.lambda * abs(next) / abs(initialVelocity)).coerceIn(0.0, 1.0 - 1e-15)
+                    val ratio =
+                        (decay.lambda * abs(next) / abs(initialVelocity)).coerceIn(0.0, 1.0 - 1e-15)
                     val crossingTime = (-kotlin.math.ln1p(-ratio) / decay.lambda * 1e9).toLong()
                         .coerceAtMost(frameTime)
                     actualVelocity = (initialVelocity - decay.lambda * next).toFloat()
-                    val collision = stepper.step(next, actualVelocity, (crossingTime * factor).toLong())
+                    val collision =
+                        stepper.step(next, actualVelocity, (crossingTime * factor).toLong())
                     if (collision != null) {
                         hitEdge = true
                         remaining = collision
@@ -264,7 +302,8 @@ internal class KineticSnapFlingBehavior(
                         break
                     }
                     actualValue = next
-                    target = targets.calculateTarget(approach - actualValue, selectionVelocity, true)
+                    target =
+                        targets.calculateTarget(approach - actualValue, selectionVelocity, true)
                     if (target != null) {
                         carry = (frameTime - crossingTime).coerceAtLeast(0L)
                         interrupted = true
@@ -279,7 +318,8 @@ internal class KineticSnapFlingBehavior(
                 }
             }
         }
-        val resultState = if (findTarget) state.copy(value = actualValue, velocity = actualVelocity) else state
+        val resultState =
+            if (findTarget) state.copy(value = actualValue, velocity = actualVelocity) else state
         return DecayResult(resultState, hitEdge, remaining, target, carry, !interrupted)
     }
 }
@@ -313,9 +353,16 @@ private class ScrollStepper(
             previousTime = time
             return null
         }
-        if (!bounds.canScroll(delta)) return collisionVelocity(previousValue, previousTime, time, delta, velocity)
+        if (!bounds.canScroll(delta)) return collisionVelocity(
+            previousValue,
+            previousTime,
+            time,
+            delta,
+            velocity
+        )
         val edge = bounds.distanceToEdge(delta)
-        val requested = if (edge != null && edge > 0f) sign(delta) * minOf(abs(delta), edge) else delta
+        val requested =
+            if (edge != null && edge > 0f) sign(delta) * minOf(abs(delta), edge) else delta
         var requestedTotal = requested
         reportVelocity(velocity)
         var consumed = scope.scrollBy(requested)
@@ -349,7 +396,8 @@ private class ScrollStepper(
         var high = max(from, to)
         repeat(32) {
             val mid = low + (high - low) / 2
-            if ((curve.getValueFromNanos(mid) - position) * sign(direction) < 0f) low = mid else high = mid
+            if ((curve.getValueFromNanos(mid) - position) * sign(direction) < 0f) low =
+                mid else high = mid
         }
         val result = curve.getVelocityVectorFromNanos(high).value
         return if (result.isFinite()) result else fallback

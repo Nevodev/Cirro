@@ -1,5 +1,7 @@
 package com.nevoit.cirro.playback.pearmesh.gl
 
+import kotlin.math.sqrt
+
 internal data class MeshData(
     val vertices: FloatArray,
     val indices: ShortArray,
@@ -11,9 +13,14 @@ internal object PearMeshMesh {
     const val LandscapePresetCount = 5
 
     fun create(isPortrait: Boolean, presetIndex: Int): MeshData {
-        val controlPointCount = if (isPortrait) 6 else 9
         val presets = if (isPortrait) PearMeshPresets.portrait else PearMeshPresets.landscape
         val preset = presets[presetIndex.coerceIn(0, presets.lastIndex)]
+        return create(preset)
+    }
+
+    fun create(preset: MeshPreset): MeshData {
+        val controlPointCount = sqrt(preset.from.size.toDouble()).toInt()
+        require(controlPointCount in 2..16) { "Expected 2 to 16 control points per side" }
         val expectedPointCount = controlPointCount * controlPointCount
         require(preset.from.size == expectedPointCount) {
             "Expected $expectedPointCount source control points, got ${preset.from.size}"

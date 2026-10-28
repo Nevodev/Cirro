@@ -31,11 +31,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -75,6 +77,8 @@ import com.nevoit.cirro.playback.PlayerUiController
 import com.nevoit.cirro.playback.PlayerUnderlay
 import com.nevoit.cirro.playback.PreparePlayerArtwork
 import com.nevoit.cirro.playback.rememberPlayerExpansionState
+import com.nevoit.cirro.playback.pearmesh.memoryCoverPaletteKey
+import com.nevoit.cirro.playback.pearmesh.prepareMemoryCoverPalette
 import com.nevoit.cirro.ui.BottomShade
 import com.nevoit.cirro.ui.StatusBarAppearance
 import com.nevoit.material.clip.cornerMaskClip
@@ -96,6 +100,7 @@ import com.nevoit.material.theme.local.ProvideContentColor
 import com.nevoit.material.theme.paletteColors
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import org.koin.compose.koinInject
 
@@ -201,6 +206,7 @@ sealed interface MainDestination {
         val coverHint: String = "",
         val libraryAlbum: Boolean = false,
         val authorHint: String = "",
+        val memoryCover: Boolean = false,
     ) : MainDestination
 
     /**
@@ -236,6 +242,8 @@ fun BoxScope.Main() {
     // 刷新底栏，顺带给详情页暖了取色缓存。navigator.current 是 snapshot state，
     // 进出详情页这里自动重算。
     val palette = koinInject<CoverPalette>()
+    val memoryCoverContext = LocalContext.current
+    val memoryNavigationScope = rememberCoroutineScope()
     // 🔴 「喜爱歌曲」是资料库的子页：歌单详情在它**内部**渲染，不走 MainDestination.Collection，
     // 所以拿不到入口处的 coverHint，底栏就会掉回主题色（页面自己有颜色，底栏没有）。
     // 这里直接盯资料库快照里第一首歌的封面 —— 跟详情页内部用的是同一个来源，资料库加载完底栏自己会跟上。
@@ -256,15 +264,16 @@ fun BoxScope.Main() {
     }
     val currentEntry = navigator.current
     val coverHint = when (val destination = currentEntry.destination) {
-        is MainDestination.Collection -> destination.coverHint
+        is MainDestination.Collection -> if (destination.memoryCover) {
+            memoryCoverPaletteKey(memoryCoverContext, destination.coverHint)
+        } else destination.coverHint
         MainDestination.LibraryLikedSongs -> likedCover
         else -> null
     }
-    val hintedBarSeed by produceState<CoverSeed?>(
-        initialValue = coverHint?.let { palette.cached(it) },
-        coverHint
-    ) {
-        value = coverHint?.let { palette.seed(it) }
+    val hintedBarSeed by key(coverHint) {
+        produceState<CoverSeed?>(initialValue = coverHint?.let { palette.cached(it) }) {
+            value = coverHint?.let { palette.seed(it) }
+        }
     }
     // 常驻 chrome 在导航树外，需要跟艺人页独立的深色主题同步。
     val artistPage =
@@ -427,6 +436,18 @@ fun BoxScope.Main() {
                                 session = session,
                                 selectedIndex = selectedIndex,
                                 onSelect = { selectedIndex = it },
+                                onOpenMemoryPlaylist = { kind, id, title, cover, author ->
+                                    val origin = navigator.current.id
+                                    memoryNavigationScope.launch {
+                                        prepareMemoryCoverPalette(memoryCoverContext, cover, palette)
+                                        if (navigator.current.id == origin) navigate(
+                                            MainDestination.Collection(
+                                                kind, id, title, cover,
+                                                authorHint = author, memoryCover = true,
+                                            )
+                                        )
+                                    }
+                                },
                                 onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
                                     navigate(
                                         MainDestination.Collection(
@@ -585,6 +606,7 @@ fun BoxScope.Main() {
                                     coverHint = destination.coverHint,
                                     authorHint = destination.authorHint,
                                     libraryAlbum = destination.libraryAlbum,
+                                    memoryCover = destination.memoryCover,
                                     onStatusBarAppearanceChanged = onStatusBarAppearanceChanged,
                                     onBack = ::back,
                                     onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
@@ -685,6 +707,7 @@ private fun BoxScope.MainTabs(
     selectedIndex: Int,
     onSelect: (Int) -> Unit,
     onOpenCollection: (CollectionKind, Long, String, String, String) -> Unit,
+    onOpenMemoryPlaylist: (CollectionKind, Long, String, String, String) -> Unit,
     onOpenLibraryAlbum: (Long, String, String, String) -> Unit,
     onOpenLibraryLikedSongs: () -> Unit,
     onOpenLibraryPlaylists: () -> Unit,
@@ -702,6 +725,7 @@ private fun BoxScope.MainTabs(
             MainDestinations.Home -> HomeRoute(
                 session = session,
                 onOpenCollection = onOpenCollection,
+                onOpenMemoryPlaylist = onOpenMemoryPlaylist,
             )
 
             MainDestinations.Explore -> {}

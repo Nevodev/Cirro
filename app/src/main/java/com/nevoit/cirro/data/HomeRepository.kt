@@ -2,6 +2,7 @@ package com.nevoit.cirro.data
 
 import android.content.Context
 import com.nevoit.cirro.data.model.HomeBlock
+import com.nevoit.cirro.data.model.MemoryPlaylists
 import com.nevoit.cirro.data.model.Playlist
 import com.nevoit.cirro.data.model.Ranking
 import com.nevoit.cirro.data.model.RecentAlbum
@@ -9,6 +10,9 @@ import com.nevoit.cirro.data.model.RecentSong
 import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.data.model.Song
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -85,7 +89,7 @@ private data class AlbumTypePack(val types: Map<Long, String>)
  * 这种情况照常恢复磁盘（同一台机同一个 cookie，不是换号）。
  */
 class HomeRepository(
-    context: Context,
+    private val context: Context,
     private val scope: CoroutineScope,
     private val account: AccountRepository,
 ) {
@@ -95,6 +99,7 @@ class HomeRepository(
     private val dailySongsSlot = Slot<List<Song>>()
     private val dailyPlaylistsSlot = Slot<List<Playlist>>()
     private val blocksSlot = Slot<List<HomeBlock>>()
+    private val memoriesSlot = Slot<MemoryPlaylists>()
 
     private val recentSlot = Slot<List<RecentAlbum>>()
 
@@ -131,6 +136,55 @@ class HomeRepository(
     fun dailyPlaylistsSnapshot(): List<Playlist>? = dailyPlaylistsSlot.value
 
     fun homeBlocksSnapshot(): List<HomeBlock>? = blocksSlot.value
+
+    fun memoryPlaylistsSnapshot(): MemoryPlaylists? = memoriesSlot.value
+
+    suspend fun memoryPlaylists(): Result<MemoryPlaylists> = withContext(Dispatchers.IO) {
+        runCatching {
+            val owner = currentOwnerId()
+            val metrics = context.resources.displayMetrics
+            val first = homeFeedRequest(metrics.widthPixels / metrics.density, metrics.heightPixels / metrics.density)
+            var request = first
+            val loaded = linkedSetOf<String>()
+            val cursors = mutableSetOf<Int>()
+            var result: MemoryPlaylists? = null
+            // 首页是有限的模块列表；游标不前进立即退出，避免异常响应无限重复取页。
+            for (pageIndex in 0 until 8) {
+                check(currentOwnerId() == owner) { "账号已变化" }
+                val page = HomeFeedPage(NcmBridge.homeFeed(request.toString()).getOrThrow())
+                result = page.memories()
+                if (result != null || !page.hasMore) break
+                check(cursors.add(page.cursor)) { "首页游标未前进" }
+                loaded += page.blocks.mapNotNull { it["positionCode"]?.let { value ->
+                    (value as? kotlinx.serialization.json.JsonPrimitive)?.content
+                } }
+                request = page.nextRequest(first, loaded.toList())
+                check(pageIndex < 7) { "首页分页尚未完成" }
+            }
+            check(currentOwnerId() == owner) { "账号已变化" }
+            val memories = result ?: MemoryPlaylists()
+            val known = memoriesSlot.value?.playlists.orEmpty().associateBy { it.id }
+            coroutineScope {
+                memories.copy(playlists = memories.playlists.map { playlist ->
+                    async {
+                        val cached = known[playlist.id]
+                        if (cached?.period != null) {
+                            playlist.copy(title = cached.title, period = cached.period)
+                        } else {
+                            val info = NcmBridge.playlistDetail(playlist.id).getOrNull()
+                            playlist.copy(
+                                title = info?.title ?: playlist.title,
+                                period = info?.let { memoryPeriod(it.title, it.description) },
+                            )
+                        }
+                    }
+                }.awaitAll())
+            }.also { check(currentOwnerId() == owner) { "账号已变化" } }
+        }.onSuccess {
+            memoriesSlot.value = it
+            persist("memories.json") { HomeJson.encodeToString(it) }
+        }
+    }
 
     fun recentAlbumsSnapshot(): List<RecentAlbum>? = recentSlot.value
 
@@ -296,6 +350,7 @@ class HomeRepository(
         dailySongsSlot.value = null
         dailyPlaylistsSlot.value = null
         blocksSlot.value = null
+        memoriesSlot.value = null
         recentSlot.value = null
         albumTypeCache.clear()
         tracksCache.clear()
@@ -356,6 +411,9 @@ class HomeRepository(
         runCatching {
             val pack = HomeJson.decodeFromString<BlockPack>(File(dir, "blocks.json").readText())
             blocksSlot.value = pack.blocks
+        }
+        runCatching {
+            memoriesSlot.value = HomeJson.decodeFromString<MemoryPlaylists>(File(dir, "memories.json").readText())
         }
         runCatching {
             val pack = HomeJson.decodeFromString<TrackPack>(File(dir, "tracks.json").readText())

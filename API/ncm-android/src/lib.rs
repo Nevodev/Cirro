@@ -2001,13 +2001,7 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeHomeFeed<'loca
     };
     let client = client_snapshot();
     let result = RUNTIME.block_on(async {
-        tokio::time::timeout(std::time::Duration::from_secs(20), async {
-            if data["inspectConfig"].as_bool() == Some(true) {
-                client.homepage_block_config().await
-            } else {
-                client.homepage_feed(data).await
-            }
-        }).await
+        tokio::time::timeout(std::time::Duration::from_secs(20), client.homepage_feed(data)).await
     });
     let value = match result {
         Ok(Ok(response)) => serde_json::json!({"ok":true,"payload":response.body.to_string()}),

@@ -113,7 +113,7 @@ internal fun LazyItemScope.AlbumWorksSection(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             flingBehavior = rememberKineticSnapFlingBehavior(
                 rowState,
-                snapPosition = SnapPosition.Start,
+                snapPosition = SnapPosition.Start
             ),
             overscrollEffect = rememberOffsetOverscrollEffect(rowState),
             scrollIndicator = null,

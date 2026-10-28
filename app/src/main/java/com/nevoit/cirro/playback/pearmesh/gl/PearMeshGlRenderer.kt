@@ -27,6 +27,7 @@ internal class PearMeshGlRenderer(
     context: Context,
     initialState: RendererState,
     private val frameCaptureRequest: AtomicReference<((Bitmap) -> Unit)?>? = null,
+    private val customPreset: MeshPreset? = null,
 ) : Closeable {
     private val rotationProgram = GlProgram(
         context,
@@ -69,10 +70,7 @@ internal class PearMeshGlRenderer(
     )
     private val quad = GlGeometry.quad()
     private var mesh = GlGeometry.mesh(
-        PearMeshMesh.create(
-            isPortrait = true,
-            presetIndex = PearMeshState.DefaultPortraitPresetIndex,
-        ),
+        createMesh(isPortrait = true, presetIndex = PearMeshState.DefaultPortraitPresetIndex),
     )
 
     private var surfaceWidth = 0
@@ -437,6 +435,10 @@ internal class PearMeshGlRenderer(
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
+    private fun createMesh(isPortrait: Boolean, presetIndex: Int): MeshData =
+        customPreset?.let(PearMeshMesh::create)
+            ?: PearMeshMesh.create(isPortrait, presetIndex)
+
     private fun ensureSize(width: Int, height: Int, state: RendererState) {
         val newPortrait = height >= width
         val newPresetIndex = if (newPortrait) {
@@ -449,7 +451,7 @@ internal class PearMeshGlRenderer(
             meshPresetIndex = newPresetIndex
             mesh.close()
             mesh = GlGeometry.mesh(
-                PearMeshMesh.create(
+                createMesh(
                     isPortrait = isPortrait,
                     presetIndex = meshPresetIndex,
                 ),

@@ -55,6 +55,9 @@ pub const OS_ANDROID: OsConfig = OsConfig {
     channel: "xiaomi",
 };
 
+// 旧版移动协议不下发月度/年度歌单卡；仅混合首页接口使用已核对的协议版本。
+pub const HOME_FEED_ANDROID_APPVER: &str = "9.6.15";
+
 pub const OS_IPHONE: OsConfig = OsConfig {
     os: "iPhone OS",
     appver: "9.0.90",

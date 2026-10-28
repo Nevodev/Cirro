@@ -2,15 +2,14 @@ use super::Query;
 use crate::error::Result;
 /// 首页 Block Page
 /// 对应 Node.js module/homepage_block_page.js
-use crate::request::{ApiClient, ApiResponse, CryptoType};
-use crate::request::RequestOption;
+use crate::request::{ApiClient, ApiResponse, CryptoType, RequestOption};
 use serde_json::{json, Value};
 
 impl ApiClient {
     pub async fn homepage_feed(&self, data: Value) -> Result<ApiResponse> {
         let mut cookies = crate::util::cookie::cookie_to_json(self.raw_cookie().unwrap_or_default());
         cookies.insert("os".into(), "android".into());
-        cookies.insert("appver".into(), crate::util::config::OS_ANDROID.appver.into());
+        cookies.insert("appver".into(), crate::util::config::HOME_FEED_ANDROID_APPVER.into());
         self.request(
             "/api/link/page/rcmd/resource/show",
             data,
@@ -19,14 +18,6 @@ impl ApiClient {
                 cookie: Some(crate::util::cookie::cookie_obj_to_string(&cookies)),
                 ..Default::default()
             },
-        ).await
-    }
-
-    pub async fn homepage_block_config(&self) -> Result<ApiResponse> {
-        self.request(
-            "/api/homepage/block/page/config/get",
-            json!({}),
-            RequestOption { crypto: CryptoType::Eapi, ..Default::default() },
         ).await
     }
 

@@ -24,12 +24,14 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import coil3.request.ImageRequest
+import coil3.compose.AsyncImage
 import coil3.request.allowHardware
 import coil3.request.crossfade
 import coil3.request.transformations
@@ -37,6 +39,7 @@ import com.kyant.shapes.RoundedRectangle
 import com.nevoit.cirro.R
 import com.nevoit.cirro.data.model.CollectionInfo
 import com.nevoit.cirro.data.model.CollectionKind
+import com.nevoit.cirro.playback.pearmesh.rememberMemoryCoverRequest
 import com.nevoit.cirro.ui.ReflectionTransformation
 import com.nevoit.material.core.animation.rememberPressAnimatable
 import com.nevoit.material.core.component.CircleIconButton
@@ -296,13 +299,48 @@ internal fun ListHint(
  * 地址为空时返回 null，Coil 什么都不画，露出底色。
  */
 @Composable
-internal fun headerCoverModel(url: String, widthDp: Int): Any? {
+internal fun HeaderCoverImage(
+    url: String,
+    widthDp: Int,
+    memoryCover: Boolean,
+    onError: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val model = headerCoverModel(url, widthDp, memoryCover)
+    // null 是本地请求准备中；Coil 会对空数据调用 onError，不能因此撤掉已经准备好的入口取色。
+    if (model != null) AsyncImage(
+        model = model,
+        contentDescription = null,
+        onError = { onError() },
+        contentScale = ContentScale.Crop,
+        modifier = modifier,
+    )
+}
+
+@Composable
+internal fun headerCoverModel(url: String, widthDp: Int, memoryCover: Boolean = false): Any? {
     val context = LocalContext.current
     val density = LocalDensity.current
     val widthPx = with(density) { widthDp.dp.roundToPx() }
     val side = minOf(widthPx, HeaderCoverCapPx)
     val riseRatio = HeaderRise.value / widthDp
     val risePx = (side * riseRatio).roundToInt()
+
+    if (memoryCover) {
+        if (url.isEmpty()) return null
+        return rememberMemoryCoverRequest(
+            url, side, side + risePx,
+            ReflectionTransformation(
+                context = context,
+                squareDp = side.toFloat(),
+                stripDp = side * riseRatio / 3,
+                riseDp = side * riseRatio,
+                bleedDp = side * riseRatio * HeaderBleedRatio,
+                blurDp = 48f,
+            ),
+            crossfadeFromDisk = true,
+        )
+    }
 
     return remember(url, side, risePx) {
         url.takeIf { it.isNotEmpty() }?.let {

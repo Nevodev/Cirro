@@ -28,6 +28,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableIntState
@@ -50,12 +51,16 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
@@ -65,6 +70,8 @@ import com.kyant.shapes.RoundedRectangle
 import com.nevoit.cirro.R
 import com.nevoit.cirro.data.RadioOpening
 import com.nevoit.cirro.data.model.CollectionKind
+import com.nevoit.cirro.data.model.MemoryPlaylist
+import com.nevoit.cirro.data.model.MemoryPlaylists
 import com.nevoit.cirro.data.model.QueueSource
 import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.data.model.Song
@@ -72,6 +79,8 @@ import com.nevoit.cirro.login.LoginActivity
 import com.nevoit.cirro.palette.CoverPalette
 import com.nevoit.cirro.playback.PlaybackConnection
 import com.nevoit.cirro.playback.PlayingCoverIndicator
+import com.nevoit.cirro.playback.pearmesh.memoryCoverPaletteKey
+import com.nevoit.cirro.playback.pearmesh.rememberMemoryCoverRequest
 import com.nevoit.cirro.playback.rememberIsCurrentSong
 import com.nevoit.cirro.ui.CollectionCard
 import com.nevoit.cirro.ui.ReflectionTransformation
@@ -90,12 +99,14 @@ import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.tokens.Springs
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
+import java.time.LocalDate
 
 private val CardWidth = 216.dp
 private val CardRise = 72.dp
 private val CardHeight = CardWidth + CardRise
 
 private val CardPadding = 16.dp
+private val MemoryLabelFont = FontFamily(Font(R.font.inter_regular, FontWeight.Normal))
 
 /**
  * 电台卡渐变的两端（HCT tone）。
@@ -150,6 +161,7 @@ fun BoxScope.HomeRoute(
     session: Session,
     onOpenCollection: OpenCollection = { _, _, _, _, _ -> },
     modifier: Modifier = Modifier,
+    onOpenMemoryPlaylist: OpenCollection = onOpenCollection,
 ) {
     // 🔴 只有「确定没登录」才不建 VM。登录态还未知（冷启动 Session.Unknown）时也得建：
     // 首页第一屏全靠 HomeRepository 的磁盘快照，建了 VM 才有第一帧 —— 等 loginStatus 的
@@ -165,6 +177,7 @@ fun BoxScope.HomeRoute(
             state?.cards?.forEach { addAll(it.covers) }
             state?.shelf?.dataOrNull?.forEach { card -> addAll(card.covers) }
             state?.recent?.dataOrNull?.forEach { card -> addAll(card.covers) }
+            state?.memories?.dataOrNull?.playlists?.forEach { add(it.cover) }
         }.distinct()
     }
     LaunchedEffect(coverUrls) { coverUrls.forEach(palette::prefetch) }
@@ -188,7 +201,7 @@ fun BoxScope.HomeRoute(
                     // 松手后吸附到卡片起点；滚动条本来就没有，关掉别让 kinetic 画一条
                     flingBehavior = rememberKineticSnapFlingBehavior(
                         rowState,
-                        snapPosition = SnapPosition.Start,
+                        snapPosition = SnapPosition.Start
                     ),
                     overscrollEffect = rememberOffsetOverscrollEffect(rowState),
                     scrollIndicator = null,
@@ -252,6 +265,15 @@ fun BoxScope.HomeRoute(
                     onRetry = onRetry
                 )
             }
+
+            if (state.showMemories) {
+                item(key = "home_memories") {
+                    VGap(36.dp)
+                    SectionTitle(text = state.memories.dataOrNull?.title ?: "回忆歌单")
+                    VGap(16.dp)
+                    MemoryPlaylistShelf(state.memories, onRetry, onOpenMemoryPlaylist)
+                }
+            }
         }
     }
 }
@@ -295,10 +317,15 @@ private fun EntryCard(
     onRetry: () -> Unit,
     onOpen: OpenCollection,
     modifier: Modifier = Modifier,
+    coverOverlay: (@Composable BoxScope.() -> Unit)? = null,
+    meshCover: Boolean = false,
+    drawShade: Boolean = true
 ) {
     val detail = entry.detail.dataOrNull
     val failed = entry.detail is Section.Failed
     val covers = rememberCovers(detail?.covers.orEmpty())
+    val context = LocalContext.current
+    val palette = koinInject<CoverPalette>()
 
     Box(
         modifier = modifier
@@ -311,32 +338,47 @@ private fun EntryCard(
                     entry.kind,
                     entry.id,
                     entry.title,
-                    entry.detail.dataOrNull?.covers?.firstOrNull().orEmpty(),
+                    if (meshCover) covers.current.orEmpty()
+                    else entry.detail.dataOrNull?.covers?.firstOrNull().orEmpty(),
                     "",
                 )
             },
     ) {
-        AsyncImage(
-            model = coverModel(covers.current),
+        val imageModel = coverModel(covers.current, meshCover)
+        // 读本地成品时请求暂未就绪；提交 null 会被 Coil 当成失败并错误地切换候选封面。
+        if (imageModel != null) AsyncImage(
+            model = imageModel,
             contentDescription = null,
             onError = { covers.advance() },
+            onSuccess = {
+                if (meshCover) covers.current?.let {
+                    palette.prefetch(
+                        memoryCoverPaletteKey(
+                            context,
+                            it
+                        )
+                    )
+                }
+            },
             contentScale = ContentScale.FillBounds,
             modifier = Modifier.fillMaxSize(),
         )
 
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .fillMaxWidth()
-                .height(CardRise * 2f)
-                .smoothGradient(
-                    color = Color.Black,
-                    start = 0.0f,
-                    end = 1.5f,
-                    intensity = 0.5f,
-                )
-        )
-        Column(
+        if (drawShade) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .height(CardRise * 2f)
+                    .smoothGradient(
+                        color = Color.Black,
+                        start = 0.0f,
+                        end = 1.5f,
+                        intensity = 0.5f,
+                    )
+            )
+        }
+        if (coverOverlay != null) coverOverlay() else Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .graphicsLayer {
@@ -366,20 +408,131 @@ private fun EntryCard(
     }
 }
 
-/**
- * 电台卡：三张艺人圆图 + 从种子封面取色的渐变底，点整张就开播。
- *
- * 跟 [EntryCard] 是两种卡：那张是**入口**（点进详情页），这张是**动作**（直接出声）。
- *
- * **入场**：渐变底和三张图是**一整块**，等「三张图全落地（成功或失败都算）+ 颜色有着落」
- * 才一起淡入；文字在这块外面，始终可见，不参与动画。
- *
- * **第二次起秒进**：颜色缓存命中（= 这张卡以前完整显示过）时，gate 从 1f 起步，
- * 连这一次淡入都不跑。
- *
- * 🔴 入场进度是 `State`，**只在 `graphicsLayer` 里读** —— 在组合期读（`by`）会让整张卡
- * 每帧重组。
- */
+@Composable
+private fun MemoryPlaylistShelf(
+    memories: Section<MemoryPlaylists>,
+    onRetry: () -> Unit,
+    onOpen: OpenCollection,
+) {
+    val rowState = rememberLazyListState()
+    Box(Modifier.height(CardHeight)) {
+        KineticLazyRow(
+            state = rowState,
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = ShelfPadding),
+            horizontalArrangement = Arrangement.spacedBy(ShelfPadding),
+            flingBehavior = rememberKineticSnapFlingBehavior(
+                rowState,
+                snapPosition = SnapPosition.Start
+            ),
+            overscrollEffect = rememberOffsetOverscrollEffect(rowState),
+            scrollIndicator = null,
+        ) {
+            items(memories.dataOrNull?.playlists.orEmpty(), key = { it.id }) { playlist ->
+                EntryCard(
+                    entry = HomeEntry(
+                        playlist.title,
+                        CollectionKind.PLAYLIST,
+                        playlist.id,
+                        Section.Ready(
+                            EntryDetail(
+                                listOf(playlist.cover),
+                                playlist.subtitle.split('、').filter { it.isNotBlank() })
+                        ),
+                    ),
+                    onRetry = onRetry,
+                    onOpen = onOpen,
+                    coverOverlay = { MemoryPlaylistLabel(playlist) },
+                    meshCover = true,
+                    drawShade = false
+                )
+            }
+        }
+        if (memories is Section.Failed) ShelfFailure(onRetry)
+    }
+}
+
+@Composable
+private fun BoxScope.MemoryPlaylistLabel(playlist: MemoryPlaylist) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+    ) {
+        Column(modifier = Modifier.align(Alignment.BottomStart)) {
+            Image(
+                painter = painterResource(R.drawable.recall_zh_cn), contentDescription = null,
+                modifier = Modifier
+                    .padding(start = 12.dp, top = 48.dp)
+                    .height(24.dp),
+            )
+            playlist.period?.let { period ->
+                VGap(12.dp)
+                val startPadding = if (period.month != null) 12.dp else 6.dp
+                val today = LocalDate.now()
+                val currentPeriod = period.year == today.year &&
+                        (period.month == null || period.month == today.monthValue)
+                val numberStyle = TextStyle(
+                    color = Color.White,
+                    fontSize = 96.sp,
+                    lineHeight = 96.sp,
+                    fontFamily = MemoryLabelFont,
+                    fontWeight = FontWeight.Normal,
+                    letterSpacing = (-4).sp,
+                ).let { style ->
+                    if (currentPeriod) style else style.copy(
+                        brush = Brush.verticalGradient(
+                            listOf(
+                                Color.White,
+                                Color.White.copy(alpha = 0.6f)
+                            )
+                        ),
+                    )
+                }
+                Row(
+                    modifier = Modifier
+                        .padding(start = startPadding),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    BasicText(
+                        text = period.number,
+                        style = numberStyle,
+                        modifier = Modifier.alignByBaseline()
+                    )
+                    if (period.month != null) {
+                        Text(
+                            text = "月",
+                            style = MaterialTheme.type.title3,
+                            fontSize = 32.sp,
+                            lineHeight = 40.sp,
+                            fontWeight = FontWeight.Normal,
+                            color = Color.White.copy(.5f),
+                            modifier = Modifier.alignByBaseline()
+                        )
+                    }
+                }
+            }
+        }
+    }
+    Column(
+        modifier = Modifier
+            .align(Alignment.BottomStart)
+            .fillMaxWidth()
+            .padding(CardPadding),
+    ) {
+        Text(
+            text = playlist.subtitle.split('、').filter { it.isNotBlank() }.toCredit(),
+            style = MaterialTheme.type.subHeadline,
+            color = Color.White.copy(alpha = 0.6f),
+            minLines = CreditLines,
+            maxLines = CreditLines,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.graphicsLayer { blendMode = BlendMode.Plus },
+        )
+    }
+}
+
+
 @Composable
 private fun RadioCard(
     opening: RadioOpening,
@@ -760,11 +913,22 @@ private fun SongRow(
  * Coil 什么都不画，露出卡片底色。
  */
 @Composable
-private fun coverModel(url: String?): Any? {
+private fun coverModel(url: String?, meshCover: Boolean = false): Any? {
     val context = LocalContext.current
     val density = LocalDensity.current
     val width = with(density) { CardWidth.roundToPx() }
     val height = with(density) { CardHeight.roundToPx() }
+
+    if (meshCover) {
+        if (url.isNullOrEmpty()) return null
+        return rememberMemoryCoverRequest(
+            url, width, height,
+            ReflectionTransformation(
+                context, squareDp = CardWidth.value, riseDp = CardRise.value,
+                bleedDp = CardRise.value * 0.5f,
+            ),
+        )
+    }
 
     return remember(url, width, height) {
         url?.let {
@@ -772,11 +936,13 @@ private fun coverModel(url: String?): Any? {
                 .data(it)
                 .size(width, height)
                 .transformations(
-                    ReflectionTransformation(
-                        context = context,
-                        squareDp = CardWidth.value,
-                        riseDp = CardRise.value,
-                        bleedDp = CardRise.value * 0.5f
+                    listOf(
+                        ReflectionTransformation(
+                            context = context,
+                            squareDp = CardWidth.value,
+                            riseDp = CardRise.value,
+                            bleedDp = CardRise.value * 0.5f
+                        ),
                     )
                 )
                 .crossfade(true)
