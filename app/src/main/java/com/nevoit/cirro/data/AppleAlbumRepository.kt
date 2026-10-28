@@ -39,6 +39,8 @@ class AppleAlbumRepository(
 
     suspend fun video(match: AppleAlbumMatch): String? = detail(match)?.videoUrl
 
+    suspend fun portraitVideo(match: AppleAlbumMatch): String? = detail(match)?.portraitVideoUrl
+
     suspend fun resolve(info: CollectionInfo, songs: List<Song>): AppleAlbumMatch? = withContext(Dispatchers.IO) {
         if (info.kind != CollectionKind.ALBUM || info.id <= 0 || songs.isEmpty()) return@withContext null
         val request = mutex.withLock {

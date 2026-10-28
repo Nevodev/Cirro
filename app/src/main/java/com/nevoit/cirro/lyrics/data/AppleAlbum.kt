@@ -11,6 +11,7 @@ data class AppleAlbum(
     val releaseDate: String = "",
     val videoUrl: String? = null,
     val tracks: List<AppleAlbumTrack> = emptyList(),
+    val portraitVideoUrl: String? = null,
 )
 
 @Serializable

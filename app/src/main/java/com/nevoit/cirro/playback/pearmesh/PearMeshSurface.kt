@@ -7,6 +7,7 @@ import android.view.Surface
 import android.view.TextureView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -38,17 +39,19 @@ fun PearMeshSurface(
     modifier: Modifier = Modifier,
     artwork: Bitmap? = null,
     onFrameReady: (Boolean) -> Unit = {},
+    renderingEnabled: Boolean = true,
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val latestFrameReady = rememberUpdatedState(onFrameReady)
+    val latestRenderingEnabled = rememberUpdatedState(renderingEnabled)
     key(state) {
-        val renderingEnabled = remember { AtomicBoolean(false) }
+        val canRender = remember { AtomicBoolean(false) }
         val view = remember { AtomicReference<PearMeshTextureView?>(null) }
         DisposableEffect(lifecycleOwner, view) {
             val lifecycle = lifecycleOwner.lifecycle
             fun updateRenderingState() {
-                val enabled = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
-                renderingEnabled.set(enabled)
+                val enabled = latestRenderingEnabled.value && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+                canRender.set(enabled)
                 view.get()?.setRenderingEnabled(enabled)
             }
 
@@ -58,16 +61,21 @@ fun PearMeshSurface(
 
             onDispose {
                 lifecycle.removeObserver(observer)
-                renderingEnabled.set(false)
+                canRender.set(false)
                 view.get()?.setRenderingEnabled(false)
             }
+        }
+        SideEffect {
+            val enabled = renderingEnabled && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+            canRender.set(enabled)
+            view.get()?.setRenderingEnabled(enabled)
         }
 
         AndroidView(
             factory = { context ->
                 PearMeshTextureView(context, state) { latestFrameReady.value(it) }.apply {
                     setArtwork(artwork)
-                    setRenderingEnabled(renderingEnabled.get())
+                    setRenderingEnabled(canRender.get())
                     view.set(this)
                 }
             },

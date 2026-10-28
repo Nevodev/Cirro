@@ -122,6 +122,7 @@ class ArtistVideoRenderingTest {
                 program.setSamplerTexIdUniform("uTexSampler", input, 0)
                 program.setFloatsUniform("uCrop", floatArrayOf(0f, 0f, 1f, 1f))
                 program.setFloatUniform("uSide", 96f)
+                program.setFloatUniform("uTopOffset", 0f)
                 program.setFloatUniform("uHeight", geometry.height.toFloat())
                 program.setFloatUniform("uRise", geometry.rise.toFloat())
                 program.setFloatUniform("uStripFraction", geometry.strip / 96f)

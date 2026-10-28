@@ -9,6 +9,7 @@ pub struct Album {
     pub track_count: u64,
     pub release_date: String,
     pub video_url: Option<String>,
+    pub portrait_video_url: Option<String>,
     pub tracks: Vec<AlbumTrack>,
 }
 
@@ -102,6 +103,11 @@ fn parse(item: &Value) -> Option<Album> {
                 .and_then(Value::as_str).filter(|url| url.starts_with("https://"))
                 .map(str::to_string)
         }),
+        portrait_video_url: ["motionDetailTall", "motionTallVideo3x4"].iter().find_map(|key| {
+            attrs.pointer(&format!("/editorialVideo/{key}/video"))
+                .and_then(Value::as_str).filter(|url| url.starts_with("https://"))
+                .map(str::to_string)
+        }),
         tracks: Vec::new(),
     })
 }
@@ -130,6 +136,7 @@ mod tests {
             "editorialVideo":{"motionDetailTall":{"video":"https://example.com/tall.m3u8"}}
         }});
         assert!(parse(&item).unwrap().video_url.is_none());
+        assert_eq!(parse(&item).unwrap().portrait_video_url.as_deref(), Some("https://example.com/tall.m3u8"));
         item["attributes"]["editorialVideo"]["motionDetailSquare"] =
             json!({"video":"https://example.com/detail-square.m3u8"});
         assert_eq!(parse(&item).unwrap().video_url.as_deref(), Some("https://example.com/detail-square.m3u8"));
@@ -148,6 +155,18 @@ mod tests {
         let tracks = parse_tracks(&page);
         assert_eq!(tracks.len(), 1);
         assert_eq!(tracks[0].duration_ms, 180000);
+    }
+
+    #[test]
+    fn portrait_and_square_artwork_are_independent() {
+        let item = json!({"id":"123","attributes":{"editorialVideo":{
+            "motionTallVideo3x4":{"video":"https://example.com/tall.m3u8"},
+            "motionDetailTall":{"video":"https://example.com/detail-tall.m3u8"},
+            "motionSquareVideo1x1":{"video":"https://example.com/square.m3u8"}
+        }}});
+        let album = parse(&item).unwrap();
+        assert_eq!(album.video_url.as_deref(), Some("https://example.com/square.m3u8"));
+        assert_eq!(album.portrait_video_url.as_deref(), Some("https://example.com/detail-tall.m3u8"));
     }
 
     #[test]
@@ -176,6 +195,26 @@ mod tests {
                 }
             }
             assert!(found, "No square motion cover found");
+        });
+    }
+
+    #[test]
+    #[ignore = "Checks live portrait HLS without changing square album artwork"]
+    fn live_album_portrait_motion() {
+        crate::engine::RUNTIME.block_on(async {
+            let album = detail("1649434004", "us").await.unwrap();
+            assert!(album.video_url.is_some());
+            let url = album.portrait_video_url.unwrap();
+            let response = crate::engine::HTTP.get(url).send().await.unwrap();
+            assert!(response.status().is_success());
+            let playlist = response.text().await.unwrap();
+            assert!(playlist.starts_with("#EXTM3U"));
+            let re = Regex::new(r"RESOLUTION=(\d+)x(\d+)").unwrap();
+            let sizes: Vec<_> = re.captures_iter(&playlist).map(|capture| {
+                (capture[1].parse::<u32>().unwrap(), capture[2].parse::<u32>().unwrap())
+            }).collect();
+            assert!(!sizes.is_empty() && sizes.iter().all(|(width, height)| height > width));
+            println!("Square and portrait URLs coexist; portrait HLS verified: {sizes:?}");
         });
     }
 }

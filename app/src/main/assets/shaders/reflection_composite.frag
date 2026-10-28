@@ -17,11 +17,13 @@
 uniform vec2 uImageSize;
 uniform float uRadius;
 uniform float uMaxLevel;
-// Radius 0 row and the length of the ramp, in px from the top of the image. The ramp starts ABOVE the
-// seam (bleed = rise / 4), so the blur already has some width where the reflection begins and the
-// cover melts into it instead of hitting a hard edge. uBlurStart + uBlurHeight == image height.
+// Blur distance and ramp length in pixels. Player video measures radial distance from the top
+// centre; other callers measure from the top edge. Clamping keeps the radius constant past the ramp.
 uniform float uBlurStart;
 uniform float uBlurHeight;
+#ifdef REFLECTION_CIRCULAR_BLUR
+uniform float uBlurHorizontalScale;
+#endif
 
 // Tap spacing in the sampled level's texels. The kernel therefore spans ~1.5 texels of that level;
 // together with the pyramid trimming one level off in GlReflection, the overall blur radius stays
@@ -48,7 +50,13 @@ void main() {
     #else
     float top = vTexCoord.y * uImageSize.y;
     #endif
-    float intensity = clamp((top - uBlurStart) / uBlurHeight, 0.0, 1.0);
+    #ifdef REFLECTION_CIRCULAR_BLUR
+    // Scale only X so flattening the arc cannot move its bottom or the centre-line blur ramp.
+    float blurDistance = length(vec2((vTexCoord.x - 0.5) * uImageSize.x / uBlurHorizontalScale, top));
+    #else
+    float blurDistance = top;
+    #endif
+    float intensity = clamp((blurDistance - uBlurStart) / uBlurHeight, 0.0, 1.0);
     // Radius grows like intensity^RampPower; the sub-2 px softening is the video's, so the clear end
     // does not pop into blur on the first few rows.
     float radius = 1.6 * uRadius * pow(intensity, RampPower);

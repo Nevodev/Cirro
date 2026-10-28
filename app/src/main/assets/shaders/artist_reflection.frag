@@ -6,9 +6,10 @@ uniform float uSide;
 uniform float uHeight;
 uniform float uRise;
 uniform float uStripFraction;
+uniform float uTopOffset;
 
 void main() {
-    float top = (1.0 - vTexCoord.y) * uHeight + max(uSide - uHeight, 0.0);
+    float top = (1.0 - vTexCoord.y) * uHeight + uTopOffset;
     float sourceTop = top <= uSide
         ? top / uSide
         : 1.0 - (top - uSide) / uRise * uStripFraction;

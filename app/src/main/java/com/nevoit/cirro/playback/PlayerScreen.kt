@@ -47,9 +47,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -287,6 +289,13 @@ fun PlayerLayer(
     expansion: PlayerExpansionState,
     modifier: Modifier = Modifier,
 ) {
+    val motionSongId by remember(connection) {
+        connection.state.map { it.song?.id }.distinctUntilChanged()
+    }.collectAsState(initial = remember(connection) { connection.state.value.song?.id })
+    // 链接解析留在常驻层；收起页面后保留匹配结果，视频和 GL 资源仍随播放页释放。
+    val motionUrl = rememberPlayerMotionArtworkUrl(
+        motionSongId, controller.motionArtworkEnabled, controller.present, connection,
+    )
     if (!controller.present) return
 
     BackHandler(enabled = controller.acceptsInput) { controller.close() }
@@ -326,6 +335,7 @@ fun PlayerLayer(
         controller = controller,
         connection = connection,
         expansion = expansion,
+        motionUrl = motionUrl,
         modifier = modifier,
     )
 }
@@ -364,6 +374,7 @@ private fun PlayerOverlay(
     controller: PlayerUiController,
     connection: PlaybackConnection,
     expansion: PlayerExpansionState,
+    motionUrl: String?,
     modifier: Modifier = Modifier,
 ) {
     // 粗粒度订阅：只有换歌、或播放/暂停翻转，才让这一层重组。位置心跳（500ms 一次）不进这里，
@@ -407,6 +418,16 @@ private fun PlayerOverlay(
         // cannot tween from the fallback. Once visible, song changes retain their colour transition.
         if (!seedReady) return
         SideEffect { themeInitialized = true }
+    }
+
+    val motionOpacity = remember { Animatable(if (motionUrl != null) 1f else 0f) }
+    var motionReady by remember { mutableStateOf(false) }
+    var motionReplacesCover by remember { mutableStateOf(motionUrl != null) }
+    val onMotionStateChanged = remember {
+        { ready: Boolean, replacesCover: Boolean ->
+            motionReady = ready
+            motionReplacesCover = replacesCover
+        }
     }
 
     // 深浅判定跟详情页一致：种子本身暗（或系统是深色）就整页走深色。这一页的底色就是种子给的，
@@ -478,6 +499,13 @@ private fun PlayerOverlay(
     val onBackgroundReady = remember(expansion) {
         { ready: Boolean -> if (ready) expansion.backgroundReady = true }
     }
+    var collapsed by remember { mutableStateOf(false) }
+    val motionOccludesBackground by remember(motionOpacity, controller, motionUrl) {
+        derivedStateOf {
+            motionReady && controller.motionArtworkEnabled && motionUrl != null && motionOpacity.value >= 1f &&
+                controller.isExpanded && !controller.isClosing && !controller.isDragging && !collapsed
+        }
+    }
 
     // 暂停时网格也停住——跟波浪落定是同一条规矩：动的东西只属于"正在播放"。
     LaunchedEffect(isPlaying) { meshBackdrop.setPlaybackPlaying(isPlaying) }
@@ -489,8 +517,8 @@ private fun PlayerOverlay(
     }
 
     val audioAnalysis = koinInject<AudioAnalysisStore>()
-    DisposableEffect(audioAnalysis, isPlaying) {
-        if (!isPlaying) {
+    DisposableEffect(audioAnalysis, isPlaying, motionOccludesBackground) {
+        if (!isPlaying || motionOccludesBackground) {
             audioAnalysis.setListener(null)
             meshBackdrop.setAudioVisualizationEnabled(false)
         } else {
@@ -520,7 +548,7 @@ private fun PlayerOverlay(
     var queuePresent by remember { mutableStateOf(false) }
     var queueReady by remember { mutableStateOf(false) }
     var queueBackdropVisible by remember { mutableStateOf(false) }
-    var collapsed by remember { mutableStateOf(false) }
+    val motionActive = !collapsed
     val queueAlpha = remember { Animatable(0f) }
     val queueScale = remember { Animatable(LyricsPanelScale) }
     val queueAlphaProducer = remember(queueAlpha) { { queueAlpha.value } }
@@ -632,6 +660,14 @@ private fun PlayerOverlay(
         ),
         label = "PlayerCollapse",
     )
+    val latestMotionReplacesCover by rememberUpdatedState(motionReplacesCover)
+    DisposableEffect(expansion, motionOpacity, collapseCover) {
+        expansion.targetCoverAlpha = {
+            val motion = if (latestMotionReplacesCover) motionOpacity.value else 0f
+            1f - motion * (1f - collapseCover.value.coerceIn(0f, 1f))
+        }
+        onDispose { expansion.targetCoverAlpha = { 1f } }
+    }
 
     val collapseMeta = animateFloatAsState(
         targetValue = if (collapsed) 1f else 0f,
@@ -787,8 +823,18 @@ private fun PlayerOverlay(
                 modifier = Modifier.fillMaxSize(),
                 artwork = artwork?.bitmap,
                 onFrameReady = onBackgroundReady,
+                renderingEnabled = !motionOccludesBackground,
             )
         }
+        PlayerMotionArtwork(
+            url = motionUrl,
+            active = motionActive,
+            isPlaying = isPlaying,
+            opacity = motionOpacity,
+            backdropWashColor = backgroundColor,
+            onStateChanged = onMotionStateChanged,
+            modifier = Modifier.fillMaxSize(),
+        )
         val onTogglePlay = remember(connection) { { connection.togglePlayPause() } }
         val onPrevious = remember(connection) { { connection.skipToPrevious() } }
         val onNext = remember(connection) { { connection.skipToNext() } }

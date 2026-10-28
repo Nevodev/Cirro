@@ -73,6 +73,7 @@ class PlayerExpansionState internal constructor(
         private set
     internal var targetCoverLayer by mutableStateOf<GraphicsLayer?>(null)
     internal var targetCoverTransform by mutableStateOf<(GraphicsLayer.() -> Unit)?>(null)
+    internal var targetCoverAlpha: () -> Float = { 1f }
     internal var targetCoverShape by mutableStateOf<((Size) -> RoundedRectangularShape)?>(null)
     internal var targetCoverBackground by mutableStateOf(Color.Transparent)
     internal var hasCover by mutableStateOf(false)
@@ -139,6 +140,7 @@ class PlayerExpansionState internal constructor(
         targetCoverCoordinates = null
         targetCoverLayer = null
         targetCoverTransform = null
+        targetCoverAlpha = { 1f }
         targetCoverShape = null
         targetCoverOpaque = false
         targetCoverBounds = Rect.Zero
@@ -329,6 +331,7 @@ internal fun PlayerExpansion(
                             coverReplay.presentedShape = shape
                         }
                         state.targetCoverTransform?.invoke(coverPresentation)
+                        coverPresentation.alpha = state.targetCoverAlpha().coerceIn(0f, 1f)
                         translate(target.left, target.top) { drawLayer(coverPresentation) }
                     }
                 }

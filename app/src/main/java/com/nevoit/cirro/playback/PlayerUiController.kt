@@ -32,6 +32,9 @@ private const val SettleVelocity = 1.5f
  */
 class PlayerUiController {
 
+    /** 播放页动态封面的实时入口；设置页可直接修改，不依赖重新打开播放页。 */
+    var motionArtworkEnabled: Boolean by mutableStateOf(true)
+
     private val anim = Animatable(0f)
 
     /**

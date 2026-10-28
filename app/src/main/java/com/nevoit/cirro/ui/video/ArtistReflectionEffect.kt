@@ -24,9 +24,10 @@ internal class ArtistReflectionEffect(
     private val fitSourceWidth: Boolean = false,
     private val bleedRatio: Float = 0.5f,
     private val matchStaticCoverBlur: Boolean = false,
+    private val playerLayout: PlayerMotionVideoLayout? = null,
 ) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram =
-        ReflectionShaderProgram(context, useHdr, riseRatio, referenceSide, fitSourceWidth, bleedRatio, matchStaticCoverBlur)
+        ReflectionShaderProgram(context, useHdr, riseRatio, referenceSide, fitSourceWidth, bleedRatio, matchStaticCoverBlur, playerLayout)
 }
 
 @OptIn(UnstableApi::class)
@@ -38,6 +39,7 @@ private class ReflectionShaderProgram(
     private val fitSourceWidth: Boolean,
     private val bleedRatio: Float,
     private val matchStaticCoverBlur: Boolean,
+    private val playerLayout: PlayerMotionVideoLayout?,
 ) : BaseGlShaderProgram(useHdr, 1) {
     private val vertex =
         context.assets.open("shaders/artist_header.vert").bufferedReader().use { it.readText() }
@@ -80,10 +82,16 @@ private class ReflectionShaderProgram(
                     riseRatio = riseRatio,
                     bleedRatio = bleedRatio,
                     sourceHeight = (side.toFloat() * inputHeight / inputWidth).roundToInt().coerceAtLeast(1),
+                    outputHeight = playerLayout?.let { (side * it.heightToWidth).roundToInt().coerceAtLeast(1) },
+                    blurStartFraction = playerLayout?.blurStartFraction,
+                    reflectionSourceFraction = playerLayout?.reflectionSourceFraction,
+                    blurEndFraction = playerLayout?.blurEndFraction,
+                    blurCircleBottomFraction = playerLayout?.blurCircleBottomFraction,
+                    blurHorizontalScale = playerLayout?.blurHorizontalScale ?: 1f,
                 )
             } else ArtistReflectionGeometry(side, riseRatio, bleedRatio)
             // LPF 半径与封面 box 模糊的半径不等价，单独控制其强度并按处理分辨率折算。
-            val radius = (if (matchStaticCoverBlur) GlReflection.VideoRadiusPx else 60f) * side / referenceSide
+            val radius = (playerLayout?.blurRadiusPx ?: if (matchStaticCoverBlur) GlReflection.VideoRadiusPx else 60f) * side / referenceSide
             val limits = IntArray(1)
             GLES20.glGetIntegerv(GLES20.GL_MAX_TEXTURE_IMAGE_UNITS, limits, 0)
             val levels =
@@ -92,6 +100,8 @@ private class ReflectionShaderProgram(
             mirror.setFloatUniform("uHeight", geometry.height.toFloat())
             mirror.setFloatUniform("uRise", geometry.rise.coerceAtLeast(1).toFloat())
             mirror.setFloatUniform("uStripFraction", geometry.strip.toFloat() / geometry.sourceHeight)
+            mirror.setFloatUniform("uTopOffset", if (playerLayout != null) 0f else
+                (geometry.sourceHeight - geometry.height).coerceAtLeast(0).toFloat())
             val crop = minOf(inputWidth, inputHeight).toFloat()
             mirror.setFloatsUniform(
                 "uCrop", if (fitSourceWidth) floatArrayOf(0f, 0f, 1f, 1f) else floatArrayOf(
@@ -121,6 +131,7 @@ private class ReflectionShaderProgram(
             }
             composite = program(buildString {
                 if (matchStaticCoverBlur) append("#define REFLECTION_VIDEO_ORIENTATION\n")
+                if (playerLayout != null && matchStaticCoverBlur) append("#define REFLECTION_CIRCULAR_BLUR\n")
                 append("precision highp float;\nvarying vec2 vTexCoord;\n")
                 for (level in 0..levels) append("uniform sampler2D level$level;\n")
                 append("vec4 atLevel(vec2 p, int level) {\n")
@@ -135,7 +146,8 @@ private class ReflectionShaderProgram(
                 setFloatUniform("uRadius", radius)
                 // 解码分辨率会随 HLS 档位改变；上限按静态封面的参考分辨率折算，避免换档时改变模糊强度。
                 val maxLevel = if (matchStaticCoverBlur) {
-                    val referenceLevels = ceil(log2(maxOf(1f, 1.6f * GlReflection.VideoRadiusPx))).toInt()
+                    val referenceRadius = playerLayout?.blurRadiusPx ?: GlReflection.VideoRadiusPx
+                    val referenceLevels = ceil(log2(maxOf(1f, 1.6f * referenceRadius))).toInt()
                         .coerceAtMost(minOf(10, limits[0] - 1))
                     ((referenceLevels - GlReflection.MaxLodTrim).coerceAtLeast(1) +
                         log2(side.toFloat() / referenceSide)).coerceIn(0f, levels.toFloat())
@@ -143,6 +155,9 @@ private class ReflectionShaderProgram(
                 setFloatUniform("uMaxLevel", maxLevel)
                 setFloatUniform("uBlurStart", geometry.blurStart.toFloat())
                 setFloatUniform("uBlurHeight", geometry.blurHeight.coerceAtLeast(1).toFloat())
+                if (playerLayout != null && matchStaticCoverBlur) {
+                    setFloatUniform("uBlurHorizontalScale", playerLayout.blurHorizontalScale)
+                }
             }
             return Size(side, geometry.height)
         } catch (error: Exception) {

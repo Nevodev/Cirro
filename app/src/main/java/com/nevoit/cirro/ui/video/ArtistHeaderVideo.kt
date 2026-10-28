@@ -7,6 +7,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -43,10 +44,16 @@ internal fun ArtistHeaderVideo(
     fitSourceWidth: Boolean = false,
     bleedRatio: Float = 0.5f,
     matchStaticCoverBlur: Boolean = false,
+    playerLayout: PlayerMotionVideoLayout? = null,
+    revealDurationMillis: Int = 500,
+    onReadyChanged: (Boolean) -> Unit = {},
+    onFailure: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    val player = remember(context, url, riseRatio, referenceSide, lifecycle, fitSourceWidth, bleedRatio, matchStaticCoverBlur) {
+    val reportReady by rememberUpdatedState(onReadyChanged)
+    val reportFailure by rememberUpdatedState(onFailure)
+    val player = remember(context, url, riseRatio, referenceSide, lifecycle, fitSourceWidth, bleedRatio, matchStaticCoverBlur, playerLayout) {
         runCatching {
             ExoPlayer.Builder(context).build().apply {
                 volume = 0f
@@ -57,7 +64,11 @@ internal fun ArtistHeaderVideo(
                     .build()
             }
         }.onFailure { Log.w("ArtistVideo", "无法初始化艺人视频", it) }.getOrNull()
-    } ?: return
+    }
+    if (player == null) {
+        LaunchedEffect(url, playerLayout) { reportFailure() }
+        return
+    }
     var firstFrame by remember(player) { mutableStateOf(false) }
     var failed by remember(player) { mutableStateOf(false) }
     if (failed) return
@@ -65,7 +76,7 @@ internal fun ArtistHeaderVideo(
     val videoAlpha by key(player) {
         animateFloatAsState(
             targetValue = if (firstFrame) 1f else 0f,
-            animationSpec = tween(500),
+            animationSpec = tween(revealDurationMillis),
             label = "artistVideoAlpha",
         )
     }
@@ -81,22 +92,26 @@ internal fun ArtistHeaderVideo(
         player.playWhenReady = visible && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
     }
 
-    AndroidView(
-        factory = { viewContext ->
-            TextureView(viewContext).apply {
-                isOpaque = false
-                player.setVideoTextureView(this)
-            }
-        },
-        modifier = modifier.graphicsLayer { alpha = videoAlpha },
-        onRelease = { player.clearVideoTextureView(it) },
-    )
+    key(player) {
+        AndroidView(
+            factory = { viewContext ->
+                TextureView(viewContext).apply {
+                    isOpaque = false
+                    player.setVideoTextureView(this)
+                }
+            },
+            modifier = modifier.graphicsLayer { alpha = videoAlpha },
+            onRelease = { player.clearVideoTextureView(it) },
+        )
+    }
     DisposableEffect(player, lifecycle) {
         val listener = object : Player.Listener {
-            override fun onRenderedFirstFrame() { firstFrame = true }
+            override fun onRenderedFirstFrame() { firstFrame = true; reportReady(true) }
             override fun onPlayerError(error: PlaybackException) {
                 Log.w("ArtistVideo", "艺人视频播放失败，保留封面", error)
                 failed = true
+                reportReady(false)
+                reportFailure()
             }
         }
         val observer = LifecycleEventObserver { _, _ ->
@@ -106,7 +121,7 @@ internal fun ArtistHeaderVideo(
         lifecycle.addObserver(observer)
         try {
             player.setVideoEffects(listOf(ArtistReflectionEffect(
-                riseRatio, referenceSide, fitSourceWidth, bleedRatio, matchStaticCoverBlur,
+                riseRatio, referenceSide, fitSourceWidth, bleedRatio, matchStaticCoverBlur, playerLayout,
             )))
             val item = MediaItem.Builder().setUri(url).setMimeType(MimeTypes.APPLICATION_M3U8).build()
             player.setMediaSource(HlsMediaSource.Factory(DefaultHttpDataSource.Factory()).createMediaSource(item))
@@ -115,11 +130,14 @@ internal fun ArtistHeaderVideo(
         } catch (error: Exception) {
             Log.w("ArtistVideo", "无法准备艺人视频，保留封面", error)
             failed = true
+            reportReady(false)
+            reportFailure()
         }
         onDispose {
             lifecycle.removeObserver(observer)
             player.removeListener(listener)
             player.release()
+            reportReady(false)
         }
     }
 }
