@@ -40,17 +40,20 @@ internal fun ArtistHeaderVideo(
     referenceSide: Int,
     isVisible: Boolean = true,
     modifier: Modifier = Modifier,
+    fitSourceWidth: Boolean = false,
+    bleedRatio: Float = 0.5f,
+    matchStaticCoverBlur: Boolean = false,
 ) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    val player = remember(context, url, riseRatio, referenceSide, lifecycle) {
+    val player = remember(context, url, riseRatio, referenceSide, lifecycle, fitSourceWidth, bleedRatio, matchStaticCoverBlur) {
         runCatching {
             ExoPlayer.Builder(context).build().apply {
                 volume = 0f
                 repeatMode = Player.REPEAT_MODE_ONE
                 trackSelectionParameters = trackSelectionParameters.buildUpon()
                     .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
-                    .setMaxVideoSize(referenceSide, referenceSide)
+                    .setMaxVideoSize(referenceSide, if (fitSourceWidth) Int.MAX_VALUE else referenceSide)
                     .build()
             }
         }.onFailure { Log.w("ArtistVideo", "无法初始化艺人视频", it) }.getOrNull()
@@ -102,7 +105,9 @@ internal fun ArtistHeaderVideo(
         player.addListener(listener)
         lifecycle.addObserver(observer)
         try {
-            player.setVideoEffects(listOf(ArtistReflectionEffect(riseRatio, referenceSide)))
+            player.setVideoEffects(listOf(ArtistReflectionEffect(
+                riseRatio, referenceSide, fitSourceWidth, bleedRatio, matchStaticCoverBlur,
+            )))
             val item = MediaItem.Builder().setUri(url).setMimeType(MimeTypes.APPLICATION_M3U8).build()
             player.setMediaSource(HlsMediaSource.Factory(DefaultHttpDataSource.Factory()).createMediaSource(item))
             player.playWhenReady = visible && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)

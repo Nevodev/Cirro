@@ -10,6 +10,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
@@ -75,6 +76,7 @@ import com.nevoit.cirro.playback.PlayerUnderlay
 import com.nevoit.cirro.playback.PreparePlayerArtwork
 import com.nevoit.cirro.playback.rememberPlayerExpansionState
 import com.nevoit.cirro.ui.BottomShade
+import com.nevoit.cirro.ui.StatusBarAppearance
 import com.nevoit.material.clip.cornerMaskClip
 import com.nevoit.material.clip.cornerMaskCover
 import com.nevoit.material.core.component.BottomPopupMenuHost
@@ -246,9 +248,11 @@ fun BoxScope.Main() {
             .collect { value = it }
     }
     val artistPageSeeds = remember { mutableStateMapOf<Long, CoverSeed?>() }
+    val pageStatusBarIcons = remember { mutableStateMapOf<Long, Boolean>() }
     LaunchedEffect(navigator.backStack) {
         val retainedIds = navigator.backStack.map { it.id }.toSet()
         artistPageSeeds.keys.retainAll(retainedIds)
+        pageStatusBarIcons.keys.retainAll(retainedIds)
     }
     val currentEntry = navigator.current
     val coverHint = when (val destination = currentEntry.destination) {
@@ -351,6 +355,10 @@ fun BoxScope.Main() {
         rememberColorProducer(barContainerColor),
     )
     PreparePlayerArtwork(playerExpansion, playbackConnection)
+    StatusBarAppearance(
+        darkIcons = pageStatusBarIcons[currentEntry.id] ?: !isSystemInDarkTheme(),
+        player = playerExpansion,
+    )
     val underlayScale = remember(playerExpansion, playerUi) {
         {
             val progress =
@@ -403,6 +411,16 @@ fun BoxScope.Main() {
                             )
                     }
                 ) {
+                    val statusBarPageId = entry.id
+                    val onStatusBarAppearanceChanged = remember(statusBarPageId, navigator) {
+                        { darkIcons: Boolean? ->
+                            if (navigator.backStack.any { it.id == statusBarPageId }) {
+                                if (darkIcons == null) pageStatusBarIcons.remove(statusBarPageId)
+                                else pageStatusBarIcons[statusBarPageId] = darkIcons
+                            }
+                            Unit
+                        }
+                    }
                     when (val destination = destination) {
                         MainDestination.Tabs -> Box(modifier = Modifier.fillMaxSize()) {
                             MainTabs(
@@ -443,6 +461,7 @@ fun BoxScope.Main() {
                         MainDestination.LibraryLikedSongs -> LibraryLikedSongsRoute(
                             session = session,
                             onBack = ::back,
+                            onStatusBarAppearanceChanged = onStatusBarAppearanceChanged,
                             onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
                                 navigate(
                                     MainDestination.Collection(
@@ -530,6 +549,7 @@ fun BoxScope.Main() {
                                     titleHint = destination.titleHint,
                                     coverHint = destination.coverHint,
                                     authorHint = destination.authorHint,
+                                    onStatusBarAppearanceChanged = onStatusBarAppearanceChanged,
                                     onBack = ::back,
                                     onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
                                         navigate(
@@ -565,6 +585,7 @@ fun BoxScope.Main() {
                                     coverHint = destination.coverHint,
                                     authorHint = destination.authorHint,
                                     libraryAlbum = destination.libraryAlbum,
+                                    onStatusBarAppearanceChanged = onStatusBarAppearanceChanged,
                                     onBack = ::back,
                                     onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
                                         navigate(

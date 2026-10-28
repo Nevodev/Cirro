@@ -140,6 +140,7 @@ fun ArtistRoute(
     likedPlaylist: Boolean = false,
     authorHint: String = "",
     onPaletteChanged: (CoverSeed?) -> Unit = {},
+    onStatusBarAppearanceChanged: (Boolean?) -> Unit = {},
 ) = MaterialTheme(
     darkTheme = true,
     specs = MaterialTheme.specs,
@@ -313,6 +314,7 @@ fun ArtistRoute(
         onCoverError = { coverHintFailed = true },
         playingId = playingId,
         seed = seed,
+        onStatusBarAppearanceChanged = onStatusBarAppearanceChanged,
         onPlay = { index -> if (songs.isNotEmpty()) playback.playSongs(songs, index, queueSource) },
         onOpenAlbum = { album ->
             onOpenCollection(
@@ -414,6 +416,7 @@ private fun ArtistScreen(
     onCoverError: () -> Unit,
     playingId: Long?,
     seed: CoverSeed?,
+    onStatusBarAppearanceChanged: (Boolean?) -> Unit,
     onPlay: (Int) -> Unit,
     onOpenAlbum: (CollectionInfo) -> Unit,
     onRetryMoreWorks: () -> Unit,
@@ -496,6 +499,9 @@ private fun ArtistScreen(
         derivedStateOf { listState.layoutInfo.visibleItemsInfo.any { it.key == "header" } }
     }
     val showTopShade by listState.isScrolledPast(screenWidth * 0.75f)
+    ReportStatusBarAppearance(
+        seed, showTopShade, rememberColorProducer(backgroundColor), onStatusBarAppearanceChanged,
+    )
     val topShapeAlpha by animateFloatAsState(
         targetValue = if (showTopShade) 1f else 0f,
         animationSpec = tween(durationMillis = 200),

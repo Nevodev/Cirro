@@ -34,6 +34,8 @@
 //! 与原项目**唯一一处有意偏离**：[`resolve_place`] 探测失败时回落 `us` 但
 //! **不把这个回落值写进缓存** —— 理由见该函数的注释。
 
+pub mod albums;
+
 use base64::Engine as _;
 use once_cell::sync::Lazy;
 use regex_lite::Regex;

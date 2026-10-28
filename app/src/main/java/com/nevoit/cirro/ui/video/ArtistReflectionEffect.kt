@@ -12,16 +12,21 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.BaseGlShaderProgram
 import androidx.media3.effect.GlEffect
 import androidx.media3.effect.GlShaderProgram
+import com.nevoit.cirro.ui.GlReflection
 import kotlin.math.ceil
 import kotlin.math.log2
+import kotlin.math.roundToInt
 
 @OptIn(UnstableApi::class)
 internal class ArtistReflectionEffect(
     private val riseRatio: Float,
     private val referenceSide: Int,
+    private val fitSourceWidth: Boolean = false,
+    private val bleedRatio: Float = 0.5f,
+    private val matchStaticCoverBlur: Boolean = false,
 ) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram =
-        ReflectionShaderProgram(context, useHdr, riseRatio, referenceSide)
+        ReflectionShaderProgram(context, useHdr, riseRatio, referenceSide, fitSourceWidth, bleedRatio, matchStaticCoverBlur)
 }
 
 @OptIn(UnstableApi::class)
@@ -30,12 +35,15 @@ private class ReflectionShaderProgram(
     private val useHdr: Boolean,
     private val riseRatio: Float,
     private val referenceSide: Int,
+    private val fitSourceWidth: Boolean,
+    private val bleedRatio: Float,
+    private val matchStaticCoverBlur: Boolean,
 ) : BaseGlShaderProgram(useHdr, 1) {
     private val vertex =
         context.assets.open("shaders/artist_header.vert").bufferedReader().use { it.readText() }
-    private val compositeSource =
-        context.assets.open("shaders/artist_lpf_composite.frag").bufferedReader()
-            .use { it.readText() }
+    private val compositeSource = context.assets.open(
+        if (matchStaticCoverBlur) "shaders/reflection_composite.frag" else "shaders/artist_lpf_composite.frag"
+    ).bufferedReader().use { it.readText() }
     private val programs = mutableListOf<GlProgram>()
     private val pyramid = mutableListOf<GlTextureInfo>()
     private val outputFbo = IntArray(1)
@@ -63,14 +71,37 @@ private class ReflectionShaderProgram(
             pyramid.forEach { it.release() }
             pyramid.clear()
             composite?.let { it.delete(); programs.remove(it) }
-            val side = minOf(inputWidth, inputHeight, referenceSide)
-            geometry = ArtistReflectionGeometry(side, riseRatio)
+            composite = null
+            val side = if (fitSourceWidth) minOf(inputWidth, referenceSide)
+                else minOf(inputWidth, inputHeight, referenceSide)
+            geometry = if (fitSourceWidth) {
+                ArtistReflectionGeometry(
+                    side = side,
+                    riseRatio = riseRatio,
+                    bleedRatio = bleedRatio,
+                    sourceHeight = (side.toFloat() * inputHeight / inputWidth).roundToInt().coerceAtLeast(1),
+                )
+            } else ArtistReflectionGeometry(side, riseRatio, bleedRatio)
             // LPF 半径与封面 box 模糊的半径不等价，单独控制其强度并按处理分辨率折算。
-            val radius = 60f * side / referenceSide
+            val radius = (if (matchStaticCoverBlur) GlReflection.VideoRadiusPx else 60f) * side / referenceSide
             val limits = IntArray(1)
             GLES20.glGetIntegerv(GLES20.GL_MAX_TEXTURE_IMAGE_UNITS, limits, 0)
             val levels =
                 ceil(log2(maxOf(1f, 1.6f * radius))).toInt().coerceAtMost(minOf(10, limits[0] - 1))
+            mirror.setFloatUniform("uSide", geometry.sourceHeight.toFloat())
+            mirror.setFloatUniform("uHeight", geometry.height.toFloat())
+            mirror.setFloatUniform("uRise", geometry.rise.coerceAtLeast(1).toFloat())
+            mirror.setFloatUniform("uStripFraction", geometry.strip.toFloat() / geometry.sourceHeight)
+            val crop = minOf(inputWidth, inputHeight).toFloat()
+            mirror.setFloatsUniform(
+                "uCrop", if (fitSourceWidth) floatArrayOf(0f, 0f, 1f, 1f) else floatArrayOf(
+                    (inputWidth - crop) / (2f * inputWidth),
+                    (inputHeight - crop) / (2f * inputHeight),
+                    crop / inputWidth,
+                    crop / inputHeight,
+                )
+            )
+            if (geometry.blurHeight == 0) return Size(side, geometry.height)
             for (level in 0..levels) {
                 val width = (side shr level).coerceAtLeast(1)
                 val height = (geometry.height shr level).coerceAtLeast(1)
@@ -88,20 +119,8 @@ private class ReflectionShaderProgram(
                     throw error
                 }
             }
-            mirror.setFloatUniform("uSide", side.toFloat())
-            mirror.setFloatUniform("uHeight", geometry.height.toFloat())
-            mirror.setFloatUniform("uRise", geometry.rise.toFloat())
-            mirror.setFloatUniform("uStripFraction", geometry.strip.toFloat() / side)
-            val crop = minOf(inputWidth, inputHeight).toFloat()
-            mirror.setFloatsUniform(
-                "uCrop", floatArrayOf(
-                    (inputWidth - crop) / (2f * inputWidth),
-                    (inputHeight - crop) / (2f * inputHeight),
-                    crop / inputWidth,
-                    crop / inputHeight,
-                )
-            )
             composite = program(buildString {
+                if (matchStaticCoverBlur) append("#define REFLECTION_VIDEO_ORIENTATION\n")
                 append("precision highp float;\nvarying vec2 vTexCoord;\n")
                 for (level in 0..levels) append("uniform sampler2D level$level;\n")
                 append("vec4 atLevel(vec2 p, int level) {\n")
@@ -114,9 +133,16 @@ private class ReflectionShaderProgram(
                     floatArrayOf(side.toFloat(), geometry.height.toFloat())
                 )
                 setFloatUniform("uRadius", radius)
-                setFloatUniform("uMaxLevel", levels.toFloat())
+                // 解码分辨率会随 HLS 档位改变；上限按静态封面的参考分辨率折算，避免换档时改变模糊强度。
+                val maxLevel = if (matchStaticCoverBlur) {
+                    val referenceLevels = ceil(log2(maxOf(1f, 1.6f * GlReflection.VideoRadiusPx))).toInt()
+                        .coerceAtMost(minOf(10, limits[0] - 1))
+                    ((referenceLevels - GlReflection.MaxLodTrim).coerceAtLeast(1) +
+                        log2(side.toFloat() / referenceSide)).coerceIn(0f, levels.toFloat())
+                } else levels.toFloat()
+                setFloatUniform("uMaxLevel", maxLevel)
                 setFloatUniform("uBlurStart", geometry.blurStart.toFloat())
-                setFloatUniform("uBlurHeight", geometry.blurHeight.toFloat())
+                setFloatUniform("uBlurHeight", geometry.blurHeight.coerceAtLeast(1).toFloat())
             }
             return Size(side, geometry.height)
         } catch (error: Exception) {
@@ -126,6 +152,13 @@ private class ReflectionShaderProgram(
 
     override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
         try {
+            if (pyramid.isEmpty()) {
+                mirror.use()
+                mirror.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
+                draw(mirror)
+                GlUtil.checkGlError()
+                return
+            }
             // Media3 拥有最终输出 FBO；中间各层渲染结束后必须恢复它，不能把内部纹理交给下游。
             GLES20.glGetIntegerv(GLES20.GL_FRAMEBUFFER_BINDING, outputFbo, 0)
             focus(pyramid[0])

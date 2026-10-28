@@ -58,9 +58,9 @@ private const val NeutralChroma = 0.0
 private const val DarkSeedTone = 40.0
 
 /**
- * 一张封面的取色结果：种子色 + primary 色带 + 明暗判定。
+ * 一张封面的取色结果：种子色 + primary 色带 + 明暗判定，以及状态栏所需的顶部亮度。
  *
- * 只做三件事：[seed] 是种子色（ARGB）——彩色封面来自官方 Score 的量化簇，灰阶封面没有彩色
+ * [seed] 是种子色（ARGB）——彩色封面来自官方 Score 的量化簇，灰阶封面没有彩色
  * 簇可挑，是合成的中性灰；[primary] 是种子进 HCT 后生成的 tonal 色带——色相锁死、彩度被钳制、
  * 明度任意档可取；[dark] 是**封面整体明暗**的判定（取色时算好，消费方直接用）。没有 secondary /
  * tertiary，也不拼整套 ColorScheme：配色自己拿档位试。
@@ -76,6 +76,8 @@ class CoverSeed(
      */
     val dark: Boolean,
     private val primary: TonalPalette,
+    /** 与头部相同的居中方形裁切，取顶部 10% 区域的相对亮度，独立于整页的 [dark] 判定。 */
+    val topLuminance: Double? = null,
 ) {
     /** primary 色带上任意明度档（0–100）的颜色，ARGB。 */
     fun primaryTone(tone: Int): Int = primary.tone(tone)
@@ -170,6 +172,7 @@ class CoverPalette(
                     hue = hct.hue,
                     chroma = minOf(hct.chroma, SeedChromaCap),
                 ),
+                topLuminance = coverTopLuminance(pixels, bitmap.width, bitmap.height),
             )
         } catch (t: Throwable) {
             Log.d(Tag, "提取抛了异常 url=$url", t)

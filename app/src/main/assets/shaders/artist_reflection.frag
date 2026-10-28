@@ -8,7 +8,7 @@ uniform float uRise;
 uniform float uStripFraction;
 
 void main() {
-    float top = (1.0 - vTexCoord.y) * uHeight;
+    float top = (1.0 - vTexCoord.y) * uHeight + max(uSide - uHeight, 0.0);
     float sourceTop = top <= uSide
         ? top / uSide
         : 1.0 - (top - uSide) / uRise * uStripFraction;

@@ -1,6 +1,7 @@
 package com.nevoit.cirro.ui.video
 
 import android.graphics.Canvas
+import android.graphics.Bitmap
 import android.graphics.Rect
 import android.graphics.SurfaceTexture
 import android.opengl.EGL14
@@ -21,6 +22,9 @@ import androidx.media3.effect.BaseGlShaderProgram
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.nevoit.cirro.detail.HeaderBleedRatio
+import com.nevoit.cirro.ui.GlReflection
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -35,6 +39,65 @@ import kotlin.math.abs
 @OptIn(UnstableApi::class)
 @RunWith(AndroidJUnit4::class)
 class ArtistVideoRenderingTest {
+    @Test
+    fun albumVideoBlurMatchesTheStaticCoverOnTheSameFrame() {
+        val side = 256
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val pixels = IntArray(side * side) { index ->
+            val x = index % side
+            val y = index / side
+            val blue = if ((x / 8 + y / 8) % 2 == 0) 0 else 255
+            (255 shl 24) or (y shl 16) or (x shl 8) or blue
+        }
+        val inputBitmap = Bitmap.createBitmap(pixels, side, side, Bitmap.Config.ARGB_8888)
+        val reference = checkNotNull(runBlocking { GlReflection.render(context, inputBitmap, 0.5f, HeaderBleedRatio) })
+        try {
+            withGl {
+                val shader = ArtistReflectionEffect(
+                    0.5f, side, fitSourceWidth = true, bleedRatio = HeaderBleedRatio, matchStaticCoverBlur = true,
+                ).toGlShaderProgram(context, false) as BaseGlShaderProgram
+                val output = shader.configure(side, side)
+                assertEquals(reference.width, output.width)
+                assertEquals(reference.height, output.height)
+                val input = GlUtil.createTexture(side, side, false)
+                val bytes = ByteBuffer.allocateDirect(side * side * 4)
+                for (y in side - 1 downTo 0) for (x in 0 until side) {
+                    val color = pixels[y * side + x]
+                    bytes.put((color shr 16).toByte()).put((color shr 8).toByte()).put(color.toByte()).put(255.toByte())
+                }
+                bytes.rewind()
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, input)
+                GLES20.glTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, side, side, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, bytes)
+                val target = GlUtil.createTexture(output.width, output.height, false)
+                val fbo = GlUtil.createFboForTexture(target)
+                try {
+                    GlUtil.focusFramebufferUsingCurrentContext(fbo, output.width, output.height)
+                    shader.drawFrame(input, 0)
+                    val rendered = ByteBuffer.allocateDirect(output.width * output.height * 4)
+                    GLES20.glReadPixels(0, 0, output.width, output.height, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, rendered)
+                    GlUtil.checkGlError()
+                    for (top in 0 until output.height step 7) for (x in 0 until side step 7) {
+                        val offset = ((output.height - 1 - top) * side + x) * 4
+                        val expected = reference.getPixel(x, top)
+                        for (channel in 0..2) {
+                            val actual = rendered.get(offset + channel).toInt() and 255
+                            val value = (expected shr (16 - channel * 8)) and 255
+                            assertTrue("Static/video mismatch at $x,$top channel $channel: $value/$actual", abs(actual - value) <= 3)
+                        }
+                    }
+                } finally {
+                    shader.release()
+                    GlUtil.deleteFbo(fbo)
+                    GlUtil.deleteTexture(target)
+                    GlUtil.deleteTexture(input)
+                }
+            }
+        } finally {
+            reference.recycle()
+            inputBitmap.recycle()
+        }
+    }
+
     @Test
     fun reflectionSamplesTheSameBottomStripInReverse() {
         withGl {
@@ -118,6 +181,71 @@ class ArtistVideoRenderingTest {
                     assertTrue(abs((rendered.get(offset + 1).toInt() and 255) - 40) <= 1)
                 }
                 for (offset in 3 until rendered.capacity() step 4) assertEquals(255, rendered.get(offset).toInt() and 255)
+            } finally {
+                shader.release()
+                GlUtil.deleteFbo(fbo)
+                GlUtil.deleteTexture(target)
+                GlUtil.deleteTexture(input)
+            }
+        }
+    }
+
+    @Test
+    fun portraitFitsWidthAndOnlyTheExtensionBlurs() {
+        renderPortrait(inputHeight = 128) { rendered, width, height ->
+            for (top in listOf(8, 64, 120, 126)) {
+                val offset = ((height - 1 - top) * width + 20) * 4
+                assertTrue("Portrait row $top was cropped or blurred", abs((rendered.get(offset).toInt() and 255) - top) <= 1)
+                assertTrue(abs((rendered.get(offset + 1).toInt() and 255) - 40) <= 1)
+                assertTrue("Original video lost sharpness", (rendered.get(offset + 2).toInt() and 255) <= 1)
+            }
+            val bottom = ((height - 1 - 140) * width + 48) * 4
+            assertTrue("Extension is not blurred", (rendered.get(bottom + 2).toInt() and 255) in 60..190)
+            for (offset in 3 until rendered.capacity() step 4) assertEquals(255, rendered.get(offset).toInt() and 255)
+        }
+    }
+
+    @Test
+    fun portraitTallerThanHeaderAlignsBottomWithoutBlur() {
+        renderPortrait(inputHeight = 192) { rendered, width, height ->
+            for (top in listOf(8, 64, 140)) {
+                val offset = ((height - 1 - top) * width + 20) * 4
+                val sourceTop = top + 192 - height
+                assertTrue("Tall video did not align its bottom", abs((rendered.get(offset).toInt() and 255) - sourceTop) <= 1)
+                assertTrue(abs((rendered.get(offset + 1).toInt() and 255) - 40) <= 1)
+                assertTrue("Video that fills the header must remain sharp", (rendered.get(offset + 2).toInt() and 255) <= 1)
+            }
+        }
+    }
+
+    private fun renderPortrait(inputHeight: Int, verify: (ByteBuffer, Int, Int) -> Unit) {
+        withGl {
+            val width = 96
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val shader = ArtistReflectionEffect(0.5f, width, fitSourceWidth = true, bleedRatio = 0f)
+                .toGlShaderProgram(context, false) as BaseGlShaderProgram
+            val output = shader.configure(width, inputHeight)
+            assertEquals(width, output.width)
+            assertEquals(144, output.height)
+            val input = GlUtil.createTexture(width, inputHeight, false)
+            val pixels = ByteBuffer.allocateDirect(width * inputHeight * 4)
+            for (y in 0 until inputHeight) for (x in 0 until width) {
+                val top = inputHeight - 1 - y
+                pixels.put(top.toByte()).put((x * 2).toByte())
+                    .put(if (x % 2 == 0) 0.toByte() else 255.toByte()).put(255.toByte())
+            }
+            pixels.rewind()
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, input)
+            GLES20.glTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, width, inputHeight, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, pixels)
+            val target = GlUtil.createTexture(output.width, output.height, false)
+            val fbo = GlUtil.createFboForTexture(target)
+            try {
+                GlUtil.focusFramebufferUsingCurrentContext(fbo, output.width, output.height)
+                shader.drawFrame(input, 0)
+                val rendered = ByteBuffer.allocateDirect(output.width * output.height * 4)
+                GLES20.glReadPixels(0, 0, output.width, output.height, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, rendered)
+                GlUtil.checkGlError()
+                verify(rendered, output.width, output.height)
             } finally {
                 shader.release()
                 GlUtil.deleteFbo(fbo)

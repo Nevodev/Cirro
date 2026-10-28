@@ -2,7 +2,6 @@ package com.nevoit.cirro.playback
 
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.core.updateTransition
@@ -35,7 +34,6 @@ import androidx.compose.foundation.layout.navigationBarsIgnoringVisibility
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -74,7 +72,6 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
@@ -83,7 +80,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
 import androidx.compose.ui.zIndex
-import androidx.core.view.WindowCompat
 import coil3.compose.AsyncImagePainter
 import coil3.BitmapImage
 import coil3.compose.rememberAsyncImagePainter
@@ -293,32 +289,6 @@ fun PlayerLayer(
 ) {
     if (!controller.present) return
 
-    val window = LocalActivity.current?.window
-    val view = LocalView.current
-    val statusBarHeight = WindowInsets.statusBars.getTop(LocalDensity.current)
-    LaunchedEffect(window, view, expansion, statusBarHeight) {
-        val currentWindow = window ?: return@LaunchedEffect
-        val insetsController = WindowCompat.getInsetsController(currentWindow, view)
-        var defaultLightAppearance: Boolean? = null
-        try {
-            snapshotFlow { expansion.overlapsStatusBar(statusBarHeight) }.collect { overlaps ->
-                if (overlaps) {
-                    if (defaultLightAppearance == null) {
-                        defaultLightAppearance = insetsController.isAppearanceLightStatusBars
-                    }
-                    insetsController.isAppearanceLightStatusBars = false
-                } else {
-                    defaultLightAppearance?.let {
-                        insetsController.isAppearanceLightStatusBars = it
-                    }
-                    defaultLightAppearance = null
-                }
-            }
-        } finally {
-            // Insets or activity changes can cancel the collector while the player still overlaps.
-            defaultLightAppearance?.let { insetsController.isAppearanceLightStatusBars = it }
-        }
-    }
     BackHandler(enabled = controller.acceptsInput) { controller.close() }
     DisposableEffect(expansion) {
         onDispose { expansion.releasePage() }

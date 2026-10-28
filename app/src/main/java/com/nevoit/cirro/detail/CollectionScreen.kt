@@ -24,11 +24,14 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -38,6 +41,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -58,6 +62,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.nevoit.cirro.R
 import com.nevoit.cirro.data.AccountRepository
+import com.nevoit.cirro.data.AppleAlbumRepository
 import com.nevoit.cirro.data.LibraryRepository
 import com.nevoit.cirro.data.model.CollectionInfo
 import com.nevoit.cirro.data.model.CollectionKind
@@ -74,6 +79,7 @@ import com.nevoit.cirro.home.Section
 import com.nevoit.cirro.home.dataOrNull
 import com.nevoit.cirro.palette.CoverPalette
 import com.nevoit.cirro.palette.CoverSeed
+import com.nevoit.cirro.palette.collectionStatusBarDarkIcons
 import com.nevoit.cirro.playback.PlaybackConnection
 import com.nevoit.cirro.ui.BottomShade
 import com.nevoit.cirro.ui.ReflectionTransformation
@@ -82,6 +88,7 @@ import com.nevoit.cirro.ui.SongMenuViewModel
 import com.nevoit.cirro.ui.TopShade
 import com.nevoit.cirro.ui.TrackRow
 import com.nevoit.cirro.ui.resolvePosition
+import com.nevoit.cirro.ui.video.ArtistHeaderVideo
 import com.nevoit.kinetic.layout.overscroll.rememberOffsetOverscrollEffect
 import com.nevoit.material.core.animation.animatePremultipliedColorAsState
 import com.nevoit.material.core.component.BottomPopupMenuScope
@@ -100,6 +107,7 @@ import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.local.ProvideContentColor
 import com.nevoit.material.theme.tokens.Springs
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
@@ -128,6 +136,7 @@ fun CollectionRoute(
     libraryAlbum: Boolean = false,
     likedPlaylist: Boolean = false,
     authorHint: String = "",
+    onStatusBarAppearanceChanged: (Boolean?) -> Unit = {},
 ) {
     val viewModel: CollectionViewModel = koinViewModel {
         parametersOf(kind, id, titleHint)
@@ -224,6 +233,21 @@ fun CollectionRoute(
         tracksRevealed = true
     }
 
+    val appleAlbums = koinInject<AppleAlbumRepository>()
+    var videoUrl by rememberSaveable(kind, id) { mutableStateOf<String?>(null) }
+    LaunchedEffect(viewModel, appleAlbums, pageTransition) {
+        if (kind != CollectionKind.ALBUM || videoUrl != null) return@LaunchedEffect
+        val match = appleAlbums.cached(id) ?: run {
+            val loaded = viewModel.state.first { it.info is Section.Ready && it.songs is Section.Ready }
+            appleAlbums.resolve(loaded.info.dataOrNull!!, loaded.songs.dataOrNull.orEmpty())
+        }
+        if (match != null) {
+            val url = appleAlbums.video(match)
+            pageTransition?.awaitNearlySettled()
+            videoUrl = url
+        }
+    }
+
     // 上面那拍（页面动画 settle → `revealTracks()`）一到就显示，不等曲目数据、也不看行有没有画出来。
     // `tracksRevealed` 就是这次 settle 的标记，所以头部和曲目是同一个放行点。
     // 不压这一下的话，info 会在动画中途落地，头部自己先重排一次：作者/元信息多一行、
@@ -266,9 +290,11 @@ fun CollectionRoute(
         displayTitle = viewModel.displayTitle,
         authorHint = authorHint,
         coverUrl = coverUrl,
+        videoUrl = videoUrl,
         onCoverError = { coverHintFailed = true },
         playingId = playingId,
         seed = seed,
+        onStatusBarAppearanceChanged = onStatusBarAppearanceChanged,
         onPlay = { index -> if (songs.isNotEmpty()) playback.playSongs(songs, index, queueSource) },
         onOpenAlbum = { album ->
             onOpenCollection(
@@ -368,9 +394,11 @@ private fun CollectionScreen(
     displayTitle: String,
     authorHint: String,
     coverUrl: String,
+    videoUrl: String?,
     onCoverError: () -> Unit,
     playingId: Long?,
     seed: CoverSeed?,
+    onStatusBarAppearanceChanged: (Boolean?) -> Unit,
     onPlay: (Int) -> Unit,
     onOpenAlbum: (CollectionInfo) -> Unit,
     onRetryMoreWorks: () -> Unit,
@@ -438,6 +466,9 @@ private fun CollectionScreen(
 
     val screenWidth = LocalWindowInfo.current.containerDpSize.width
     val listState = rememberLazyListState()
+    val videoVisible by remember(listState) {
+        derivedStateOf { listState.layoutInfo.visibleItemsInfo.any { it.key == "header" } }
+    }
     val density = LocalDensity.current
     val searchThresholdPx = with(density) { CollectionSearchPullThreshold.toPx() }
     val dismissThresholdPx = LocalViewConfiguration.current.touchSlop
@@ -465,6 +496,7 @@ private fun CollectionScreen(
     }
     BackHandler(enabled = search.revealed, onBack = closeSearch)
     val showTopShade by listState.isScrolledPast(screenWidth * 0.75f)
+    ReportStatusBarAppearance(seed, showTopShade || searching, backgroundColor, onStatusBarAppearanceChanged)
     val topShapeAlpha by animateFloatAsState(
         targetValue = if (showTopShade) 1f else 0f,
         animationSpec = tween(durationMillis = 200),
@@ -533,6 +565,8 @@ private fun CollectionScreen(
                         displayTitle = displayTitle,
                         authorHint = authorHint,
                         coverUrl = coverUrl,
+                        videoUrl = videoUrl,
+                        videoVisible = videoVisible,
                         onCoverError = onCoverError,
                         backgroundColor = backgroundColor,
                         buttonColor = buttonColor,
@@ -730,6 +764,30 @@ private fun CollectionScreen(
     }
 }
 
+@Composable
+internal fun ReportStatusBarAppearance(
+    seed: CoverSeed?,
+    backgroundVisible: Boolean,
+    backgroundColor: ColorProducer,
+    onChanged: (Boolean?) -> Unit,
+) {
+    val currentSeed by rememberUpdatedState(seed)
+    val currentBackgroundVisible by rememberUpdatedState(backgroundVisible)
+    val currentBackground by rememberUpdatedState(backgroundColor)
+    val report by rememberUpdatedState(onChanged)
+    LaunchedEffect(Unit) {
+        // 动画颜色留在 snapshotFlow 中读取，只在黑白图标的选择变化时通知宿主。
+        snapshotFlow {
+            collectionStatusBarDarkIcons(
+                dark = currentSeed?.dark,
+                topLuminance = currentSeed?.topLuminance,
+                backgroundVisible = currentBackgroundVisible,
+                backgroundLuminance = if (currentBackgroundVisible) currentBackground().luminance().toDouble() else null,
+            )
+        }.collect { report(it) }
+    }
+}
+
 /**
  * 全幅头部：封面本体占满屏宽（出血到状态栏底下），下方接一段**倒影带**——
  * 用 [ReflectionTransformation] 按屏宽现算，倒影上的渐变压着标题、作者、元信息和按钮排。
@@ -744,6 +802,8 @@ private fun HeaderBlock(
     displayTitle: String,
     authorHint: String,
     coverUrl: String,
+    videoUrl: String?,
+    videoVisible: Boolean,
     onCoverError: () -> Unit,
     backgroundColor: ColorProducer,
     buttonColor: ColorProducer,
@@ -763,24 +823,39 @@ private fun HeaderBlock(
             .fillMaxWidth()
             .height(screenWidth + HeaderRise)
     ) {
-        if (coverUrl.isNotEmpty()) {
-            AsyncImage(
-                model = headerCoverModel(coverUrl, screenWidth.value.toInt()),
-                contentDescription = null,
-                onError = { onCoverError() },
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .graphicsLayer {
-                        val overscrollOffset = overscrollOffsetY()
-                        val scale =
-                            (screenWidthPx + overscrollOffset + risePx) / (screenWidthPx + risePx)
-                        scaleX = scale
-                        scaleY = scale
-                        transformOrigin = TransformOrigin(0.5f, 1f)
-
-                    }
-                    .fillMaxSize(),
-            )
+        Box(
+            modifier = Modifier
+                .graphicsLayer {
+                    val overscrollOffset = overscrollOffsetY()
+                    val scale =
+                        (screenWidthPx + overscrollOffset + risePx) / (screenWidthPx + risePx)
+                    scaleX = scale
+                    scaleY = scale
+                    transformOrigin = TransformOrigin(0.5f, 1f)
+                }
+                .fillMaxSize(),
+        ) {
+            if (coverUrl.isNotEmpty()) {
+                AsyncImage(
+                    model = headerCoverModel(coverUrl, screenWidth.value.toInt()),
+                    contentDescription = null,
+                    onError = { onCoverError() },
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            if (videoUrl != null) {
+                ArtistHeaderVideo(
+                    url = videoUrl,
+                    riseRatio = HeaderRise.value / screenWidth.value,
+                    referenceSide = minOf(screenWidthPx, HeaderCoverCapPx).coerceAtLeast(1),
+                    isVisible = videoVisible,
+                    fitSourceWidth = true,
+                    bleedRatio = HeaderBleedRatio,
+                    matchStaticCoverBlur = true,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
 
         Box(

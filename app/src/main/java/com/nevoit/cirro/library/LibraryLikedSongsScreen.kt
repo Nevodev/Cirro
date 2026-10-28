@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -31,6 +32,7 @@ fun BoxScope.LibraryLikedSongsRoute(
     session: Session,
     onBack: () -> Unit,
     onOpenCollection: OpenCollection,
+    onStatusBarAppearanceChanged: (Boolean?) -> Unit = {},
 ) {
     val repository = koinInject<LibraryRepository>()
     val library by repository.snapshot.collectAsStateWithLifecycle()
@@ -38,6 +40,10 @@ fun BoxScope.LibraryLikedSongsRoute(
     val error by repository.error.collectAsStateWithLifecycle()
     val viewModel = koinViewModel<LibraryViewModel>()
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refresh() }
+    val showsCollection = snapshot != null && snapshot.likedPlaylistId > 0
+    LaunchedEffect(showsCollection, onStatusBarAppearanceChanged) {
+        if (!showsCollection) onStatusBarAppearanceChanged(null)
+    }
 
     if (snapshot != null && snapshot.likedPlaylistId > 0) {
         CollectionRoute(
@@ -48,6 +54,7 @@ fun BoxScope.LibraryLikedSongsRoute(
             onBack = onBack,
             onOpenCollection = onOpenCollection,
             likedPlaylist = true,
+            onStatusBarAppearanceChanged = onStatusBarAppearanceChanged,
         )
     } else {
         LazyColumn(

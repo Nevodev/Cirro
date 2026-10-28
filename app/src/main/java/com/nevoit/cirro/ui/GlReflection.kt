@@ -59,7 +59,7 @@ internal object GlReflection {
      * `referenceSide` 是同一个量（都是 `min(屏宽, HeaderCoverCapPx)`），所以落到这里是常量 60。
      * 合成 shader 还会再乘 1.6，峰值半径 96px —— 跟视频完全一致。
      */
-    private const val VideoRadiusPx = 60f
+    internal const val VideoRadiusPx = 60f
 
     /**
      * 合成时**不采样**最粗的那几级。1024 宽出 8 级金字塔，第 7 级只有 8x10，放大 128 倍画出来
@@ -68,7 +68,7 @@ internal object GlReflection {
      *
      * 想更糊：改成 0（把最粗一级也放进来，观感就跟视频完全一致）；想更清晰：往 1 以上加。
      */
-    private const val MaxLodTrim = 1
+    internal const val MaxLodTrim = 1
 
     private val executor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "reflection-gl").apply { isDaemon = true }

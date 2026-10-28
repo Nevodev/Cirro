@@ -43,7 +43,11 @@ vec4 sampleLod(vec2 p, float lod) {
 }
 
 void main() {
+    #ifdef REFLECTION_VIDEO_ORIENTATION
+    float top = (1.0 - vTexCoord.y) * uImageSize.y;
+    #else
     float top = vTexCoord.y * uImageSize.y;
+    #endif
     float intensity = clamp((top - uBlurStart) / uBlurHeight, 0.0, 1.0);
     // Radius grows like intensity^RampPower; the sub-2 px softening is the video's, so the clear end
     // does not pop into blur on the first few rows.
