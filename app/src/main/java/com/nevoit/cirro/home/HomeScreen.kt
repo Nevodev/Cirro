@@ -106,7 +106,7 @@ private val CardRise = 72.dp
 private val CardHeight = CardWidth + CardRise
 
 private val CardPadding = 16.dp
-private val MemoryLabelFont = FontFamily(Font(R.font.inter_regular, FontWeight.Normal))
+private val MemoryLabelFont = FontFamily(Font(R.font.inter_display_regular, FontWeight.Normal))
 
 /**
  * 电台卡渐变的两端（HCT tone）。
