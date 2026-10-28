@@ -8,6 +8,7 @@ import com.nevoit.cirro.data.installImageLoader
 import com.nevoit.cirro.di.appModule
 import com.nevoit.cirro.lyrics.data.AppleMusicAccountRepository
 import com.nevoit.cirro.lyrics.data.LyricsBridge
+import com.nevoit.cirro.playback.PlaybackConnection
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.context.startKoin
 import java.io.File
@@ -36,6 +37,7 @@ class CirroApplication : Application() {
         koin.get<SongLikeRepository>()
         koin.get<LibraryRepository>()
         koin.get<AccountRepository>().restore()
+        koin.get<PlaybackConnection>()
 
         // Apple Music 那份凭据也要回灌给歌词引擎（另一个 .so，自己持一份）。
         // 它没按时推，取词链第 1 级会一直以为自己没配 token。

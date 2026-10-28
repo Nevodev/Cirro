@@ -13,6 +13,7 @@ import com.nevoit.cirro.data.HomeRepository
 import com.nevoit.cirro.data.IntelligenceRepository
 import com.nevoit.cirro.data.LibraryRepository
 import com.nevoit.cirro.data.PlayQueueStore
+import com.nevoit.cirro.data.PlaybackStore
 import com.nevoit.cirro.data.RadioRepository
 import com.nevoit.cirro.data.SessionStore
 import com.nevoit.cirro.data.SongLikeRepository
@@ -62,13 +63,14 @@ val appModule = module {
 
     // 播放队列的真相源：PlaybackConnection 写（它拿着 MediaController），
     // PlaybackService 读（打卡要 sourceId）。
-    single { PlayQueueStore() }
+    single { PlaybackStore(androidContext(), get(ApplicationScope)) }
+    single { PlayQueueStore(get<PlaybackStore>()::save) }
 
     single { AccountRepository(get(), get(ApplicationScope)) }
 
     single { IntelligenceRepository() }
     single { RadioRepository() }
-    single { PlaybackConnection(androidContext(), get(ApplicationScope), get(), get(), get(), get()) }
+    single { PlaybackConnection(androidContext(), get(ApplicationScope), get(), get(), get(), get(), get()) }
     single { AudioAnalysisStore() }
 
     // 播放页的展开进度。迷你条和播放页分属两层，要由同一个值驱动，所以由 App 持有。

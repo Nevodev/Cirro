@@ -273,4 +273,9 @@ private fun PlaybackQueue.baseSlotsAfterCurrent(): List<Int> =
 
 private val EntryUidSeq = AtomicLong()
 
+internal fun PlaybackQueue.reserveEntryUids() {
+    val highest = entries.maxOfOrNull { it.uid } ?: return
+    EntryUidSeq.updateAndGet { maxOf(it, highest) }
+}
+
 private fun nextEntryUid(): Long = EntryUidSeq.incrementAndGet()

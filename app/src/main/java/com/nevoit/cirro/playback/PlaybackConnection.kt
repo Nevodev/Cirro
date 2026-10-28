@@ -16,6 +16,8 @@ import com.nevoit.cirro.data.IntelligenceRepository
 import com.nevoit.cirro.data.IntelligenceSeed
 import com.nevoit.cirro.data.NcmBridge
 import com.nevoit.cirro.data.PlayQueueStore
+import com.nevoit.cirro.data.PlaybackSnapshot
+import com.nevoit.cirro.data.PlaybackStore
 import com.nevoit.cirro.data.RadioOpening
 import com.nevoit.cirro.data.RadioRepository
 import com.nevoit.cirro.data.model.CollectionKind
@@ -149,6 +151,7 @@ class PlaybackConnection(
     private val account: AccountRepository,
     private val intelligence: IntelligenceRepository,
     private val radio: RadioRepository,
+    private val playbackStore: PlaybackStore,
 ) {
 
     private val appContext = context.applicationContext
@@ -329,24 +332,39 @@ class PlaybackConnection(
     }
 
     init {
-        val token = SessionToken(appContext, ComponentName(appContext, PlaybackService::class.java))
-        val future = MediaController.Builder(appContext, token).buildAsync()
-        // 只在主线程回调：MediaController 必须用在它被创建的那个 looper 上
-        future.addListener(
-            {
-                runCatching { future.get() }
-                    .onSuccess { controller ->
-                        this.controller = controller
-                        controller.addListener(listener)
-                        // 进程里服务可能比这个连接活得久（Activity 重建过），先把模式对齐
-                        controller.repeatMode = queueStore.queue.value.repeatMode()
-                    }
-                    .onFailure {
-                        _state.value = _state.value.copy(error = "播放器没连上")
-                    }
-            },
-            ContextCompat.getMainExecutor(appContext),
-        )
+        scope.launch(Dispatchers.Main) {
+            val saved = withContext(Dispatchers.IO) { playbackStore.read() }
+            if (queueStore.queue.value.entries.isEmpty() && saved != null) {
+                queueStore.restore(saved)
+                val song = saved.queue.entries.getOrNull(saved.queue.currentIndex)?.song
+                _state.value = PlaybackState(
+                    song = song?.let { NowPlaying(it.id, it.name, it.artistText, it.cover) },
+                    positionMs = saved.positionMs,
+                    durationMs = song?.durationMs?.coerceAtLeast(0L) ?: 0L,
+                )
+            }
+            val token = SessionToken(appContext, ComponentName(appContext, PlaybackService::class.java))
+            val future = MediaController.Builder(appContext, token).buildAsync()
+            // 缓存先提供界面，再连接服务；已有的实时播放永远优先于磁盘快照。
+            future.addListener(
+                {
+                    runCatching { future.get() }
+                        .onSuccess { controller ->
+                            this@PlaybackConnection.controller = controller
+                            val queue = queueStore.queue.value
+                            controller.restorePlayback(PlaybackSnapshot(queue, queueStore.positionMs))
+                            controller.repeatMode = queue.repeatMode()
+                            controller.addListener(listener)
+                            syncCurrentIndex(controller)
+                            publish(controller)
+                        }
+                        .onFailure {
+                            _state.value = _state.value.copy(error = "播放器没连上")
+                        }
+                },
+                ContextCompat.getMainExecutor(appContext),
+            )
+        }
 
         // 播放位置不会自己回调，只能定时问
         scope.launch(Dispatchers.Main) {
@@ -568,6 +586,7 @@ class PlaybackConnection(
         }
         advanceAfterRecommendations = false
         controller.seekTo(target, 0L)
+        if (controller.playbackState == Player.STATE_IDLE) controller.prepare()
         if (!controller.playWhenReady) controller.play()
     }
 
@@ -578,6 +597,7 @@ class PlaybackConnection(
         val queue = liveQueue() ?: return
         val target = queue.manualPreviousIndex(controller.currentMediaItemIndex) ?: return
         controller.seekTo(target, 0L)
+        if (controller.playbackState == Player.STATE_IDLE) controller.prepare()
         if (!controller.playWhenReady) controller.play()
     }
 
@@ -827,6 +847,7 @@ class PlaybackConnection(
             controller.pause()
         } else {
             retryCount = 0
+            if (controller.playbackState == Player.STATE_IDLE) controller.prepare()
             controller.play()
         }
     }
@@ -956,20 +977,6 @@ class PlaybackConnection(
  * 名称只给日志和将来的队列界面看。
  */
 private val RadioQueueSource = QueueSource(title = "电台")
-
-/**
- * 队列的两根轴 → 播放器的 `repeatMode`。
- *
- * 只有单曲循环用得到 `REPEAT_MODE_ONE`，列表循环用 `REPEAT_MODE_ALL`。
- *
- * 🔴 随机**不进这里**：播放器的 shuffle 始终不开（顺序是我们自己排的），随机也不改循环 ——
- * 「随机 + 顺序」就是打乱之后放完就停，「随机 + 列表循环」才是整份重排过的列表循环。
- */
-private fun PlaybackQueue.repeatMode(): Int = when (mode) {
-    PlayMode.SEQUENTIAL -> Player.REPEAT_MODE_OFF
-    PlayMode.REPEAT_ALL -> Player.REPEAT_MODE_ALL
-    PlayMode.REPEAT_ONE -> Player.REPEAT_MODE_ONE
-}
 
 private fun MediaItem.toNowPlaying(): NowPlaying? {
     val id = mediaId.toLongOrNull() ?: return null
