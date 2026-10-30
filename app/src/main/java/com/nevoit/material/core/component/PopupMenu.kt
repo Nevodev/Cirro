@@ -6,6 +6,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Indication
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -59,8 +61,8 @@ import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
@@ -69,6 +71,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -82,13 +85,19 @@ import androidx.compose.ui.semantics.text
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextMotion
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.constrainHeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.round
 import com.kyant.shapes.RoundedRectangle
+import com.nevoit.kinetic.layout.overscroll.OffsetOverscrollAnchor
+import com.nevoit.kinetic.layout.overscroll.OffsetOverscrollBinding
+import com.nevoit.kinetic.layout.overscroll.rememberOffsetOverscrollEffect
+import com.nevoit.kinetic.layout.rememberKineticFlingBehavior
 import com.nevoit.material.clip.cornerMaskClip
 import com.nevoit.material.core.interaction.DimIndication
 import com.nevoit.material.core.interaction.rememberRetainedDimIndication
@@ -354,7 +363,7 @@ private fun PopupMenuLayer(
     }
     LaunchedEffect(expanded) {
         if (expanded) root.placed.await()
-        val scaleSpec = Springs.smooth<Float>(
+        val scaleSpec = Springs.smooth(
             durationMillis = if (expanded) 300 else 250,
             extraBounce = if (expanded) 0.15 else 0.0,
             visibilityThreshold = 0.0001f,
@@ -381,32 +390,35 @@ private fun PopupMenuLayer(
                     onClick = ::closeCurrentMenu,
                 )
                 .semantics {
-                    contentDescription = if (pages.none { !it.exiting }) "关闭菜单" else "返回上一级菜单"
+                    contentDescription =
+                        if (pages.none { !it.exiting }) "关闭菜单" else "返回上一级菜单"
                 },
         )
         Box(
             Modifier
                 .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.navigationBars))
                 .padding(request.padding)
                 .consumeWindowInsets(PaddingValues(request.padding))
-                .windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.navigationBars))
                 .onGloballyPositioned { geometry.viewportPosition = it.positionInWindow() },
         ) {
             Box(
-                Modifier.fillMaxSize().graphicsLayer {
-                    // All pages share the entrance transform. Their geometry stays in the
-                    // unscaled safe viewport even when a submenu opens before entrance settles.
-                    val pivot = root.targetBounds.topLeft + Offset(
-                        root.targetBounds.width * root.transformOrigin.pivotFractionX,
-                        root.targetBounds.height * root.transformOrigin.pivotFractionY,
-                    )
-                    transformOrigin = TransformOrigin(
-                        if (size.width > 0f) pivot.x / size.width else 0f,
-                        if (size.height > 0f) pivot.y / size.height else 0f,
-                    )
-                    scaleX = progress.value
-                    scaleY = progress.value
-                },
+                Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        // All pages share the entrance transform. Their geometry stays in the
+                        // unscaled safe viewport even when a submenu opens before entrance settles.
+                        val pivot = root.targetBounds.topLeft + Offset(
+                            root.targetBounds.width * root.transformOrigin.pivotFractionX,
+                            root.targetBounds.height * root.transformOrigin.pivotFractionY,
+                        )
+                        transformOrigin = TransformOrigin(
+                            if (size.width > 0f) pivot.x / size.width else 0f,
+                            if (size.height > 0f) pivot.y / size.height else 0f,
+                        )
+                        scaleX = progress.value
+                        scaleY = progress.value
+                    },
             ) {
                 val stack = listOf(root) + pages
                 val inputIndex = stack.indexOfLast { !it.exiting }
@@ -423,12 +435,19 @@ private fun PopupMenuLayer(
                             if (!page.exiting) page.placed.await()
                             page.reveal.animateTo(
                                 if (page.exiting) 0f else 1f,
-                                Springs.smooth(durationMillis = 300, visibilityThreshold = 0.0001f),
+                                Springs.smooth(
+                                    durationMillis = 300,
+                                    visibilityThreshold = 0.0001f
+                                ),
                             )
                             page.collapsed = page.exiting
                         }
                         if (page !== root) LaunchedEffect(
-                            page.collapsed, page.exiting, expanded, headerPressed, headerPointerPressed,
+                            page.collapsed,
+                            page.exiting,
+                            expanded,
+                            headerPressed,
+                            headerPointerPressed,
                         ) {
                             // Reparenting detaches clickable and cancels an in-flight tap. Keep the
                             // collapsed page until release so a late press can still reverse its exit.
@@ -541,7 +560,7 @@ private fun PopupMenuSurface(
                     }
                     .cornerMaskClip(
                         bounds = {
-                            page.frame().let { Rect(Offset.Zero, it.size) }
+                            Rect(Offset.Zero, page.frame().size)
                         },
                         shape = { shape },
                     )
@@ -557,6 +576,16 @@ private fun PopupMenuSurface(
                     .drawBehind { drawRect(containerColor()) },
                 content = {
                     val scrollState = rememberScrollState()
+                    val overscrollEffect = rememberOffsetOverscrollEffect(remember(scrollState) {
+                        object : OffsetOverscrollBinding {
+                            override val state = scrollState
+                            override val orientation = Orientation.Vertical
+                            override val reverseLayout = false
+                            override val layoutInfo get() = scrollState.maxValue
+                            override fun visibleAnchors() =
+                                listOf(OffsetOverscrollAnchor(Unit, -scrollState.value))
+                        }
+                    })
                     Column(
                         Modifier
                             .fillMaxWidth()
@@ -567,10 +596,24 @@ private fun PopupMenuSurface(
                                 ) {}
                                 else Modifier
                             )
-                            .verticalScroll(
-                                scrollState,
-                                enabled = acceptsInput &&
-                                    (scrollState.canScrollBackward || scrollState.canScrollForward),
+                            .then(
+                                if (acceptsInput) Modifier.verticalScroll(
+                                    scrollState,
+                                    enabled = scrollState.canScrollBackward || scrollState.canScrollForward,
+                                    flingBehavior = rememberKineticFlingBehavior(),
+                                    overscrollEffect = overscrollEffect,
+                                ) else Modifier.layout { measurable, constraints ->
+                                    // Disabled scrollable nodes still win hit testing over lower pages.
+                                    // Keep the scroll geometry and live drawing with no input nodes.
+                                    val content = measurable.measure(
+                                        constraints.copy(maxHeight = Constraints.Infinity),
+                                    )
+                                    layout(content.width, constraints.constrainHeight(content.height)) {
+                                        content.placeRelativeWithLayer(0, -scrollState.value) {
+                                            translationY = overscrollEffect.displayedOffset.y
+                                        }
+                                    }
+                                }
                             ),
                     ) {
                         page.headerRow?.let { row ->
@@ -578,7 +621,7 @@ private fun PopupMenuSurface(
                                 PopupMenuItemSlot(
                                     contentColor = contentColor,
                                     contentVariantColor = contentVariantColor,
-                                    enabled = expanded && child == null,
+                                    enabled = acceptsInput && child == null,
                                     arrowProgress = page.reveal.asState(),
                                     onClick = onBack,
                                 )
@@ -609,13 +652,15 @@ private fun PopupMenuSurface(
                                             modifier = modifier
                                                 .drawWithContent { row.snapshot?.let { drawLayer(it) } }
                                                 .then(
-                                                    if (acceptsInput) Modifier.trackMenuRowPress(row).clickable(
-                                                        interactionSource = row.interactionSource,
-                                                        indication = null,
-                                                        enabled = entry.enabled,
-                                                        role = Role.Button,
-                                                        onClick = onClick,
-                                                    ) else Modifier
+                                                    if (acceptsInput) Modifier
+                                                        .trackMenuRowPress(row)
+                                                        .clickable(
+                                                            interactionSource = row.interactionSource,
+                                                            indication = LocalIndication.current,
+                                                            enabled = entry.enabled,
+                                                            role = Role.Button,
+                                                            onClick = onClick,
+                                                        ) else Modifier
                                                 )
                                                 .semantics {
                                                     text = AnnotatedString(entry.text)
@@ -685,12 +730,12 @@ internal fun popupSubmenuTarget(
     source: Rect,
     viewport: IntSize,
     menu: IntSize,
-    overlap: Int = 0
+    overlap: Int = 0,
+    preferBelow: Boolean = true,
 ): Rect {
-    val below = viewport.height - source.top
-    val above = source.bottom
-    val down = below >= menu.height || (above < menu.height && below >= above)
-    val top = if (down) source.top - overlap else source.bottom - menu.height + overlap
+    // Preserve the preferred edge and shift the whole menu into the safe viewport.
+    // Choosing the opposite edge based on height makes long submenus suddenly reverse.
+    val top = if (preferBelow) source.top - overlap else source.bottom - menu.height + overlap
     return Rect(
         Offset(
             source.left.coerceIn(0f, (viewport.width - menu.width).coerceAtLeast(0).toFloat()),
@@ -711,7 +756,7 @@ private fun PopupMenuItem(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     arrowProgress: State<Float>? = null,
-    interactionSource: MutableInteractionSource? = null,
+    interactionSource: MutableInteractionSource,
     indication: Indication = LocalIndication.current,
     onClick: () -> Unit,
 ) {
@@ -721,10 +766,12 @@ private fun PopupMenuItem(
         modifier
             .fillMaxWidth()
             .graphicsLayer { alpha = if (item.enabled) 1f else 0.38f }
+            // Feedback outlives the input node while a submenu collapses.
+            .indication(interactionSource, indication)
             .then(
                 if (enabled) Modifier.clickable(
                     interactionSource = interactionSource,
-                    indication = indication,
+                    indication = null,
                     enabled = item.enabled,
                     role = Role.Button,
                     onClick = onClick

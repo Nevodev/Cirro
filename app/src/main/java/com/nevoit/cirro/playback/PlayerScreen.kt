@@ -15,6 +15,8 @@ import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -150,7 +152,7 @@ private const val LyricsPanelScale = 0.92f
 
 /** 歌词面板缩放的弹簧。`Springs.smooth` 的 bounce 是 0，不会过冲——过冲会被外面的裁剪切掉。 */
 private val LyricsScaleSpring =
-    Springs.smooth<Float>(durationMillis = 400, visibilityThreshold = 0.0001f)
+    Springs.smooth(durationMillis = 400, visibilityThreshold = 0.0001f)
 
 /** 歌词面板出场的不透明度时长。透明走普通 tween，不跟弹簧掺在一起。 */
 private const val LyricsFadeInMs = 220
@@ -1453,7 +1455,17 @@ private fun RowScope.PlayerMeta(
     menuContainerColor: ColorProducer,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier.weight(1f)) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val menuClick = remember { mutableStateOf({}) }
+    Column(
+        modifier = modifier
+            .weight(1f)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = { menuClick.value() },
+            ),
+    ) {
         PlayerText(
             text = song.title,
             style = MaterialTheme.type.title4,
@@ -1471,17 +1483,14 @@ private fun RowScope.PlayerMeta(
             contentColor = titleColor,
             contentVariantColor = artistColor,
         ) { openMenu ->
+            SideEffect { menuClick.value = openMenu }
             PlayerText(
                 text = song.artist,
                 style = MaterialTheme.type.body,
                 color = artistColor,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(
-                        onClick = openMenu,
-                        interactionSource = null,
-                        indication = AlphaIndication()
-                    )
+                    .indication(interactionSource, AlphaIndication())
                     .marquee(),
             )
         }

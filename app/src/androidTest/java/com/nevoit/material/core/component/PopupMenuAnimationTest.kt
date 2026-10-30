@@ -11,6 +11,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.graphics.toPixelMap
@@ -18,12 +19,14 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
@@ -229,6 +232,42 @@ class PopupMenuAnimationTest {
         advanceFrames(90)
         compose.onNodeWithText("Artist").assertDoesNotExist()
         compose.onNodeWithText("Name").assertDoesNotExist()
+    }
+
+    @Test
+    fun collapsingSubmenuDoesNotInterceptTouchesOnTheParentOrBackdrop() {
+        var albumClicks = 0
+        compose.setContent {
+            PopupMenuHost {
+                PopupMenu(
+                    listOf(
+                        PopupMenuEntry.Item(
+                            "Artist", submenu = List(5) { PopupMenuEntry.Item("Name $it") },
+                        ),
+                        PopupMenuEntry.Item("Album") { albumClicks++ },
+                    ),
+                ) { open -> Text("Open", Modifier.clickable(onClick = open)) }
+            }
+        }
+        repeat(2) { attempt ->
+            compose.mainClock.autoAdvance = true
+            compose.onNodeWithText("Open").performClick()
+            val album = compose.onNodeWithText("Album").fetchSemanticsNode().boundsInRoot.center
+            compose.onNodeWithText("Artist").performClick()
+            val submenu = compose.onNode(
+                SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, "子菜单"),
+            ).fetchSemanticsNode().boundsInRoot
+            compose.mainClock.autoAdvance = false
+            compose.onNodeWithContentDescription("返回上一级菜单").performClick()
+            advanceFrames(2)
+            // Send real pointer events through the still visible submenu, rather than invoking semantics.
+            val point = if (attempt == 0) album else Offset(submenu.center.x, submenu.bottom - 24f)
+            compose.onRoot().performTouchInput { click(point) }
+            advanceFrames(2)
+            compose.onNodeWithContentDescription("关闭菜单").assertDoesNotExist()
+            compose.runOnIdle { assertEquals(1, albumClicks) }
+            advanceFrames(90)
+        }
     }
 
     @Test
