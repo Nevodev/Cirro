@@ -112,7 +112,7 @@ fun LibrarySnapshot.libraryArtists(): List<LibraryCollection> {
     }
     likedSongs.forEach { add(it.artistIds, it.artists) }
     albums.forEach { add(it.artistIds, it.artistNames) }
-    // 订阅艺人自带 `artist_sublist` 的图，优先用它；没有才退回补图缓存
+    // 关注艺人自带的图优先；没有才退回补图缓存
     artists.forEach { artist ->
         result[artist.info.id] = artist.copy(
             info = artist.info.copy(

@@ -72,7 +72,6 @@ fun BoxScope.LibraryRoute(
     val repository = koinInject<LibraryRepository>()
     val snapshot by repository.snapshot.collectAsStateWithLifecycle()
     val loading by repository.loading.collectAsStateWithLifecycle()
-    val error by repository.error.collectAsStateWithLifecycle()
     val viewModel = koinViewModel<LibraryViewModel>()
     val current = snapshot?.forSession(session)
     val recent = remember(current) { current?.recentAlbums().orEmpty().take(64) }
@@ -165,11 +164,6 @@ fun BoxScope.LibraryRoute(
                     VGap(36.dp)
                     SectionTitle("最近添加", 14.dp)
                     VGap(16.dp)
-                }
-            }
-            if (error != null) {
-                item(key = "error", span = { GridItemSpan(maxLineSpan) }) {
-                    LibraryStatus(error.orEmpty(), onClick = viewModel::refresh)
                 }
             }
             if (recent.isEmpty()) {

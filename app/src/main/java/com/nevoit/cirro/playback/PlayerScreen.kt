@@ -1,5 +1,6 @@
 package com.nevoit.cirro.playback
 
+import android.graphics.Bitmap
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
@@ -50,6 +51,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -65,8 +67,11 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorProducer
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -82,6 +87,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
 import androidx.compose.ui.zIndex
+import androidx.core.graphics.scale
 import coil3.BitmapImage
 import coil3.compose.AsyncImagePainter
 import coil3.compose.rememberAsyncImagePainter
@@ -111,6 +117,7 @@ import com.nevoit.material.core.utility.rememberColorProducer
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.local.ProvideContentColor
 import com.nevoit.material.theme.tokens.Springs
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
@@ -119,6 +126,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import java.util.Locale
@@ -1007,6 +1015,9 @@ private fun PlayerOverlay(
                         appearanceScale = panelCoverScale,
                         metaRow = metaRow,
                         expansion = expansion,
+                        onCoverClick = if (panel == null && controller.acceptsInput) {
+                            { togglePanel(PlayerPanel.LYRICS) }
+                        } else null,
                     )
                 }
 
@@ -1017,11 +1028,24 @@ private fun PlayerOverlay(
                         .onGloballyPositioned { metaRow = it },
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Spacer(
-                        Modifier.width(
-                            if (metaCell) CollapsedCoverSize + CollapsedCoverGap else 0.dp
+                    if (metaCell) {
+                        Spacer(
+                            Modifier
+                                .width(CollapsedCoverSize)
+                                .height(MetaButtonSize)
+                                .then(
+                                    if (panel != null && controller.acceptsInput) {
+                                        Modifier.clickable(
+                                            interactionSource = null,
+                                            indication = null,
+                                            onClickLabel = "关闭面板",
+                                            onClick = { panel = null },
+                                        )
+                                    } else Modifier
+                                )
                         )
-                    )
+                        Spacer(Modifier.width(CollapsedCoverGap))
+                    }
                     PlayerMeta(
                         song = song,
                         connection = connection,
@@ -1219,6 +1243,7 @@ private fun PlayerStage(
     appearanceScale: State<Float>,
     metaRow: LayoutCoordinates?,
     expansion: PlayerExpansionState,
+    onCoverClick: (() -> Unit)?,
 ) {
     // 修饰符固定住，否则每次都是新实例，跳过就失效了
     val stageModifier = remember {
@@ -1240,6 +1265,7 @@ private fun PlayerStage(
             appearanceScale = appearanceScale,
             metaRow = metaRow,
             expansion = expansion,
+            onCoverClick = onCoverClick,
         )
     }
 }
@@ -1265,6 +1291,7 @@ private fun PlayerCover(
     appearanceScale: State<Float>,
     metaRow: LayoutCoordinates?,
     expansion: PlayerExpansionState,
+    onCoverClick: (() -> Unit)?,
 ) {
     val target = cover.takeIf { it.isNotEmpty() }
     val coverLayer = rememberGraphicsLayer()
@@ -1302,6 +1329,31 @@ private fun PlayerCover(
     val coverTransition = key(artwork.transitionGeneration) {
         if (front != null) updateTransition(front, label = "PlayerCover") else null
     }
+    val thumbnailSource = (state as? AsyncImagePainter.State.Success)
+        ?.takeIf { it.painter === front }
+        ?.result?.image as? BitmapImage
+    val thumbnailSize =
+        with(LocalDensity.current) { CollapsedCoverSize.roundToPx() }.coerceAtLeast(1)
+    val thumbnail by produceState<BitmapPainter?>(null, thumbnailSource, thumbnailSize) {
+        value = null
+        val source = thumbnailSource?.bitmap ?: return@produceState
+        val bitmap = withContext(Dispatchers.Default) {
+            runCatching {
+                val readable = if (source.config == Bitmap.Config.HARDWARE) {
+                    source.copy(Bitmap.Config.ARGB_8888, false) ?: return@runCatching null
+                } else source
+                val scale =
+                    minOf(1f, thumbnailSize.toFloat() / minOf(readable.width, readable.height))
+                readable.scale(
+                    (readable.width * scale).toInt().coerceAtLeast(1),
+                    (readable.height * scale).toInt().coerceAtLeast(1),
+                )
+            }.getOrNull()
+        }
+        value =
+            bitmap?.let { BitmapPainter(it.asImageBitmap(), filterQuality = FilterQuality.High) }
+    }
+    val coverIsSmall by remember(collapse) { derivedStateOf { collapse.value >= CollapseSettled } }
 
     // 收起目标：**标题行左缘中点，换算进封面自己的坐标系**。收起时就是拿它跟封面自己的中心
     // （`size/2`）相减，得到 graphicsLayer 要走的位移。封面不参与任何布局搬家，整段收起只有
@@ -1409,6 +1461,14 @@ private fun PlayerCover(
     Box(
         modifier = Modifier
             .size(side)
+            .then(
+                if (onCoverClick != null) Modifier.clickable(
+                    interactionSource = null,
+                    indication = null,
+                    onClickLabel = "打开歌词",
+                    onClick = onCoverClick,
+                ) else Modifier
+            )
             .onGloballyPositioned {
                 expansion.onTargetCoverPositioned(it)
                 resample(it)
@@ -1419,8 +1479,19 @@ private fun PlayerCover(
                         coverTransition.currentState == coverTransition.targetState && !coverTransition.isRunning
             },
     ) {
-        key(artwork.transitionGeneration) {
-            coverTransition?.let { PlayerCoverCrossfade(it, CoverCrossfadeMs) }
+        if (coverIsSmall && thumbnail != null && coverTransition != null && !coverTransition.isRunning &&
+            coverTransition.currentState == coverTransition.targetState
+        ) {
+            androidx.compose.foundation.Image(
+                painter = thumbnail!!,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            key(artwork.transitionGeneration) {
+                coverTransition?.let { PlayerCoverCrossfade(it, CoverCrossfadeMs) }
+            }
         }
     }
 }

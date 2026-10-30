@@ -65,7 +65,6 @@ fun BoxScope.LibrarySongsRoute(
     val library by repository.content.collectAsStateWithLifecycle()
     val content = library?.forSession(session)
     val loading by repository.loading.collectAsStateWithLifecycle()
-    val error by repository.error.collectAsStateWithLifecycle()
     val viewModel = koinViewModel<LibraryViewModel>()
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refresh() }
     val songs = content?.songs.orEmpty()
@@ -132,9 +131,6 @@ fun BoxScope.LibrarySongsRoute(
                     .padding(horizontal = 12.dp)
             )
         }
-        if (content == null && error != null) item(key = "library_error") {
-            LibraryStatus(error.orEmpty(), viewModel::refresh)
-        }
         if (session == Session.LoggedOut) {
             item(key = "login") { LoginCard(Modifier.padding(horizontal = 12.dp)) }
         } else if (content == null) {
@@ -164,9 +160,6 @@ fun BoxScope.LibrarySongsRoute(
                     )
                     VGap(24.dp)
                 }
-            }
-            if (error != null) item(key = "library_error") {
-                LibraryStatus(error.orEmpty(), viewModel::refresh)
             }
             if (songsError != null) item(key = "error") {
                 LibraryStatus(songsError.orEmpty(), viewModel::refresh)

@@ -37,7 +37,6 @@ fun BoxScope.LibraryLikedSongsRoute(
     val repository = koinInject<LibraryRepository>()
     val library by repository.snapshot.collectAsStateWithLifecycle()
     val snapshot = library?.forSession(session)
-    val error by repository.error.collectAsStateWithLifecycle()
     val viewModel = koinViewModel<LibraryViewModel>()
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refresh() }
     val showsCollection = snapshot != null && snapshot.likedPlaylistId > 0
@@ -65,9 +64,6 @@ fun BoxScope.LibraryLikedSongsRoute(
         ) {
             item(key = "title") {
                 PageHeader(title = "喜爱歌曲", modifier = Modifier.padding(horizontal = 12.dp))
-            }
-            if (error != null) item(key = "library_error") {
-                LibraryStatus(error.orEmpty(), viewModel::refresh)
             }
             if (session == Session.LoggedOut) {
                 item(key = "login") { LoginCard(Modifier.padding(horizontal = 12.dp)) }

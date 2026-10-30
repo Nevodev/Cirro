@@ -193,10 +193,21 @@ class LibraryRepository(
                             }
                         }
                     }
-                }.onFailure { failures += it.message.orEmpty() }
+                }.onFailure { error ->
+                    val name = when (kind) {
+                        CollectionKind.ALBUM -> "专辑"
+                        CollectionKind.PLAYLIST -> "歌单"
+                        else -> "艺人"
+                    }
+                    failures += name
+                    Log.w("Library", "$name 更新失败", error)
+                }
             }
-            loadLikes(uid).onFailure { failures += it.message.orEmpty() }
-            _error.value = if (failures.isEmpty()) null else "部分内容未能更新，点按重试"
+            loadLikes(uid).onFailure { error ->
+                failures += "喜爱歌曲"
+                Log.w("Library", "喜爱歌曲更新失败", error)
+            }
+            _error.value = if (failures.isEmpty()) null else "${failures.joinToString("、")}未能更新，点按重试"
             persist()
         } finally {
             _loading.value = false

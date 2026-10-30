@@ -59,7 +59,6 @@ fun BoxScope.LibraryArtistsRoute(
     val library by repository.content.collectAsStateWithLifecycle()
     val content = library?.forSession(session)
     val loading by repository.loading.collectAsStateWithLifecycle()
-    val error by repository.error.collectAsStateWithLifecycle()
     val viewModel = koinViewModel<LibraryViewModel>()
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refresh() }
     val artists = content?.artists.orEmpty()
@@ -95,9 +94,7 @@ fun BoxScope.LibraryArtistsRoute(
                 Modifier.animateItem(tween(200), Springs.crisp(), tween(200)).padding(horizontal = 12.dp),
             )
         }
-        if (error != null) item(key = "library_error") {
-            LibraryStatus(error.orEmpty(), viewModel::refresh)
-        } else if (content == null) {
+        if (content == null) {
             item(key = "loading") {
                 LibraryStatus(if (session == Session.Offline) "恢复登录后加载资料库" else "正在加载资料库…")
             }

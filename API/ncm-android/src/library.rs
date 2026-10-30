@@ -1,10 +1,12 @@
 use super::*;
 use serde_json::{json, Value};
+use ncm_api_rs::request::{CryptoType, RequestOption};
 
 fn collections(body: &Value, kind: &str, uid: i64) -> Result<Vec<Value>, String> {
     playlist_request_success(body)?;
     let key = if kind == "PLAYLIST" { "playlist" } else { "data" };
-    let items = body[key].as_array().ok_or("资料库列表缺少数据")?;
+    let items = if kind == "ARTIST" { &body["data"]["artists"] } else { &body[key] }
+        .as_array().ok_or("资料库列表缺少数据")?;
     items.iter().filter(|item| kind != "PLAYLIST" || pick_i64_loose(item, &["specialType"]) != 5)
         .map(|item| {
             let id = pick_i64_loose(item, &["id"]);
@@ -55,7 +57,11 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeLibraryPage<'l
         match kind.as_str() {
             "PLAYLIST" => client.user_playlist(&query).await,
             "ALBUM" => client.album_sublist(&query).await,
-            "ARTIST" => client.artist_sublist(&query).await,
+            "ARTIST" => client.request(
+                "/api/user/sub/artist/get",
+                json!({ "id": uid, "limit": 100, "offset": offset }),
+                RequestOption { crypto: CryptoType::Eapi, ..Default::default() },
+            ).await,
             _ => unreachable!(),
         }
     });
@@ -63,9 +69,15 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeLibraryPage<'l
         Ok(response) => match collections(&response.body, &kind, uid.parse().unwrap_or(0)) {
             Ok(items) => {
                 let key = if kind == "PLAYLIST" { "playlist" } else { "data" };
-                let count = response.body[key].as_array().map_or(0, Vec::len);
+                let count = if kind == "ARTIST" { &response.body["data"]["artists"] } else { &response.body[key] }
+                    .as_array().map_or(0, Vec::len);
+                let more = if kind == "ARTIST" {
+                    response.body["data"]["hasMore"].as_bool().unwrap_or(count == 100)
+                } else {
+                    has_more(&response.body, offset as usize + count, count)
+                };
                 json!({ "ok": true, "libraryItems": items,
-                    "more": has_more(&response.body, offset as usize + count, count),
+                    "more": more,
                     "nextOffset": offset as usize + count })
             },
             Err(message) => json!({ "ok": false, "message": message }),
@@ -133,6 +145,16 @@ mod tests {
         assert!(collections(&json!({ "code": 200, "data": [] }), "ALBUM", 42).unwrap().is_empty());
         assert!(collections(&json!({ "code": 200 }), "ALBUM", 42).is_err());
         assert!(collections(&json!({ "code": 301, "data": [] }), "ALBUM", 42).is_err());
+    }
+
+    #[test]
+    fn artist_list_uses_official_nested_response() {
+        let items = collections(&json!({"code": 200, "data": {"artists": [
+            {"id": 12, "name": "artist", "img1v1Url": "https://example.test/a"}
+        ], "hasMore": false}}), "ARTIST", 42).unwrap();
+        assert_eq!(items[0]["info"]["id"], 12);
+        assert_eq!(items[0]["info"]["title"], "artist");
+        assert!(collections(&json!({"code": 200, "data": {}}), "ARTIST", 42).is_err());
     }
 
     #[test]
