@@ -269,7 +269,7 @@ fun BoxScope.HomeRoute(
             if (state.showMemories) {
                 item(key = "home_memories") {
                     VGap(36.dp)
-                    SectionTitle(text = state.memories.dataOrNull?.title ?: "回忆歌单")
+                    SectionTitle(text = "音乐回忆")
                     VGap(16.dp)
                     MemoryPlaylistShelf(state.memories, onRetry, onOpenMemoryPlaylist)
                 }

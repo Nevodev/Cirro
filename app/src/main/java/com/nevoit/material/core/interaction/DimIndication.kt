@@ -6,6 +6,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.IndicationNodeFactory
 import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
@@ -37,57 +40,53 @@ data class DimIndication(
 ) : IndicationNodeFactory {
     override fun create(interactionSource: InteractionSource): DelegatableNode {
         return DimIndicationNode(
-            interactionSource, color, maxAlpha, shape, finishPressOnRelease, releaseSpec,
+            interactionSource, color, shape,
+            DimIndicationAnimation(maxAlpha, finishPressOnRelease, releaseSpec),
         )
     }
 }
 
-private class DimIndicationNode(
-    private val interactionSource: InteractionSource,
-    private val color: Color,
-    maxAlpha: Float,
-    private val shape: Shape,
-    private val finishPressOnRelease: Boolean,
-    private val releaseSpec: FiniteAnimationSpec<Float>,
-) : Modifier.Node(), DrawModifierNode, CompositionLocalConsumerModifierNode {
+@Composable
+internal fun rememberRetainedDimIndication(
+    indication: DimIndication,
+    interactionSource: InteractionSource,
+): IndicationNodeFactory {
+    val animation = remember(indication) {
+        DimIndicationAnimation(indication.maxAlpha, indication.finishPressOnRelease, indication.releaseSpec)
+    }
+    // A movable row detaches its nodes while reparenting. Its release animation must keep
+    // running in composition scope, including while clickable recreates its indication node.
+    LaunchedEffect(animation, interactionSource) { animation.collect(interactionSource) }
+    return remember(indication, animation) {
+        RetainedDimIndication(indication, animation)
+    }
+}
 
-    private val alphaAnimatable = Animatable(0f)
-    private val targetAlpha = maxAlpha.fastCoerceIn(0f, 1f)
+private data class RetainedDimIndication(
+    val indication: DimIndication,
+    val animation: DimIndicationAnimation,
+) : IndicationNodeFactory {
+    override fun create(interactionSource: InteractionSource): DelegatableNode =
+        DimIndicationNode(null, indication.color, indication.shape, animation)
+}
+
+private class DimIndicationNode(
+    private val interactionSource: InteractionSource?,
+    private val color: Color,
+    private val shape: Shape,
+    private val animation: DimIndicationAnimation,
+) : Modifier.Node(), DrawModifierNode, CompositionLocalConsumerModifierNode {
 
     override fun onAttach() {
         super.onAttach()
-        coroutineScope.launch {
-            interactionSource.interactions.collectLatest { interaction ->
-                when (interaction) {
-                    is PressInteraction.Press -> {
-                        alphaAnimatable.animateTo(targetAlpha, DimIndicationDefaults.PressIn)
-                    }
-
-                    is PressInteraction.Release -> {
-                        val currentAlpha = alphaAnimatable.value
-                        val releasePeak = if (finishPressOnRelease) targetAlpha else targetAlpha * 0.5f
-
-                        if (currentAlpha < releasePeak) {
-                            alphaAnimatable.animateTo(
-                                releasePeak,
-                                DimIndicationDefaults.ReleaseOutFast
-                            )
-                        }
-
-                        alphaAnimatable.animateTo(0f, releaseSpec)
-                    }
-
-                    is PressInteraction.Cancel -> {
-                        alphaAnimatable.animateTo(0f, DimIndicationDefaults.ReleaseOut)
-                    }
-                }
-            }
+        interactionSource?.let { source ->
+            coroutineScope.launch { animation.collect(source) }
         }
     }
 
     override fun ContentDrawScope.draw() {
         drawContent()
-        if (alphaAnimatable.value > 0f) {
+        if (animation.alpha.value > 0f) {
             val targetColor = if (color != Color.Unspecified) {
                 color
             } else {
@@ -95,7 +94,45 @@ private class DimIndicationNode(
             }
 
             val outline = shape.createOutline(size, layoutDirection, this)
-            drawOutline(outline, color = targetColor.copy(alpha = alphaAnimatable.value))
+            drawOutline(outline, color = targetColor.copy(alpha = animation.alpha.value))
+        }
+    }
+}
+
+private class DimIndicationAnimation(
+    maxAlpha: Float,
+    private val finishPressOnRelease: Boolean,
+    private val releaseSpec: FiniteAnimationSpec<Float>,
+) {
+
+    val alpha = Animatable(0f)
+    private val targetAlpha = maxAlpha.fastCoerceIn(0f, 1f)
+
+    suspend fun collect(interactionSource: InteractionSource) {
+        interactionSource.interactions.collectLatest { interaction ->
+            when (interaction) {
+                is PressInteraction.Press -> {
+                    alpha.animateTo(targetAlpha, DimIndicationDefaults.PressIn)
+                }
+
+                is PressInteraction.Release -> {
+                    val currentAlpha = alpha.value
+                    val releasePeak = if (finishPressOnRelease) targetAlpha else targetAlpha * 0.5f
+
+                    if (currentAlpha < releasePeak) {
+                        alpha.animateTo(
+                            releasePeak,
+                            DimIndicationDefaults.ReleaseOutFast
+                        )
+                    }
+
+                    alpha.animateTo(0f, releaseSpec)
+                }
+
+                is PressInteraction.Cancel -> {
+                    alpha.animateTo(0f, DimIndicationDefaults.ReleaseOut)
+                }
+            }
         }
     }
 }

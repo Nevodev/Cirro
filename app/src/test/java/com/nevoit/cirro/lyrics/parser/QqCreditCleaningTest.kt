@@ -6,6 +6,41 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class QqCreditCleaningTest {
+    @Test fun bareTitleBeforeCreditsDoesNotStopQqHeaderCleaning() {
+        val lyrics = QrcLyricsParser.parse(
+            "[ti:]\n[ar:]\n[0,1545]坚强笨女人(0,1545)\n" +
+                "[1545,1073]作词：姜欣欣(1545,1073)\n" +
+                "[2618,783]作曲：姜欣欣(2618,783)\n" +
+                "[3402,1069]出品：姜欣欣(3402,1069)\n" +
+                "[4471,221326]出品公司：北京福盛天成文化传媒有限公司(4471,221326)\n" +
+                "[21630,3000]无论道路有多么曲折(21630,3000)",
+            track = LyricTrackRef("坚强笨女人", listOf("那艺娜")),
+        ).getOrThrow()
+        assertEquals(listOf("无论道路有多么曲折"), lyrics.lines.map { it.text })
+        assertEquals(21630L, lyrics.lines.single().startMs)
+        assertEquals(24630L, lyrics.lines.single().endMs)
+    }
+
+    @Test fun bareTitleWithoutCreditsRemainsALyric() {
+        for (source in listOf(LyricsSource.QQ, LyricsSource.NETEASE)) {
+            val lyrics = LrcLyricsParser.parse(
+                "[00:00.00]坚强笨女人\n[00:02.00]普通歌词",
+                source,
+                track = LyricTrackRef("坚强笨女人", listOf("那艺娜")),
+            ).getOrThrow()
+            assertEquals(listOf("坚强笨女人", "普通歌词"), lyrics.lines.map { it.text })
+        }
+    }
+
+    @Test fun qqBareTitleInBodyRemainsALyric() {
+        val lyrics = QrcLyricsParser.parse(
+            "[0,1000]普通歌词(0,1000)\n[1000,1000]坚强笨女人(1000,1000)\n" +
+                "[2000,1000]作词：梦境(2000,1000)\n[3000,1000]普通歌词(3000,1000)",
+            track = LyricTrackRef("坚强笨女人", listOf("那艺娜")),
+        ).getOrThrow()
+        assertEquals(4, lyrics.lines.size)
+    }
+
     @Test fun artistAliasesWithSlashesDoNotBreakHeaderMatching() {
         val lyrics = QrcLyricsParser.parse(
             "[ti:Song]\n[ar:Artist (Alias One/Alias Two)/Guest]\n" +

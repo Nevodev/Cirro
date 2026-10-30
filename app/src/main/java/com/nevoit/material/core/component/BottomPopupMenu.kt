@@ -191,9 +191,12 @@ fun BottomPopupMenuHost(
         }
     }
     CompositionLocalProvider(LocalBottomPopupMenuHost provides state) {
-        Box(
+        PopupMenuHost(
             modifier = modifier
                 .fillMaxSize(),
+            containerColor = containerColor,
+            contentColor = contentColor,
+            contentVariantColor = contentVariantColor,
         ) {
             content()
             val request = state.request

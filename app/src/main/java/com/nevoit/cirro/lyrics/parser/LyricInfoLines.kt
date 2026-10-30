@@ -242,6 +242,9 @@ internal object LyricInfoLines {
         // A matching QQ title + artist identifies its generated header even when all credits
         // are English and therefore lack the keyword/colon anchor used by ordinary LRC.
         if (looksLikeTitleLine(line, track)) return if (titleIsAnchor) Hit.STRICT else Hit.LOOSE
+        // QQ also emits bare song titles with empty metadata tags. Only pass through a
+        // matching title when another credit anchors the block, so sung titles stay intact.
+        if (titleIsAnchor && track != null && normalize(line) == normalize(track.title)) return Hit.LOOSE
 
         return null
     }

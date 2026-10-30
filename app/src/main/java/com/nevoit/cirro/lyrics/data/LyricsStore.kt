@@ -72,7 +72,7 @@ class LyricsStore(context: Context) {
          * `ignoreUnknownKeys` 管的是「多出来的键」，缺的键会**静默走默认值**，于是新字段在
          * 已经播过的歌上永远不生效，还要等缓存自然淘汰（150 份，靠 mtime 挤）。
          */
-        const val Version = 10
+        const val Version = 11
     }
 }
 

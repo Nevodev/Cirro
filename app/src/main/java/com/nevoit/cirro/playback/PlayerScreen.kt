@@ -2,7 +2,6 @@ package com.nevoit.cirro.playback
 
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.updateTransition
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector1D
@@ -10,7 +9,7 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Image
+import androidx.compose.animation.core.updateTransition
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -81,12 +80,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
 import androidx.compose.ui.zIndex
-import coil3.compose.AsyncImagePainter
 import coil3.BitmapImage
+import coil3.compose.AsyncImagePainter
 import coil3.compose.rememberAsyncImagePainter
 import com.kyant.shapes.Capsule
 import com.kyant.shapes.RoundedRectangle
 import com.nevoit.cirro.R
+import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.lyrics.data.LyricsRepository
 import com.nevoit.cirro.lyrics.ui.LyricsPanel
@@ -102,6 +102,7 @@ import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
 import com.nevoit.material.core.component.WavyLinearProgress
+import com.nevoit.material.core.interaction.AlphaIndication
 import com.nevoit.material.core.modifier.drawBackground
 import com.nevoit.material.core.modifier.marquee
 import com.nevoit.material.core.utility.rememberColorProducer
@@ -286,6 +287,7 @@ fun PlayerLayer(
     controller: PlayerUiController,
     connection: PlaybackConnection,
     expansion: PlayerExpansionState,
+    onOpenCollection: (CollectionKind, Long, String, String, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val header by remember(connection) {
@@ -299,10 +301,16 @@ fun PlayerLayer(
     val frameContext = LocalContext.current.applicationContext
     val frameScope = rememberCoroutineScope()
     val motionFrames = remember(controller, frameContext, frameScope) {
-        val store = PlayerMotionFrameStore(java.io.File(frameContext.filesDir, "apple-music/player-motion"))
+        val store =
+            PlayerMotionFrameStore(java.io.File(frameContext.filesDir, "apple-music/player-motion"))
         PlayerMotionFrameCache(frameScope, store::read, store::write)
     }
-    SideEffect { if (motionSource.resolved) motionFrames.select(motionSource.url, motionSources.next.url) }
+    SideEffect {
+        if (motionSource.resolved) motionFrames.select(
+            motionSource.url,
+            motionSources.next.url
+        )
+    }
     if (!controller.present) return
 
     BackHandler(enabled = controller.acceptsInput) { controller.close() }
@@ -347,6 +355,7 @@ fun PlayerLayer(
         motionSource = motionSource,
         nextMotionSource = motionSources.next,
         motionFrames = motionFrames,
+        onOpenCollection = onOpenCollection,
         modifier = modifier,
     )
 }
@@ -390,6 +399,7 @@ private fun PlayerOverlay(
     motionSource: PlayerMotionSource,
     nextMotionSource: PlayerMotionSource,
     motionFrames: PlayerMotionFrameCache,
+    onOpenCollection: (CollectionKind, Long, String, String, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // 外层只传换歌和播放状态。位置心跳（500ms 一次）不进这里，
@@ -512,7 +522,7 @@ private fun PlayerOverlay(
     val motionOccludesBackground by remember(motionOpacity, controller, motionUrl) {
         derivedStateOf {
             motionReady && controller.motionArtworkEnabled && motionUrl != null && motionOpacity.value >= 1f &&
-                controller.isExpanded && !controller.isClosing && !controller.isDragging && !collapsed
+                    controller.isExpanded && !controller.isClosing && !controller.isDragging && !collapsed
         }
     }
 
@@ -686,7 +696,7 @@ private fun PlayerOverlay(
     val holdCoverArtwork = remember(expansion, staticCoverOpacity, motionPanelCover) {
         derivedStateOf {
             currentMotionReplacesCover && staticCoverOpacity.value > 0f &&
-                motionPanelCover.value < 1f && expansion.progress >= 1f
+                    motionPanelCover.value < 1f && expansion.progress >= 1f
         }
     }
     val coverPlacement = remember(expansion, collapseCover, staticCoverOpacity) {
@@ -702,14 +712,19 @@ private fun PlayerOverlay(
     val panelCoverScale = remember(staticCoverOpacity, motionPanelCover) {
         derivedStateOf {
             if (currentMotionReplacesCover && staticCoverOpacity.value <= 0f) {
-                lerp(PlayerMotionArtworkDefaults.PanelCoverHiddenScale, 1f, motionPanelCover.value.coerceIn(0f, 1f))
+                lerp(
+                    PlayerMotionArtworkDefaults.PanelCoverHiddenScale,
+                    1f,
+                    motionPanelCover.value.coerceIn(0f, 1f)
+                )
             } else 1f
         }
     }
     DisposableEffect(expansion, motionPanelCover, staticCoverOpacity) {
         expansion.targetCoverAlpha = {
             // 静态封面先原地淡出，透明后再改变隐藏位置；开合仍从迷你条的完整封面交接。
-            val pageAlpha = lerp(staticCoverOpacity.value, 1f, motionPanelCover.value.coerceIn(0f, 1f))
+            val pageAlpha =
+                lerp(staticCoverOpacity.value, 1f, motionPanelCover.value.coerceIn(0f, 1f))
             lerp(1f, pageAlpha, expansionFraction(expansion.progress, 0f, 0.7f))
         }
         onDispose { expansion.targetCoverAlpha = { 1f } }
@@ -1006,10 +1021,12 @@ private fun PlayerOverlay(
                         )
                     )
                     PlayerMeta(
-                        title = song.title,
-                        artist = song.artist,
+                        song = song,
+                        connection = connection,
+                        onOpenCollection = onOpenCollection,
                         titleColor = contentColor,
                         artistColor = contentVariantColor,
+                        menuContainerColor = buttonColor,
                         modifier = Modifier.graphicsLayer {
                             val shift = (CollapsedCoverSize + CollapsedCoverGap).toPx()
                             val progress = collapseMeta.value.coerceIn(0f, 1f)
@@ -1339,21 +1356,31 @@ private fun PlayerCover(
                 }
             }
         }
-    val coverShape = remember(expansion, collapse, appearanceScale, anchor, density, expandedShape) {
-        { size: Size ->
-            with(density) {
-                val progress = expansion.progress.coerceIn(0f, 1f)
-                if (progress >= 1f) expandedShape else {
-                    val panelScale = if (anchor != null) {
-                        lerp(1f, CollapsedCoverSize.toPx() / size.width, collapse.value) * appearanceScale.value
-                    } else 1f
-                    val scale = lerp(expansion.sourceCoverBounds.width / size.width, panelScale, progress)
-                    val radius = lerp(MiniPlayerCoverRadius.toPx(), 16.dp.toPx() * panelScale, progress)
-                    RoundedRectangle((radius / scale.coerceAtLeast(0.0001f)).toDp())
+    val coverShape =
+        remember(expansion, collapse, appearanceScale, anchor, density, expandedShape) {
+            { size: Size ->
+                with(density) {
+                    val progress = expansion.progress.coerceIn(0f, 1f)
+                    if (progress >= 1f) expandedShape else {
+                        val panelScale = if (anchor != null) {
+                            lerp(
+                                1f,
+                                CollapsedCoverSize.toPx() / size.width,
+                                collapse.value
+                            ) * appearanceScale.value
+                        } else 1f
+                        val scale = lerp(
+                            expansion.sourceCoverBounds.width / size.width,
+                            panelScale,
+                            progress
+                        )
+                        val radius =
+                            lerp(MiniPlayerCoverRadius.toPx(), 16.dp.toPx() * panelScale, progress)
+                        RoundedRectangle((radius / scale.coerceAtLeast(0.0001f)).toDp())
+                    }
                 }
             }
         }
-    }
     SideEffect {
         expansion.targetCoverTransform = transform
         expansion.targetCoverShape = coverShape
@@ -1387,7 +1414,7 @@ private fun PlayerCover(
             .drawWithContent {
                 coverLayer.record { this@drawWithContent.drawContent() }
                 expansion.targetCoverOpaque = frontOpaque && coverTransition != null &&
-                    coverTransition.currentState == coverTransition.targetState && !coverTransition.isRunning
+                        coverTransition.currentState == coverTransition.targetState && !coverTransition.isRunning
             },
     ) {
         key(artwork.transitionGeneration) {
@@ -1418,15 +1445,17 @@ private fun PlayerLikeButton(songId: Long, background: ColorProducer, tint: Colo
 
 @Composable
 private fun RowScope.PlayerMeta(
-    title: String,
-    artist: String,
+    song: NowPlaying,
+    connection: PlaybackConnection,
+    onOpenCollection: (CollectionKind, Long, String, String, String) -> Unit,
     titleColor: ColorProducer,
     artistColor: ColorProducer,
+    menuContainerColor: ColorProducer,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.weight(1f)) {
         PlayerText(
-            text = title,
+            text = song.title,
             style = MaterialTheme.type.title4,
             color = titleColor,
             modifier = Modifier
@@ -1434,14 +1463,28 @@ private fun RowScope.PlayerMeta(
                 .marquee()
         )
         VGap(2.dp)
-        PlayerText(
-            text = artist,
-            style = MaterialTheme.type.body,
-            color = artistColor,
-            modifier = Modifier
-                .fillMaxWidth()
-                .marquee()
-        )
+        PlayerArtistMenu(
+            song = song,
+            connection = connection,
+            onOpenCollection = onOpenCollection,
+            containerColor = menuContainerColor,
+            contentColor = titleColor,
+            contentVariantColor = artistColor,
+        ) { openMenu ->
+            PlayerText(
+                text = song.artist,
+                style = MaterialTheme.type.body,
+                color = artistColor,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(
+                        onClick = openMenu,
+                        interactionSource = null,
+                        indication = AlphaIndication()
+                    )
+                    .marquee(),
+            )
+        }
     }
 }
 

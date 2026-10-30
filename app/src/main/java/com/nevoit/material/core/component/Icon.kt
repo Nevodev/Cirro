@@ -4,9 +4,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.paint
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -16,6 +15,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.toolingGraphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
@@ -92,26 +92,18 @@ fun Icon(
     contentDescription: String?,
     modifier: Modifier = Modifier,
 ) {
-    // Workaround for an upstream defect in this overload: the layer below only rerecords on
-    // size/density/direction change or when a state read inside the cache block changes, and
-    // `record { drawContent() }` makes the cached pixels depend on the painter — which is not
-    // one of those reads. So a swapped painter goes unnoticed and the old icon stays.
-    // Reading `contentKey` inside the block registers that dependency explicitly.
-    val contentKey = rememberUpdatedState(painter)
-
+    // Cache-owned layers are released on node detach, but movable content keeps the same
+    // draw cache on reattach. Own this layer in composition so reparenting cannot release it.
+    val layer = rememberGraphicsLayer()
     Icon(
         painter = painter,
         tint = Color.Unspecified,
         contentDescription = contentDescription,
         modifier =
-            modifier.drawWithCache {
-                contentKey.value
-                val layer = obtainGraphicsLayer()
-                layer.apply {
-                    record { drawContent() }
-                    tint?.let { this@apply.colorFilter = ColorFilter.tint(it()) }
-                }
-                onDrawWithContent { drawLayer(graphicsLayer = layer) }
+            modifier.drawWithContent {
+                layer.record { this@drawWithContent.drawContent() }
+                layer.colorFilter = tint?.let { ColorFilter.tint(it()) }
+                drawLayer(graphicsLayer = layer)
             },
     )
 }

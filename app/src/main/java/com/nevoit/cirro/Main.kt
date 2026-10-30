@@ -1,7 +1,6 @@
 package com.nevoit.cirro
 
 import android.Manifest
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -44,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -67,7 +67,7 @@ import com.nevoit.cirro.library.LibraryLikedSongsRoute
 import com.nevoit.cirro.library.LibraryPlaylistsRoute
 import com.nevoit.cirro.library.LibraryRoute
 import com.nevoit.cirro.library.LibrarySongsRoute
-import com.nevoit.cirro.login.AppleMusicLoginActivity
+import com.nevoit.cirro.settings.SettingsScreen
 import com.nevoit.cirro.palette.CoverPalette
 import com.nevoit.cirro.palette.CoverSeed
 import com.nevoit.cirro.playback.MiniPlayer
@@ -231,6 +231,8 @@ fun BoxScope.Main() {
     val accountRepository = koinInject<AccountRepository>()
     val playbackConnection = koinInject<PlaybackConnection>()
     val playerUi = koinInject<PlayerUiController>()
+    var settingsOpen by rememberSaveable { mutableStateOf(false) }
+    var playerDestination by remember { mutableStateOf<MainDestination?>(null) }
     val session by accountRepository.session.collectAsState()
 
     val hasSong by remember(playbackConnection) {
@@ -378,10 +380,16 @@ fun BoxScope.Main() {
     val clipUnderlay by remember(underlayScale) {
         derivedStateOf { underlayScale() < 1f }
     }
-    val playerUnderlay = remember(underlayScale, navigationPageShape, clipUnderlay) {
+    val playerUnderlay = remember(underlayScale, navigationPageShape, clipUnderlay, playerUi) {
         Modifier
             .fillMaxSize()
             .graphicsLayer {
+                // Resolve child clips at page size before scaling the composed page.
+                compositingStrategy = if (playerUi.present) {
+                    CompositingStrategy.Offscreen
+                } else {
+                    CompositingStrategy.Auto
+                }
                 val scale = underlayScale()
                 scaleX = scale
                 scaleY = scale
@@ -421,6 +429,14 @@ fun BoxScope.Main() {
                     }
                 ) {
                     val statusBarPageId = entry.id
+                    if (entry.id == navigator.current.id) {
+                        LaunchedEffect(playerDestination) {
+                            playerDestination?.let {
+                                playerDestination = null
+                                navigate(it)
+                            }
+                        }
+                    }
                     val onStatusBarAppearanceChanged = remember(statusBarPageId, navigator) {
                         { darkIcons: Boolean? ->
                             if (navigator.backStack.any { it.id == statusBarPageId }) {
@@ -476,6 +492,7 @@ fun BoxScope.Main() {
                                 onOpenLibraryArtists = { navigate(MainDestination.LibraryArtists) },
                                 onOpenLibraryAlbums = { navigate(MainDestination.LibraryAlbums) },
                                 onOpenLibrarySongs = { navigate(MainDestination.LibrarySongs) },
+                                onOpenSettings = { settingsOpen = true },
                             )
                         }
 
@@ -696,7 +713,18 @@ fun BoxScope.Main() {
             controller = playerUi,
             connection = playbackConnection,
             expansion = playerExpansion,
+            onOpenCollection = { kind, id, title, cover, author ->
+                playerDestination = MainDestination.Collection(
+                    kind = kind, id = id, titleHint = title, coverHint = cover, authorHint = author,
+                )
+                playerUi.close()
+            },
         )
+
+        // 设置页整层盖在最上面，不进导航栈。
+        if (settingsOpen) {
+            SettingsScreen(onBack = { settingsOpen = false })
+        }
     }
 }
 
@@ -714,8 +742,8 @@ private fun BoxScope.MainTabs(
     onOpenLibraryArtists: () -> Unit,
     onOpenLibraryAlbums: () -> Unit,
     onOpenLibrarySongs: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
-    val context = LocalContext.current
 
     CrossfadeNavContainer(
         destination = MainDestinations.entries[selectedIndex],
@@ -789,16 +817,12 @@ private fun BoxScope.MainTabs(
                         .clip(CircleShape)
                         .size(48.dp)
                         .background(MaterialTheme.colors.iconButtonBackground)
-                        .clickable {
-                            context.startActivity(
-                                Intent(context, AppleMusicLoginActivity::class.java)
-                            )
-                        },
+                        .clickable { onOpenSettings() },
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         painter = painterResource(R.drawable.ellipsis),
-                        contentDescription = "更多"
+                        contentDescription = "设置"
                     )
                 }
             }

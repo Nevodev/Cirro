@@ -163,8 +163,25 @@ fn lyric_text(raw: &str) -> Result<String, String> {
     loop {
         match reader.read_event().map_err(|e| e.to_string())? {
             Event::Start(e) | Event::Empty(e) if e.name().as_ref() == b"Lyric_1" => {
-                for attribute in e.attributes() {
-                    let attribute = attribute.map_err(|e| e.to_string())?;
+                // QQ can leave literal quotes inside its final LyricContent attribute.
+                // Validate the whole tag before accepting a value: the first quote otherwise
+                // looks like a valid attribute end and silently truncates the entire song.
+                let attributes = e.attributes().collect::<Result<Vec<_>, _>>();
+                let attributes = match attributes {
+                    Ok(attributes) => attributes,
+                    Err(error) => {
+                        let tag = std::str::from_utf8(e.as_ref()).map_err(|e| e.to_string())?;
+                        let content = regex_lite::Regex::new(
+                            r#"(?s)\bLyricContent\s*=\s*"(.*)"\s*$"#,
+                        )
+                        .unwrap();
+                        let capture = content.captures(tag).ok_or_else(|| error.to_string())?;
+                        return quick_xml::escape::unescape(capture.get(1).unwrap().as_str())
+                            .map(|v| v.into_owned())
+                            .map_err(|e| e.to_string());
+                    }
+                };
+                for attribute in attributes {
                     if attribute.key.as_ref() == b"LyricContent" {
                         return attribute
                             .unescape_value()
@@ -240,6 +257,18 @@ mod tests {
     #[test]
     fn unwraps_qrc_xml_attribute() {
         assert_eq!(lyric_text("<?xml version=\"1.0\"?><QrcInfos><Lyric_1 LyricContent=\"[100,200]A &amp; B(100,200)\"/></QrcInfos>").unwrap(), "[100,200]A & B(100,200)");
+    }
+    #[test]
+    fn preserves_unescaped_quotes_and_following_qrc_lines() {
+        let content = "[18564,3048]He (18564,167)said \"(18731,118)I (18849,145)heard a voice\"(18994,2618)\n[21652,2321]There was no one home(21652,2321)\n";
+        let xml = format!(r#"<QrcInfos><LyricInfo LyricCount="1"><Lyric_1 LyricType="1" LyricContent="{content}"/></LyricInfo></QrcInfos>"#);
+        assert_eq!(lyric_text(&xml).unwrap(), content);
+    }
+
+    #[test]
+    fn keeps_xml_entities_and_attributes_after_lyric_content() {
+        let xml = r#"<QrcInfos><Lyric_1 LyricContent='[100,200]A &amp; &quot;B&quot;(100,200)' LyricType="1"/></QrcInfos>"#;
+        assert_eq!(lyric_text(xml).unwrap(), "[100,200]A & \"B\"(100,200)");
     }
     #[test]
     fn search_includes_grouped_versions_and_removes_highlights() {
