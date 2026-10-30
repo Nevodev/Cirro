@@ -1070,6 +1070,22 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeRecommendSongs
     jni_out(&mut env, value)
 }
 
+#[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeRecommendSongDislike<'local>(
+    mut env: JNIEnv<'local>, _this: JObject<'local>, id: JString<'local>,
+) -> jstring {
+    let id = jni_in(&mut env, &id);
+    let client = client_snapshot();
+    let value = match RUNTIME.block_on(client.recommend_songs_dislike(&Query::new().param("id", &id))) {
+        Ok(response) => match playlist_request_success(&response.body) {
+            Ok(()) => serde_json::json!({ "ok": true }),
+            Err(message) => serde_json::json!({ "ok": false, "message": message }),
+        },
+        Err(error) => serde_json::json!({ "ok": false, "message": error.to_string() }),
+    };
+    jni_out(&mut env, value)
+}
+
 /// 每日推荐歌单（需登录，约 26 条）。
 /// 返回 `{"ok":true,"playlists":[{"id":..,"name":..,"cover":..,"playCount":..,"trackCount":..,"creator":..}]}`。
 #[no_mangle]

@@ -57,6 +57,7 @@ fun BottomPopupMenuScope.SongMenuContent(
     onShare: () -> Unit,
     onOpenAlbum: (Song) -> Unit,
     onOpenArtist: (Long, String) -> Unit,
+    canReduceRecommendation: Boolean = false,
 ) {
     val state by viewModel.state.collectAsState()
     val snapshot by viewModel.likeSnapshot.collectAsState()
@@ -229,6 +230,12 @@ fun BottomPopupMenuScope.SongMenuContent(
                     dismiss()
                     onOpenArtist(artists.single().first, artists.single().second)
                 } else choosingArtist = true
+            }
+            if (canReduceRecommendation) {
+                SongMenuItem("减少推荐", R.drawable.heart_slash, contentColor) {
+                    viewModel.reduceRecommendation(song.id)
+                    dismiss()
+                }
             }
         }
     }

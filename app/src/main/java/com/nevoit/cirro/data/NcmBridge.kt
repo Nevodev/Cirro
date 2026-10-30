@@ -144,6 +144,11 @@ object NcmBridge {
         decode(nativeRecommendSongs()).getOrThrow().songs
     }
 
+    fun reduceRecommendation(id: Long): Result<Unit> = runCatching {
+        require(id > 0)
+        nativeRecommendSongDislike(id.toString())
+    }.fold(onSuccess = { decode(it).map { } }, onFailure = { Result.failure(it) })
+
     /** 每日推荐歌单（需登录），约 26 条。 */
     fun recommendResource(): Result<List<Playlist>> = runCatching {
         decode(nativeRecommendResource()).getOrThrow().playlists
@@ -497,6 +502,8 @@ object NcmBridge {
     private external fun nativeSongDetail(ids: String): String
 
     private external fun nativeRecommendSongs(): String
+
+    private external fun nativeRecommendSongDislike(id: String): String
 
     private external fun nativeRecommendResource(): String
 

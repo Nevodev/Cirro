@@ -4,11 +4,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nevoit.cirro.data.AccountRepository
 import com.nevoit.cirro.data.CollectionRepository
+import com.nevoit.cirro.data.NcmBridge
 import com.nevoit.cirro.data.SongLikeRepository
 import com.nevoit.cirro.data.model.Playlist
 import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.data.model.Song
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,6 +19,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class SongMenuViewModel(
     private val account: AccountRepository,
@@ -43,6 +46,7 @@ class SongMenuViewModel(
     private var playlistGeneration = 0
     private var pendingLike: PendingLike? = null
     private var addingRequest: Any? = null
+    private var reducingSongId: Long? = null
 
     init {
         likes.ensureLoaded()
@@ -86,6 +90,21 @@ class SongMenuViewModel(
 
     suspend fun navigationSong(song: Song): Song =
         repository.songMetadata(song.id).getOrNull() ?: song
+
+    fun reduceRecommendation(songId: Long) {
+        val uid = requireUserId() ?: return
+        if (reducingSongId != null) return
+        reducingSongId = songId
+        viewModelScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { NcmBridge.reduceRecommendation(songId) }
+                if (session.value.userIdOrNull() != uid) return@launch
+                _messages.trySend(if (result.isSuccess) "已减少推荐" else "操作失败，请稍后重试")
+            } finally {
+                reducingSongId = null
+            }
+        }
+    }
 
     fun loadPlaylists() {
         val uid = requireUserId() ?: return

@@ -326,6 +326,7 @@ fun CollectionRoute(
                 canInsertQueue = queueActions.first,
                 hasInsertQueue = queueActions.second,
                 viewModel = songMenu,
+                canReduceRecommendation = kind == CollectionKind.DAILY,
                 onPlay = {
                     playback.playSongs(
                         songs,
