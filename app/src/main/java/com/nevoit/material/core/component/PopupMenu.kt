@@ -6,16 +6,17 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Indication
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.indication
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -29,6 +30,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicText
@@ -74,6 +76,7 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -91,6 +94,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.constrainHeight
+import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.round
 import com.kyant.shapes.RoundedRectangle
@@ -132,6 +136,7 @@ enum class PopupMenuAnchor { BottomStart, BottomCenter, BottomEnd, TopStart, Top
 object PopupMenuDefaults {
     val Padding = 12.dp
     val Width = 280.dp
+    val MinWidth = 224.dp
     val Gap = 12.dp
 }
 
@@ -140,12 +145,13 @@ internal class PopupMenuRequest(
     val callerInWindow: Rect,
     val anchor: PopupMenuAnchor,
     val padding: Dp,
-    val width: Dp,
+    val width: Dp?,
     val items: List<PopupMenuEntry>,
     val gap: Dp = PopupMenuDefaults.Gap,
     val containerColor: ColorProducer? = null,
     val contentColor: ColorProducer? = null,
     val contentVariantColor: ColorProducer? = null,
+    val minWidth: Dp = PopupMenuDefaults.MinWidth,
 )
 
 internal class PopupMenuHostState {
@@ -179,23 +185,25 @@ fun PopupMenu(
     modifier: Modifier = Modifier,
     anchor: PopupMenuAnchor = PopupMenuAnchor.BottomStart,
     padding: Dp = PopupMenuDefaults.Padding,
-    width: Dp = PopupMenuDefaults.Width,
+    width: Dp? = null,
     enabled: Boolean = true,
     gap: Dp = PopupMenuDefaults.Gap,
     containerColor: ColorProducer? = null,
     contentColor: ColorProducer? = null,
     contentVariantColor: ColorProducer? = null,
+    minWidth: Dp = PopupMenuDefaults.MinWidth,
     content: @Composable (openMenu: () -> Unit) -> Unit,
 ) {
     require(padding.value.isFinite() && padding >= 0.dp)
-    require(width.value.isFinite() && width > 0.dp)
+    require(width == null || (width.value.isFinite() && width > 0.dp))
+    require(minWidth.value.isFinite() && minWidth >= 0.dp)
     require(gap.value.isFinite() && gap >= 0.dp)
     val host = LocalPopupMenuHost.current
     val owner = remember { Any() }
     val bounds = remember { mutableStateOf<Rect?>(null) }
     val latestItems = rememberUpdatedState(items)
     val openMenu = remember(
-        host, owner, anchor, padding, width, enabled, gap,
+        host, owner, anchor, padding, width, enabled, gap, minWidth,
         containerColor, contentColor, contentVariantColor,
     ) {
         {
@@ -214,6 +222,7 @@ fun PopupMenu(
                         containerColor,
                         contentColor,
                         contentVariantColor,
+                        minWidth,
                     )
                 )
             }
@@ -517,6 +526,7 @@ private fun PopupMenuSurface(
     val snapshot = rememberGraphicsLayer()
     val shape = remember { RoundedRectangle(20.dp) }
     val layoutDirection = LocalLayoutDirection.current
+    val density = LocalDensity.current
     var menuCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     val live = expanded && (active || page.exiting)
     val acceptsInput = expanded && active && !page.exiting
@@ -526,7 +536,20 @@ private fun PopupMenuSurface(
         content = {
             Layout(
                 modifier = Modifier
-                    .width(request.width)
+                    .then(
+                        page.sourceBounds?.let { source ->
+                            Modifier.width(with(density) { source.width.toDp() })
+                        } ?: request.width?.let { width ->
+                            Modifier
+                                .widthIn(min = request.minWidth)
+                                .width(width)
+                        } ?: Modifier
+                            .widthIn(
+                                min = request.minWidth,
+                                max = maxOf(request.minWidth, PopupMenuDefaults.Width),
+                            )
+                            .width(IntrinsicSize.Max)
+                    )
                     .onGloballyPositioned {
                         menuCoordinates = it
                         page.placed.complete(Unit)
@@ -608,7 +631,10 @@ private fun PopupMenuSurface(
                                     val content = measurable.measure(
                                         constraints.copy(maxHeight = Constraints.Infinity),
                                     )
-                                    layout(content.width, constraints.constrainHeight(content.height)) {
+                                    layout(
+                                        content.width,
+                                        constraints.constrainHeight(content.height)
+                                    ) {
                                         content.placeRelativeWithLayer(0, -scrollState.value) {
                                             translationY = overscrollEffect.displayedOffset.y
                                         }
@@ -666,7 +692,15 @@ private fun PopupMenuSurface(
                                                     text = AnnotatedString(entry.text)
                                                 },
                                         ) { _, constraints ->
-                                            layout(constraints.maxWidth, row.size.height) {}
+                                            val width = if (constraints.hasBoundedWidth) {
+                                                constraints.maxWidth
+                                            } else {
+                                                constraints.constrainWidth(row.size.width)
+                                            }
+                                            layout(
+                                                width,
+                                                constraints.constrainHeight(row.size.height)
+                                            ) {}
                                         }
                                     } else row.content(
                                         PopupMenuItemSlot(

@@ -98,6 +98,44 @@ class PopupMenuAnimationTest {
     }
 
     @Test
+    fun menuWrapsContentAboveMinimumAndKeepsSubmenuAtParentWidth() {
+        val longLabel = "A longer menu item label that exceeds the default maximum width"
+        compose.setContent {
+            PopupMenuHost {
+                Column {
+                    PopupMenu(listOf(PopupMenuEntry.Item("A")), minWidth = 120.dp) { open ->
+                        Text("Open short", Modifier.clickable(onClick = open))
+                    }
+                    PopupMenu(
+                        listOf(
+                            PopupMenuEntry.Item(
+                                longLabel,
+                                submenu = listOf(PopupMenuEntry.Item("A much longer submenu item label")),
+                            ),
+                        ),
+                        minWidth = 120.dp,
+                    ) { open -> Text("Open long", Modifier.clickable(onClick = open)) }
+                }
+            }
+        }
+        val menu = SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, "菜单")
+        val submenu = SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, "子菜单")
+        compose.onNodeWithText("Open short").performClick()
+        val shortWidth = compose.onNode(menu).fetchSemanticsNode().boundsInRoot.width
+        assertEquals(with(compose.density) { 120.dp.toPx() }, shortWidth, 1f)
+        compose.onNodeWithContentDescription("关闭菜单").performClick()
+        compose.onNodeWithText("Open long").performClick()
+        val longWidth = compose.onNode(menu).fetchSemanticsNode().boundsInRoot.width
+        assertTrue(longWidth > shortWidth)
+        val screenWidth = compose.onRoot().fetchSemanticsNode().boundsInRoot.width
+        assertTrue(longWidth <= screenWidth - with(compose.density) { 24.dp.toPx() } + 1f)
+        assertTrue(longWidth <= with(compose.density) { PopupMenuDefaults.Width.toPx() } + 1f)
+        compose.onNodeWithText(longLabel).performClick()
+        val childWidth = compose.onNode(submenu).fetchSemanticsNode().boundsInRoot.width
+        assertEquals(longWidth, childWidth, 1f)
+    }
+
+    @Test
     fun submenuMorphDoesNotRecomposeEachFrame() {
         compose.setContent {
             PopupMenuHost {
