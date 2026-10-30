@@ -114,7 +114,8 @@ internal object LyricInfoLines {
     )
 
     private val ENGLISH_CREDIT_LABEL = Regex(
-        """^(?:lyrics|words|music|written|composed|produced|arranged)\s+by\s*:\s*\S""",
+        """^(?:(?:lyrics|words|music|written|composed|produced|arranged)\s+by|""" +
+            """lyricist|composer|producer)\s*:\s*\S""",
         RegexOption.IGNORE_CASE,
     )
 

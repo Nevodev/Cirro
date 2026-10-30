@@ -7,19 +7,21 @@ import androidx.compose.runtime.remember
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.LibraryCollection
 import com.nevoit.cirro.data.model.albumDisplayTitle
+import com.nevoit.cirro.detail.normalizeSearchText
+import com.nevoit.cirro.detail.searchTerms
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import java.util.Locale
 
 internal class LibraryCollectionSearchIndex private constructor(
     val collections: List<LibraryCollection>,
     private val text: List<String>,
 ) {
     suspend fun find(query: String): List<LibraryCollection> {
-        val terms = query.trim().lowercase(Locale.ROOT).split(Whitespace).filter(String::isNotEmpty)
+        val terms = searchTerms(query)
+        if (terms.isEmpty() && query.isNotBlank()) return emptyList()
         val context = currentCoroutineContext()
         return buildList {
             text.forEachIndexed { index, searchable ->
@@ -30,8 +32,6 @@ internal class LibraryCollectionSearchIndex private constructor(
     }
 
     companion object {
-        private val Whitespace = Regex("\\s+")
-
         suspend fun build(collections: List<LibraryCollection>): LibraryCollectionSearchIndex {
             val context = currentCoroutineContext()
             val text = collections.mapIndexed { index, collection ->
@@ -40,13 +40,13 @@ internal class LibraryCollectionSearchIndex private constructor(
                 val title = if (info.kind == CollectionKind.ALBUM) {
                     albumDisplayTitle(info.title, info.albumType)
                 } else info.title
-                buildString {
+                normalizeSearchText(buildString {
                     append(title)
                     if (info.kind != CollectionKind.ARTIST) {
                         append('\u0000').append(info.author)
                         collection.artistNames.forEach { append('\u0000').append(it) }
                     }
-                }.lowercase(Locale.ROOT)
+                })
             }
             return LibraryCollectionSearchIndex(collections, text)
         }

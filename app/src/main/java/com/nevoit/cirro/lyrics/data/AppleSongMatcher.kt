@@ -21,6 +21,14 @@ import kotlin.math.abs
  *   （我们传 `米津玄師`、它回 `米津玄师`）。
  */
 internal object AppleSongMatcher {
+    private val recordingVersions = listOf(
+        Regex("""(?i)\blive\b|\bunplugged\b|现场|演唱会"""),
+        Regex("""(?i)\bremix\b|\bmixed\b|混音"""),
+        Regex("""(?i)\binstrumental\b|伴奏|纯音乐"""),
+        Regex("""(?i)\bacoustic\b|不插电"""),
+        Regex("""(?i)\bcover\b|翻唱"""),
+        Regex("""(?i)\bpiano\s*(?:&|and)\s*vocal\b|钢琴版"""),
+    )
 
     /**
      * 接受一条候选所需的最低总分。
@@ -36,28 +44,29 @@ internal object AppleSongMatcher {
     /**
      * 挑出最像 [song] 的候选；没有够格的返回 `null`。
      *
-     * [candidates] 按 Apple 的相关度排序，同分时**靠前的赢**（`>` 而非 `>=`），
+     * [candidates] 按 Apple 的相关度排序，同分时**靠前的赢**，
      * 相当于把 Apple 自己的排序当平局决胜。
      */
-    fun best(candidates: List<AppleSongCandidate>, song: Song): AppleSongCandidate? {
+    fun best(candidates: List<AppleSongCandidate>, song: Song): AppleSongCandidate? =
+        ranked(candidates, song).firstOrNull()
+
+    fun ranked(candidates: List<AppleSongCandidate>, song: Song): List<AppleSongCandidate> {
         val wantName = normalize(song.name)
         val wantArtists = song.artists.map(::normalize).filter { it.isNotEmpty() }
         val wantDurationSec = song.durationMs.takeIf { it > 0 }?.let { it / 1000 }
 
         // 没有歌名就无从匹配（靠歌手碰运气更容易挑错歌）
-        if (wantName.isEmpty()) return null
+        if (wantName.isEmpty() || wantArtists.isEmpty()) return emptyList()
 
-        var best: AppleSongCandidate? = null
-        var bestScore = 0
-        for (candidate in candidates) {
-            if (candidate.id.isEmpty()) continue
+        return candidates.mapNotNull { candidate ->
+            if (candidate.id.isEmpty()) return@mapNotNull null
+            if (recordingVersions.any {
+                it.containsMatchIn("${song.name} ${song.album}") !=
+                    it.containsMatchIn("${candidate.name} ${candidate.album}")
+            }) return@mapNotNull null
             val score = score(candidate, wantName, wantArtists, wantDurationSec)
-            if (score > bestScore) {
-                bestScore = score
-                best = candidate
-            }
-        }
-        return if (bestScore >= AcceptScore) best else null
+            if (score >= AcceptScore) candidate to score else null
+        }.sortedByDescending { it.second }.map { it.first }.distinctBy { it.id }
     }
 
     private fun score(
@@ -68,23 +77,27 @@ internal object AppleSongMatcher {
     ): Int {
         var score = 0
 
-        score += textScore(normalize(candidate.name), wantName, exact = 100, contains = 60, overlap = 40)
+        val titleScore = textScore(normalize(candidate.name), wantName, exact = 100, contains = 60, overlap = 40)
+        if (titleScore == 0) return 0
+        score += titleScore
 
         // 歌手：本地可能多个；跟**最像的那个**比就够（Apple 的 artistName 是拼接串）
         val artist = normalize(candidate.artist)
-        score += wantArtists.maxOfOrNull { want ->
+        val artistScore = wantArtists.maxOfOrNull { want ->
             textScore(artist, want, exact = 60, contains = 40, overlap = 25)
         } ?: 0
+        if (artistScore == 0) return 0
+        score += artistScore
 
         if (wantDurationSec != null && candidate.durationMs > 0) {
             val delta = abs(candidate.durationMs / 1000 - wantDurationSec)
+            if (delta > MaxDurationDeltaSec) return 0
             score += when {
                 delta <= 1 -> 70
                 delta <= 3 -> 50
                 delta <= 5 -> 30
                 delta <= 10 -> 10
-                delta <= MaxDurationDeltaSec -> -30
-                else -> -80
+                else -> -30
             }
         }
 
@@ -103,8 +116,14 @@ internal object AppleSongMatcher {
         if (actual.isEmpty() || want.isEmpty()) return 0
         if (actual == want) return exact
         if (actual.contains(want) || want.contains(actual)) return contains
-        return if (overlapRatio(actual, want) >= 0.7f) overlap else 0
+        // Latin character overlap makes unrelated titles such as Needs and Nobody Wanna
+        // Dance Anymore appear similar. This fallback is only for CJK spelling variants.
+        return if (actual.any(::isCjk) && want.any(::isCjk) &&
+            overlapRatio(actual, want) >= 0.7f && overlapRatio(want, actual) >= 0.7f
+        ) overlap else 0
     }
+
+    private fun isCjk(char: Char): Boolean = char in '\u3400'..'\u9fff'
 
     /** [a] 的字符有多少比例出现在 [b] 里（按 [b] 去重后的字符数算分母）。 */
     private fun overlapRatio(a: String, b: String): Float {

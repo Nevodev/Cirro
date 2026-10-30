@@ -13,6 +13,16 @@ import org.junit.Test
 
 class LibraryCollectionSearchTest {
     @Test
+    fun ignoresSymbolsAndLatinAccentsInCollectionMetadata() = runBlocking {
+        val album = collection(CollectionKind.ALBUM, 1, "Café!", "ADÉLA")
+        val index = LibraryCollectionSearchIndex.build(listOf(album))
+        assertEquals(listOf(album), index.find("cafe adela"))
+        assertEquals(listOf(album), index.find("café!"))
+        assertTrue(index.find("cafeadela").isEmpty())
+        assertTrue(index.find("!!!").isEmpty())
+    }
+
+    @Test
     fun albumsMatchTitlesAuthorsAndContributingArtists() = runBlocking {
         val albums = listOf(
             collection(CollectionKind.ALBUM, 1, "叶惠美", "周杰伦"),

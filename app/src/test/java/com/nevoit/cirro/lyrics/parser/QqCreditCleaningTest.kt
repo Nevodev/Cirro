@@ -6,6 +6,35 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class QqCreditCleaningTest {
+    @Test fun aliciaRoleLabelsAreRemovedFromQrcAndOrdinaryLrc() {
+        val texts = listOf(
+            "If I Ain't Got You - Alicia Keys/Usher",
+            "Lyricist：Alicia Keys",
+            "Composer：Alicia Keys",
+            "Producer：Alicia Keys",
+            "Some people live for the fortune",
+        )
+        for (qrc in listOf(true, false)) {
+            val body = texts.mapIndexed { index, text ->
+                if (qrc) "[${index * 6000},6000]$text(${index * 6000},6000)"
+                else "[00:${(index * 6).toString().padStart(2, '0')}.00]$text"
+            }.joinToString("\n")
+            val lyrics = QrcLyricsParser.parse(
+                "[ti:If I Ain't Got You]\n[ar:Alicia Keys/Usher]\n$body",
+            ).getOrThrow()
+            assertEquals(listOf(texts.last()), lyrics.lines.map { it.text })
+            assertEquals(24000L, lyrics.lines.single().startMs)
+        }
+    }
+
+    @Test fun roleLabelsInTheBodyRemainLyrics() {
+        val lyrics = QrcLyricsParser.parse(
+            "[0,1000]Opening(0,1000)\n[1000,1000]Lyricist: dreams(1000,1000)\n" +
+                "[2000,1000]Composer: dreams(2000,1000)\n[3000,1000]Ordinary lyric(3000,1000)",
+        ).getOrThrow()
+        assertEquals(4, lyrics.lines.size)
+    }
+
     @Test fun bareTitleBeforeCreditsDoesNotStopQqHeaderCleaning() {
         val lyrics = QrcLyricsParser.parse(
             "[ti:]\n[ar:]\n[0,1545]坚强笨女人(0,1545)\n" +

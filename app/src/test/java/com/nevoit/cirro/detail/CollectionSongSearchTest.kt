@@ -9,6 +9,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CollectionSongSearchTest {
+    @Test
+    fun ignoresSymbolsAndLatinAccentsWithoutJoiningFields() = runBlocking {
+        val song = Song(1, "Rock & Roll", listOf("ADÉLA"), "Vol. 1")
+        val index = CollectionSongSearchIndex.build(listOf(song))
+        assertEquals(listOf(song), index.find("rockroll adela vol1").map { it.value })
+        assertEquals(listOf(song), index.find("rock&roll adéla").map { it.value })
+        assertTrue(index.find("rolladela").isEmpty())
+        assertTrue(index.find("!!!").isEmpty())
+    }
+
     private val songs = listOf(
         Song(1, "晴天", listOf("周杰伦"), "叶惠美"),
         Song(2, "Yellow", listOf("Coldplay"), "Parachutes"),

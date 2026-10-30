@@ -229,12 +229,17 @@ class LyricsRepository(
             if (found == null) {
                 trail += "Apple搜索($term)=请求失败"
             } else {
-                val picked = AppleSongMatcher.best(found.songs, song)
+                val candidates = AppleSongMatcher.ranked(found.songs, song)
                 val where = "sf=${found.storefront.ifEmpty { "-" }}" +
                     if (!found.storefrontProbed) "!" else ""
                 trail += "Apple搜索($term)=${found.songs.size}条/$where/" +
-                    (picked?.let { "选中${it.id}(${it.name}-${it.artist})" } ?: "无够格候选")
-                if (picked != null) takeApple(picked.id, via = "via=search")?.let { return deliver(it) }
+                    "${candidates.size}条够格候选"
+                // 同一录音的重发与单曲可能只有某个 Apple id 带逐字，不能用第一条的空结果
+                // 代表整首歌没有官方词；逐行结果继续保留，找到逐字就立即交付。
+                for (candidate in candidates) {
+                    trail += "Apple候选=${candidate.id}(${candidate.name}-${candidate.artist})"
+                    takeApple(candidate.id, via = "via=search")?.let { return deliver(it) }
+                }
             }
         }
 
