@@ -81,7 +81,6 @@ import com.nevoit.cirro.playback.pearmesh.memoryCoverPaletteKey
 import com.nevoit.cirro.playback.pearmesh.prepareMemoryCoverPalette
 import com.nevoit.cirro.ui.BottomShade
 import com.nevoit.cirro.ui.StatusBarAppearance
-import com.nevoit.material.clip.cornerMaskClip
 import com.nevoit.material.clip.cornerMaskCover
 import com.nevoit.material.core.component.BottomPopupMenuHost
 import com.nevoit.material.core.component.HGap
@@ -420,13 +419,6 @@ fun BoxScope.Main() {
                 NavigationHost(
                     navigator = navigator,
                     onHostReady = { hostHandle = it },
-                    transitionModifier = { page, isTransitioning ->
-                        page
-                            .cornerMaskClip(
-                                shape = navigationPageShape,
-                                enabled = isTransitioning,
-                            )
-                    }
                 ) {
                     val statusBarPageId = entry.id
                     if (entry.id == navigator.current.id) {

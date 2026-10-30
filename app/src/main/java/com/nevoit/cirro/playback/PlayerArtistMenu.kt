@@ -82,7 +82,15 @@ internal fun PlayerArtistMenu(
         }.distinctBy { it.first }
     }
     val items =
-        remember(navigationSong, artists, artistIcon, albumIcon, song.artist, onOpenCollection, contentVariantColor) {
+        remember(
+            navigationSong,
+            artists,
+            artistIcon,
+            albumIcon,
+            song.artist,
+            onOpenCollection,
+            contentVariantColor
+        ) {
             val artistItems = artists.map { (id, name) ->
                 PopupMenuEntry.Item(
                     text = name,
@@ -131,7 +139,7 @@ internal fun PlayerArtistMenu(
 }
 
 @Composable
-private fun ArtistMenuAvatar(
+internal fun ArtistMenuAvatar(
     artistId: Long,
     covers: MutableMap<Long, String>,
     placeholderColor: ColorProducer,
@@ -147,7 +155,8 @@ private fun ArtistMenuAvatar(
     }
     LaunchedEffect(artistId, library) {
         if (cover == null) {
-            val resolved = withContext(Dispatchers.IO) { NcmBridge.artistCover(artistId).getOrNull() }
+            val resolved =
+                withContext(Dispatchers.IO) { NcmBridge.artistCover(artistId).getOrNull() }
             if (resolved != null) {
                 covers[artistId] = resolved
                 cover = resolved
@@ -155,9 +164,12 @@ private fun ArtistMenuAvatar(
         }
     }
     Box(
-        modifier = Modifier.size(40.dp).clip(CircleShape).drawBehind {
-            drawRect(placeholderColor().let { it.copy(alpha = it.alpha * 0.12f) })
-        },
+        modifier = Modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .drawBehind {
+                drawRect(placeholderColor().let { it.copy(alpha = it.alpha * 0.1f) })
+            },
         contentAlignment = Alignment.Center,
     ) {
         Icon(

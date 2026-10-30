@@ -13,6 +13,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -74,6 +75,12 @@ fun ManualAnimatedVisibility(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
+                    // Scale the composed page rather than transforming each child's clip.
+                    compositingStrategy = if (scale.value != 1f) {
+                        CompositingStrategy.Offscreen
+                    } else {
+                        CompositingStrategy.Auto
+                    }
                     this.alpha = alpha.value
                     scaleX = scale.value
                     scaleY = scale.value

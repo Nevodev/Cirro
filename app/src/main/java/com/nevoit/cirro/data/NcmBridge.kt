@@ -339,6 +339,8 @@ object NcmBridge {
                     albumType = body.albumType,
                     primaryArtistId = body.primaryArtistId,
                     primaryArtistName = body.primaryArtistName,
+                    artistNames = body.artists,
+                    artistIds = body.artistIds,
                 ),
                 songs = body.songs,
             )
@@ -599,6 +601,7 @@ private data class BridgeResponse(
     val playCount: Long = 0,
     val subscribed: Boolean = false,
     val artists: List<String> = emptyList(),
+    val artistIds: List<Long> = emptyList(),
     val company: String = "",
     val albumType: String = "",
     val primaryArtistId: Long = 0L,

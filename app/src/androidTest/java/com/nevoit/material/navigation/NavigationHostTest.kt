@@ -4,6 +4,7 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -19,6 +20,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.nevoit.material.navigation.shape.DeviceCornerState
+import com.nevoit.material.navigation.shape.LocalDeviceCorners
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
@@ -226,44 +229,46 @@ class NavigationHostTest {
 
     private fun show(pages: Pages) {
         compose.setContent {
-            NavigationHost(
-                navigator = pages.navigator,
-                pageViewModelStores = pages.stores,
-                animationSpec = tween(320, easing = LinearEasing),
-                onHostReady = { pages.handle = it },
-            ) {
-                val scope = this
-                val page = destination
-                val lifecycle = LocalLifecycleOwner.current.lifecycle
-                val transition = checkNotNull(LocalPageTransitionState.current)
-                val model = viewModel { PageModel() }
-                var value by rememberSaveable { mutableIntStateOf(0) }
-                val placed = remember { booleanArrayOf(false) }
-                DisposableEffect(entry.id) {
-                    pages.composed += page
-                    pages.compositions[page] = pages.compositions.getOrDefault(page, 0) + 1
-                    onDispose { pages.composed -= page }
-                }
-                SideEffect {
-                    pages.scopes[page] = scope
-                    pages.lifecycles[page] = lifecycle
-                    pages.transitions[page] = transition
-                    pages.models[page] = model
-                    pages.values[page] = value
-                    pages.setValue[page] = { value = it }
-                }
-                Box(
-                    Modifier.fillMaxSize().layout { measurable, constraints ->
-                        val child = measurable.measure(constraints)
-                        layout(child.width, child.height) {
-                            child.place(0, 0)
-                            if (!placed[0]) {
-                                placed[0] = true
-                                pages.onFirstPlacement(page)
+            CompositionLocalProvider(LocalDeviceCorners provides remember { DeviceCornerState() }) {
+                NavigationHost(
+                    navigator = pages.navigator,
+                    pageViewModelStores = pages.stores,
+                    animationSpec = tween(320, easing = LinearEasing),
+                    onHostReady = { pages.handle = it },
+                ) {
+                    val scope = this
+                    val page = destination
+                    val lifecycle = LocalLifecycleOwner.current.lifecycle
+                    val transition = checkNotNull(LocalPageTransitionState.current)
+                    val model = viewModel { PageModel() }
+                    var value by rememberSaveable { mutableIntStateOf(0) }
+                    val placed = remember { booleanArrayOf(false) }
+                    DisposableEffect(entry.id) {
+                        pages.composed += page
+                        pages.compositions[page] = pages.compositions.getOrDefault(page, 0) + 1
+                        onDispose { pages.composed -= page }
+                    }
+                    SideEffect {
+                        pages.scopes[page] = scope
+                        pages.lifecycles[page] = lifecycle
+                        pages.transitions[page] = transition
+                        pages.models[page] = model
+                        pages.values[page] = value
+                        pages.setValue[page] = { value = it }
+                    }
+                    Box(
+                        Modifier.fillMaxSize().layout { measurable, constraints ->
+                            val child = measurable.measure(constraints)
+                            layout(child.width, child.height) {
+                                child.place(0, 0)
+                                if (!placed[0]) {
+                                    placed[0] = true
+                                    pages.onFirstPlacement(page)
+                                }
                             }
                         }
-                    }
-                )
+                    )
+                }
             }
         }
         compose.waitForIdle()

@@ -31,9 +31,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.BlendMode
@@ -42,7 +42,6 @@ import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -59,7 +58,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil3.compose.AsyncImage
 import com.nevoit.cirro.R
 import com.nevoit.cirro.data.AccountRepository
 import com.nevoit.cirro.data.AppleAlbumRepository
@@ -75,14 +73,15 @@ import com.nevoit.cirro.data.model.hasPendingInserts
 import com.nevoit.cirro.data.model.likedPlaylistInfo
 import com.nevoit.cirro.data.model.tracksForAlbum
 import com.nevoit.cirro.home.OpenCollection
-import com.nevoit.cirro.playback.pearmesh.memoryCoverPaletteKey
-import com.nevoit.cirro.playback.pearmesh.prepareMemoryCoverPalette
 import com.nevoit.cirro.home.Section
 import com.nevoit.cirro.home.dataOrNull
 import com.nevoit.cirro.palette.CoverPalette
 import com.nevoit.cirro.palette.CoverSeed
 import com.nevoit.cirro.palette.collectionStatusBarDarkIcons
+import com.nevoit.cirro.playback.ArtistMenuAvatar
 import com.nevoit.cirro.playback.PlaybackConnection
+import com.nevoit.cirro.playback.pearmesh.memoryCoverPaletteKey
+import com.nevoit.cirro.playback.pearmesh.prepareMemoryCoverPalette
 import com.nevoit.cirro.ui.BottomShade
 import com.nevoit.cirro.ui.ReflectionTransformation
 import com.nevoit.cirro.ui.SongMenuContent
@@ -95,8 +94,12 @@ import com.nevoit.kinetic.layout.overscroll.rememberOffsetOverscrollEffect
 import com.nevoit.material.core.animation.animatePremultipliedColorAsState
 import com.nevoit.material.core.component.BottomPopupMenuScope
 import com.nevoit.material.core.component.Icon
+import com.nevoit.material.core.component.PopupMenu
+import com.nevoit.material.core.component.PopupMenuAnchor
+import com.nevoit.material.core.component.PopupMenuEntry
 import com.nevoit.material.core.component.Text
 import com.nevoit.material.core.component.VGap
+import com.nevoit.material.core.interaction.AlphaIndication
 import com.nevoit.material.core.layout.LocalOverscrollVisualOffset
 import com.nevoit.material.core.layout.VerticalStack
 import com.nevoit.material.core.layout.isScrolledPast
@@ -241,7 +244,8 @@ fun CollectionRoute(
     LaunchedEffect(viewModel, appleAlbums, pageTransition) {
         if (kind != CollectionKind.ALBUM || videoUrl != null) return@LaunchedEffect
         val match = appleAlbums.cached(id) ?: run {
-            val loaded = viewModel.state.first { it.info is Section.Ready && it.songs is Section.Ready }
+            val loaded =
+                viewModel.state.first { it.info is Section.Ready && it.songs is Section.Ready }
             appleAlbums.resolve(loaded.info.dataOrNull!!, loaded.songs.dataOrNull.orEmpty())
         }
         if (match != null) {
@@ -275,7 +279,8 @@ fun CollectionRoute(
     val coverUrl = coverHint.takeUnless { coverHintFailed }.orEmpty()
         .ifEmpty { state.info.dataOrNull?.cover.orEmpty() }
     val palette = koinInject<CoverPalette>()
-    val paletteKey = if (memoryCover) memoryCoverPaletteKey(LocalContext.current, coverUrl) else coverUrl
+    val paletteKey =
+        if (memoryCover) memoryCoverPaletteKey(LocalContext.current, coverUrl) else coverUrl
     var seed by remember(paletteKey) { mutableStateOf(palette.cached(paletteKey)) }
     LaunchedEffect(paletteKey) {
         if (paletteKey.isEmpty()) return@LaunchedEffect
@@ -309,6 +314,9 @@ fun CollectionRoute(
                 album.cover,
                 album.author
             )
+        },
+        onOpenArtist = { artistId, name ->
+            onOpenCollection(CollectionKind.ARTIST, artistId, name, "", "热门歌曲")
         },
         onRetryMoreWorks = viewModel::loadMoreWorks,
         onRetrySimilarSongs = viewModel::loadSimilarSongs,
@@ -407,6 +415,7 @@ private fun CollectionScreen(
     onStatusBarAppearanceChanged: (Boolean?) -> Unit,
     onPlay: (Int) -> Unit,
     onOpenAlbum: (CollectionInfo) -> Unit,
+    onOpenArtist: (Long, String) -> Unit,
     onRetryMoreWorks: () -> Unit,
     onRetrySimilarSongs: () -> Unit,
     songMenuContent: @Composable BottomPopupMenuScope.(Song) -> Unit,
@@ -502,7 +511,12 @@ private fun CollectionScreen(
     }
     BackHandler(enabled = search.revealed, onBack = closeSearch)
     val showTopShade by listState.isScrolledPast(screenWidth * 0.75f)
-    ReportStatusBarAppearance(seed, showTopShade || searching, backgroundColor, onStatusBarAppearanceChanged)
+    ReportStatusBarAppearance(
+        seed,
+        showTopShade || searching,
+        backgroundColor,
+        onStatusBarAppearanceChanged
+    )
     val topShapeAlpha by animateFloatAsState(
         targetValue = if (showTopShade) 1f else 0f,
         animationSpec = tween(durationMillis = 200),
@@ -578,6 +592,9 @@ private fun CollectionScreen(
                         backgroundColor = backgroundColor,
                         buttonColor = buttonColor,
                         buttonIconColor = buttonIconColor,
+                        contentColor = contentColorProducer,
+                        contentVariantColor = contentVariantColor,
+                        onOpenArtist = onOpenArtist,
                         subBusy = state.subBusy,
                         onPlay = { onPlay(0) },
                         onShuffle = onShuffle,
@@ -789,7 +806,8 @@ internal fun ReportStatusBarAppearance(
                 dark = currentSeed?.dark,
                 topLuminance = currentSeed?.topLuminance,
                 backgroundVisible = currentBackgroundVisible,
-                backgroundLuminance = if (currentBackgroundVisible) currentBackground().luminance().toDouble() else null,
+                backgroundLuminance = if (currentBackgroundVisible) currentBackground().luminance()
+                    .toDouble() else null,
             )
         }.collect { report(it) }
     }
@@ -816,6 +834,9 @@ private fun HeaderBlock(
     backgroundColor: ColorProducer,
     buttonColor: ColorProducer,
     buttonIconColor: ColorProducer,
+    contentColor: ColorProducer,
+    contentVariantColor: ColorProducer,
+    onOpenArtist: (Long, String) -> Unit,
     subBusy: Boolean,
     onPlay: () -> Unit,
     onShuffle: () -> Unit,
@@ -896,18 +917,59 @@ private fun HeaderBlock(
 
             val author = info?.author ?: authorHint
             VGap(4.dp)
-            Text(
-                text = author,
-                style = MaterialTheme.type.subHeadline,
-                color = Color.White.copy(alpha = 0.5f),
-                textAlign = TextAlign.Center,
-                minLines = 1,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.graphicsLayer {
-                    blendMode = BlendMode.Plus
+            val artists = remember(info) {
+                if (info?.kind != CollectionKind.ALBUM) emptyList()
+                else if (info.artistNames.isNotEmpty() && info.artistNames.size == info.artistIds.size &&
+                    info.artistIds.all { it > 0 }
+                ) info.artistNames.zip(info.artistIds).map { (name, id) -> id to name }
+                    .distinctBy { it.first }
+                else if (info.artistNames.size <= 1 && info.primaryArtistId > 0) {
+                    listOf(info.primaryArtistId to info.primaryArtistName.ifBlank { author })
+                } else emptyList()
+            }
+            val artistCovers = remember { mutableMapOf<Long, String>() }
+            val menuItems = remember(artists, onOpenArtist, contentVariantColor) {
+                artists.map { (id, name) ->
+                    PopupMenuEntry.Item(
+                        text = name,
+                        leadingContent = {
+                            ArtistMenuAvatar(
+                                id,
+                                artistCovers,
+                                contentVariantColor
+                            )
+                        },
+                    ) { onOpenArtist(id, name) }
                 }
-            )
+            }
+            PopupMenu(
+                items = menuItems,
+                anchor = PopupMenuAnchor.BottomCenter,
+                containerColor = buttonColor,
+                contentColor = contentColor,
+                contentVariantColor = contentVariantColor,
+            ) { openMenu ->
+                Text(
+                    text = author,
+                    style = MaterialTheme.type.subHeadline,
+                    color = Color.White.copy(alpha = 0.5f),
+                    textAlign = TextAlign.Center,
+                    minLines = 1,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .graphicsLayer { blendMode = BlendMode.Plus }
+                        .then(
+                            if (artists.isEmpty()) Modifier else Modifier.clickable(
+                                interactionSource = null,
+                                indication = AlphaIndication()
+                            ) {
+                                if (artists.size == 1) artists.single()
+                                    .let { onOpenArtist(it.first, it.second) }
+                                else openMenu()
+                            }),
+                )
+            }
 
             val meta =
                 if (likedPlaylist) relativeAddedDay(info?.updateTimeMs ?: 0) else metaLine(info)

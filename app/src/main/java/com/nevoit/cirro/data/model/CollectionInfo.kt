@@ -43,6 +43,8 @@ data class CollectionInfo(
     val albumType: String = "",
     val primaryArtistId: Long = 0L,
     val primaryArtistName: String = "",
+    val artistNames: List<String> = emptyList(),
+    val artistIds: List<Long> = emptyList(),
 )
 
 /**

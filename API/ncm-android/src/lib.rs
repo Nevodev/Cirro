@@ -1312,12 +1312,18 @@ pub extern "system" fn Java_com_nevoit_cirro_data_NcmBridge_nativeAlbumDetail<'l
                 .as_array()
                 .map(|xs| xs.iter().filter_map(|a| a["name"].as_str()).collect())
                 .unwrap_or_default();
+            let artist_ids: Vec<i64> = al["artists"]
+                .as_array()
+                .map(|xs| xs.iter().filter(|a| a["name"].as_str().is_some())
+                    .map(|a| pick_i64_loose(a, &["id"])).collect())
+                .unwrap_or_default();
             serde_json::json!({
                 "ok": true,
                 "id": pick_i64_loose(al, &["id"]),
                 "name": al["name"].as_str().unwrap_or(""),
                 "cover": canon_pic(al["picUrl"].as_str().unwrap_or("")),
                 "artists": artists,
+                "artistIds": artist_ids,
                 "description": description,
                 "primaryArtistId": primary_album_artist(al).0,
                 "primaryArtistName": primary_album_artist(al).1,

@@ -11,6 +11,8 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.toPixelMap
@@ -37,6 +39,32 @@ import kotlin.math.floor
 class CornerMaskClipTest {
     @get:Rule
     val compose = createComposeRule()
+
+    @Test
+    fun maskInExistingLayerPreservesTheBackdropAndUpdatesWithContent() {
+        val enabled = mutableStateOf(true)
+        val color = mutableStateOf(Color.Blue)
+        compose.setContent {
+            Box(Modifier.size(120.dp).testTag("singleLayer").background(Color.Magenta)) {
+                Box(
+                    Modifier.fillMaxSize()
+                        .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                        .cornerMaskClipInLayer(RoundedRectangle(24.dp), enabled.value)
+                        .background(color.value)
+                )
+            }
+        }
+        val before = compose.onNodeWithTag("singleLayer").captureToImage().toPixelMap()
+        assertEquals(Color.Magenta, before[0, 0])
+        assertEquals(Color.Blue, before[before.width / 2, before.height / 2])
+        compose.runOnIdle { color.value = Color.Green }
+        val updated = compose.onNodeWithTag("singleLayer").captureToImage().toPixelMap()
+        assertEquals(Color.Magenta, updated[0, 0])
+        assertEquals(Color.Green, updated[updated.width / 2, updated.height / 2])
+        compose.runOnIdle { enabled.value = false }
+        val unmasked = compose.onNodeWithTag("singleLayer").captureToImage().toPixelMap()
+        assertEquals(Color.Green, unmasked[0, 0])
+    }
 
     @Test
     fun opaqueCornerCoverPreservesBackdropBlendingAndCanBeDisabled() {

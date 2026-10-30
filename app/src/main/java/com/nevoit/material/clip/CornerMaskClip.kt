@@ -2,6 +2,7 @@ package com.nevoit.material.clip
 
 import android.util.LruCache
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -39,6 +40,19 @@ fun Modifier.cornerMaskClip(
     shape: RoundedRectangularShape,
     enabled: Boolean = true,
 ): Modifier = then(CornerMaskClipElement(shape, enabled))
+
+/** Must be inside an existing offscreen layer; DstOut would otherwise erase the backdrop too. */
+internal fun Modifier.cornerMaskClipInLayer(
+    shape: RoundedRectangularShape,
+    enabled: Boolean = true,
+): Modifier = if (!enabled) this else drawWithCache {
+    val bounds = Rect(Offset.Zero, size)
+    val corners = shape.corners(size, layoutDirection, this)
+    onDrawWithContent {
+        drawContent()
+        drawCornerMasks(bounds, corners)
+    }
+}
 
 fun Modifier.cornerMaskClip(
     bounds: (Size) -> Rect,

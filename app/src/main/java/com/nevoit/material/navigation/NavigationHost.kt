@@ -25,6 +25,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
@@ -35,6 +36,8 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
+import com.nevoit.material.clip.cornerMaskClipInLayer
+import com.nevoit.material.navigation.shape.deviceCornerShape
 import com.nevoit.material.theme.tokens.Springs
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
@@ -177,7 +180,7 @@ class NavigationHostHandle internal constructor(
  *
  * The slide distance is the host's own width. [windowWidthPx] overrides it — two hosts side by side in
  * a two-pane layout each measure their own pane, which is what makes that layout work — and
- * [underlayTranslation], [scrimColor], [scrimAlpha] and [transitionModifier] are optional visual
+ * [underlayTranslation], [scrimColor] and [scrimAlpha] are optional visual
  * policy hooks; they do not participate in back-stack or lifecycle decisions.
  * [onHostReady] hands out a [NavigationHostHandle] once, for callers outside the page tree.
  *
@@ -198,10 +201,10 @@ fun <D : Any> NavigationHost(
     },
     scrimColor: Color = Color.Black,
     scrimAlpha: Float = 0.6f,
-    transitionModifier: (Modifier, isTransitioning: Boolean) -> Modifier = { page, _ -> page },
     onHostReady: (NavigationHostHandle) -> Unit = {},
     content: @Composable NavigationScope<D>.() -> Unit,
 ) {
+    val pageShape = deviceCornerShape()
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         // An unbounded parent (a horizontal scroller, say) has no meaningful slide distance; zero
         // makes the page appear in place instead of sliding from infinity.
@@ -400,23 +403,34 @@ fun <D : Any> NavigationHost(
                     }
 
                     Box(
-                        modifier = transitionModifier(
-                            Modifier
-                                .fillMaxSize()
-                                .navigationPageReady { transition.ready = true }
-                                .graphicsLayer {
-                                    val ownTranslation = if (isRoot) {
-                                        0f
-                                    } else {
-                                        hostWidthPx * (1f - transition.progress.value)
-                                    }
-                                    translationX = ownTranslation + underlayTranslation(
-                                        hostWidthPx,
-                                        underlayDriver?.underlayProgress?.value ?: 0f,
-                                    )
-                                },
-                            transition.isTransitioning.value,
-                        ).zIndex(index.toFloat()),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .navigationPageReady { transition.ready = true }
+                            .graphicsLayer {
+                                // Keep child clip masks in page coordinates while either page moves.
+                                compositingStrategy = if (
+                                    transition.isTransitioning.value ||
+                                    underlayDriver?.isTransitioning?.value == true
+                                ) {
+                                    CompositingStrategy.Offscreen
+                                } else {
+                                    CompositingStrategy.Auto
+                                }
+                                val ownTranslation = if (isRoot) {
+                                    0f
+                                } else {
+                                    hostWidthPx * (1f - transition.progress.value)
+                                }
+                                translationX = ownTranslation + underlayTranslation(
+                                    hostWidthPx,
+                                    underlayDriver?.underlayProgress?.value ?: 0f,
+                                )
+                            }
+                            .cornerMaskClipInLayer(
+                                shape = pageShape,
+                                enabled = transition.isTransitioning.value,
+                            )
+                            .zIndex(index.toFloat()),
                     ) {
                         if (!isRoot) {
                             Box(
