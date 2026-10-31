@@ -66,7 +66,7 @@ class PlaybackService : MediaSessionService(), KoinComponent {
     private val account: AccountRepository by inject()
     private val reports: PlaybackReportRepository by inject()
     private val audioCache: PlaybackAudioCache by inject()
-    private val nextTrackPreloader by lazy { NextTrackPreloader(audioCache, qualityStore, serviceScope) }
+    private val nextTrackPreloader by lazy { NextTrackPreloader(this, audioCache, qualityStore, serviceScope) }
     private var countedPlaybackUid: Long? = null
     private val listening by lazy {
         PlaybackListeningSession(emit = reports::enqueue, checkpoint = reports::checkpoint)

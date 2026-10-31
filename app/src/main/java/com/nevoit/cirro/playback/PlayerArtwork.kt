@@ -20,7 +20,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 
 /** 背景始终模糊，限制纹理大小以减少解码与上传开销。 */
-private const val CoverTextureSize = 512
+internal const val CoverTextureSize = 512
 
 internal class PlayerArtwork(val cover: String, val bitmap: Bitmap?)
 

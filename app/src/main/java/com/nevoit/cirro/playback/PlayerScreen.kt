@@ -1859,7 +1859,7 @@ private fun PlayerAudioQuality(
     }
     // 当前歌曲仍显示实际加载的档位；跨歌曲的过渡只能复用同一设置下的结果，不能把旧档位带到新曲。
     val shown = actual ?: retained?.second?.takeIf {
-        song != null && resolving && (sameEntry || it.requestedQuality == requestedQuality)
+        song != null && (sameEntry || (resolving && it.requestedQuality == requestedQuality))
     }
     SideEffect {
         if (actual != null) retained = key to actual
@@ -1868,7 +1868,8 @@ private fun PlayerAudioQuality(
     val badgeQuality = shown?.quality?.takeIf {
         it == AudioQuality.LOSSLESS || it == AudioQuality.HIRES || it == AudioQuality.DOLBY
     }
-    val displayRequest = shown?.requestedQuality ?: requestedQuality
+    // 恢复后重新加载同一条目可能使用新的设置；请求档位变化不能重建已显示的标签动画。
+    val displayRequest = remember(audio, key) { shown?.requestedQuality ?: requestedQuality }
     var lastBadgeQuality by remember(audio, displayRequest) { mutableStateOf<AudioQuality?>(null) }
     // 淡出结束前仍需保留标签内容，不能在音质变为有损时先移除文字和图标。
     SideEffect { if (badgeQuality != null) lastBadgeQuality = badgeQuality }

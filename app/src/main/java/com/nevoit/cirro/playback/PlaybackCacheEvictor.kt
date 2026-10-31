@@ -58,8 +58,8 @@ internal class PlaybackCacheEvictor(
                 it.key != writingKey && songId(it.key) != playingSongId && songId(it.key) != nextSongId
             }
             val victim = candidates.minWithOrNull(
-                compareBy<CacheSpan> { uses[songId(it.key)]?.plays ?: 0 }
-                    .thenBy { uses[songId(it.key)]?.lastPlayedAt ?: 0 }
+                compareBy<CacheSpan> { uses[songId(it.key)]?.plays ?: 0L }
+                    .thenBy { uses[songId(it.key)]?.lastPlayedAt ?: 0L }
                     .thenBy { it.lastTouchTimestamp }
                     .thenBy { it.key }
                     .thenBy { it.position }

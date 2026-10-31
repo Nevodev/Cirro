@@ -123,8 +123,7 @@ private class CornerMaskClipNode(
             field = value
             coverFilter = if (value == Color.Unspecified) null else ColorFilter.tint(value)
         }
-    private var coverFilter =
-        if (coverColor == Color.Unspecified) null else ColorFilter.tint(coverColor)
+    private var coverFilter = if (coverColor == Color.Unspecified) null else ColorFilter.tint(coverColor)
 
     private var cornersSize = Size.Zero
     private var cornersShape: RoundedRectangularShape? = null
@@ -224,18 +223,17 @@ private inline fun DrawScope.drawCornerMaskClipped(
     }
 
     val canvas = drawContext.canvas
-    canvas.saveLayer(bounds, MaskLayerPaint)
+    canvas.save()
     try {
-        canvas.save()
+        // saveLayer bounds are allocation hints; the moving rectangle must also clip content.
+        canvas.clipRect(bounds)
+        canvas.saveLayer(bounds, MaskLayerPaint)
         try {
-            // saveLayer bounds are allocation hints; the moving rectangle must also clip content.
-            canvas.clipRect(bounds)
             content()
+            drawCornerMasks(bounds, corners)
         } finally {
             canvas.restore()
         }
-        // Keep the mask's padding outside the content clip to cover fractional edge pixels.
-        drawCornerMasks(bounds, corners)
     } finally {
         canvas.restore()
     }
