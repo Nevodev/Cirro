@@ -326,7 +326,6 @@ fun CollectionRoute(
                 canInsertQueue = queueActions.first,
                 hasInsertQueue = queueActions.second,
                 viewModel = songMenu,
-                canReduceRecommendation = kind == CollectionKind.DAILY,
                 onPlay = {
                     playback.playSongs(
                         songs,
@@ -603,7 +602,8 @@ private fun CollectionScreen(
                         overscrollOffsetY = {
                             overscrollVisual?.visualOffset?.y?.coerceAtLeast(0f) ?: 0f
                         },
-                        modifier = Modifier.animateItem(tween(200), Springs.crisp(), tween(200)),
+                        // 视频固定列表项后，屏幕外的占位位置不代表实际滚动位置，不能用于位置动画。
+                        modifier = Modifier.animateItem(tween(200), null, tween(200)),
                     )
                 }
             }

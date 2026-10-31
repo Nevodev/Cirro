@@ -18,6 +18,8 @@ import com.nevoit.cirro.data.RadioRepository
 import com.nevoit.cirro.data.SessionStore
 import com.nevoit.cirro.data.SongLikeRepository
 import com.nevoit.cirro.ui.SongMenuViewModel
+import com.nevoit.cirro.ui.SongCreditsViewModel
+import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.detail.ArtistShelfSection
 import com.nevoit.cirro.detail.ArtistShelfViewModel
@@ -126,6 +128,7 @@ val appModule = module {
     viewModelOf(::PlayerLikeViewModel)
 
     viewModelOf(::SongMenuViewModel)
+    viewModel { (song: Song) -> SongCreditsViewModel(get(), song) }
 
     // 统一详情页：一个页面架构服务三种来源，参数区分是哪一种
     viewModel { (kind: CollectionKind, id: Long, titleHint: String) ->

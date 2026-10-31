@@ -35,6 +35,9 @@ private const val BaseGain = 1f
 @UnstableApi
 class LoudnessAudioProcessor : BaseAudioProcessor() {
 
+    @Volatile
+    var enabled: Boolean = true
+
     /** 数据源的条目 key → 实际加载音质的线性增益。写入在加载线程，读在音频线程。 */
     private val tracks = ConcurrentHashMap<String, Float>()
 
@@ -89,7 +92,7 @@ class LoudnessAudioProcessor : BaseAudioProcessor() {
     override fun queueInput(inputBuffer: ByteBuffer) {
         val size = inputBuffer.remaining()
         if (size == 0) return
-        val current = gain
+        val current = if (enabled) gain else 1f
         // Unity 快路径：无增益时整块拷贝，省掉音频线程上逐样本的读-乘-写。
         if (current == 1f) {
             replaceOutputBuffer(size).put(inputBuffer).flip()

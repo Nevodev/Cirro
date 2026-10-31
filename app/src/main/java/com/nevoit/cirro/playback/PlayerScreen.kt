@@ -1,5 +1,6 @@
 package com.nevoit.cirro.playback
 
+import android.content.Intent
 import android.graphics.Bitmap
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -94,6 +95,16 @@ import coil3.compose.rememberAsyncImagePainter
 import com.kyant.shapes.Capsule
 import com.kyant.shapes.RoundedRectangle
 import com.nevoit.cirro.R
+import com.nevoit.cirro.BarToneDark
+import com.nevoit.cirro.BarToneLight
+import com.nevoit.cirro.MenuActionToneDark
+import com.nevoit.cirro.MenuActionToneLight
+import com.nevoit.cirro.MiniContentToneDark
+import com.nevoit.cirro.MiniContentToneLight
+import com.nevoit.cirro.MiniVariantToneDark
+import com.nevoit.cirro.MiniVariantToneLight
+import com.nevoit.cirro.data.AudioQualityStore
+import com.nevoit.cirro.data.model.AudioQuality
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.lyrics.data.LyricsRepository
@@ -103,7 +114,11 @@ import com.nevoit.cirro.lyrics.ui.internal.rendering.LyricsRenderCache
 import com.nevoit.cirro.palette.CoverPalette
 import com.nevoit.cirro.playback.pearmesh.PearMeshState
 import com.nevoit.cirro.playback.pearmesh.PearMeshSurface
+import com.nevoit.cirro.ui.SongMenuContent
+import com.nevoit.cirro.ui.SongMenuViewModel
 import com.nevoit.material.core.animation.rememberPressAnimatable
+import com.nevoit.material.core.component.BottomPopupMenu
+import com.nevoit.material.core.component.BottomPopupMenuColors
 import com.nevoit.material.core.component.CircleIconButton
 import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
@@ -488,6 +503,37 @@ private fun PlayerOverlay(
         tone(ButtonIconToneDark, ButtonIconToneLight) ?: MaterialTheme.colors.content,
         label = "playerButtonIcon",
     )
+    val menuBackgroundColor = rememberThemedColor(
+        tone(BarToneDark, BarToneLight) ?: MaterialTheme.colors.elevatedCardBackground,
+        label = "playerMenuBackground",
+    )
+    val menuContentColor = rememberThemedColor(
+        tone(MiniContentToneDark, MiniContentToneLight) ?: MaterialTheme.colors.content,
+        label = "playerMenuContent",
+    )
+    val menuVariantColor = rememberThemedColor(
+        tone(MiniVariantToneDark, MiniVariantToneLight) ?: MaterialTheme.colors.contentVariant,
+        label = "playerMenuVariant",
+    )
+    val menuActionColor = rememberThemedColor(
+        tone(MenuActionToneDark, MenuActionToneLight)
+            ?: MaterialTheme.colors.menuActionBackground,
+        label = "playerMenuAction",
+    )
+    val menuColors = remember(
+        menuBackgroundColor,
+        menuContentColor,
+        menuVariantColor,
+        menuActionColor,
+    ) {
+        BottomPopupMenuColors(
+            menuBackgroundColor,
+            menuContentColor,
+            menuVariantColor,
+            menuActionColor,
+            menuContentColor
+        )
+    }
     // 播放键：站到页面底色的对立极上（深色页亮胶囊、浅色页深胶囊），全页对比度最高的一块。
     // 取色还没回来时退回「文字色反相」——那正好也是同一个极，所以不会先闪一下别的颜色再过渡。
     val playButtonColor = rememberThemedColor(
@@ -917,7 +963,6 @@ private fun PlayerOverlay(
         val onLyrics = remember { {} }
         val onQueue = remember { {} }
         val onAirplay = remember { {} }
-        val onMore = remember { {} }
 
         // 面板切换的规则只有一条：**选中的再点一次就取消选中**（回到"都不选"），没选中的点了就
         // 选中它（另一个自然让位，因为状态只有一个）。写成一份，别在两个 onClick 里各抄一遍。
@@ -1067,13 +1112,13 @@ private fun PlayerOverlay(
                         tint = buttonIconColor,
                     )
                     HGap()
-                    CircleIconButton(
-                        iconRes = R.drawable.ellipsis,
-                        label = "更多",
+                    PlayerMoreButton(
+                        song = song,
+                        connection = connection,
+                        onOpenCollection = onOpenCollection,
                         background = buttonColor,
                         tint = buttonIconColor,
-                        onClick = onMore,
-                        size = MetaButtonSize,
+                        menuColors = menuColors,
                     )
                 }
                 VGap(8.dp)
@@ -1497,6 +1542,81 @@ private fun PlayerCover(
 }
 
 @Composable
+private fun PlayerMoreButton(
+    song: NowPlaying,
+    connection: PlaybackConnection,
+    onOpenCollection: (CollectionKind, Long, String, String, String) -> Unit,
+    background: ColorProducer,
+    tint: ColorProducer,
+    menuColors: BottomPopupMenuColors,
+) {
+    val menu: SongMenuViewModel = koinViewModel(key = "player-song-menu")
+    val context = LocalContext.current
+    LaunchedEffect(menu, context) {
+        menu.messages.collect { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+    }
+    BottomPopupMenu(colors = menuColors, menuContent = {
+        val queue = remember { connection.queue.value }
+        val currentSong =
+            queue.entries.getOrNull(queue.currentIndex)?.song?.takeIf { it.id == song.id }
+                ?: queue.entries.firstOrNull { it.song.id == song.id }?.song
+                ?: Song(
+                    id = song.id,
+                    name = song.title,
+                    artists = listOf(song.artist),
+                    cover = song.cover.orEmpty()
+                )
+        SongMenuContent(
+            song = currentSong,
+            canInsertQueue = false,
+            hasInsertQueue = false,
+            viewModel = menu,
+            onPlay = {},
+            onAddNext = {},
+            onAddToInsertQueue = {},
+            onShare = {
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(
+                        Intent.EXTRA_TEXT,
+                        "${currentSong.name} - ${currentSong.artistText}\nhttps://music.163.com/song?id=${currentSong.id}"
+                    )
+                }
+                context.startActivity(Intent.createChooser(intent, "分享歌曲"))
+            },
+            onOpenAlbum = {
+                onOpenCollection(
+                    CollectionKind.ALBUM,
+                    it.albumId,
+                    it.album,
+                    it.cover,
+                    ""
+                )
+            },
+            onOpenArtist = { id, name ->
+                onOpenCollection(
+                    CollectionKind.ARTIST,
+                    id,
+                    name,
+                    "",
+                    "热门歌曲"
+                )
+            },
+            playerMenu = true,
+        )
+    }) { openMenu ->
+        CircleIconButton(
+            iconRes = R.drawable.ellipsis,
+            label = "更多",
+            background = background,
+            tint = tint,
+            onClick = openMenu,
+            size = MetaButtonSize,
+        )
+    }
+}
+
+@Composable
 private fun PlayerLikeButton(songId: Long, background: ColorProducer, tint: ColorProducer) {
     val viewModel: PlayerLikeViewModel = koinViewModel()
     val state by viewModel.state.collectAsState()
@@ -1669,19 +1789,51 @@ private fun PlayerProgress(
             playheadWidth = TrackPlayheadWidth,
             playheadHeight = TrackPlayheadHeight,
         )
-        Row(modifier = Modifier.fillMaxWidth()) {
+        Box(modifier = Modifier.fillMaxWidth()) {
             PlayerText(
                 text = formatTime(previewPosition ?: positionMs),
                 style = MaterialTheme.type.footnote,
                 color = contentVariantColor,
+                modifier = Modifier.align(Alignment.CenterStart),
             )
-            Box(modifier = Modifier.weight(1f))
+            PlayerAudioQuality(
+                song = state.song,
+                color = contentVariantColor,
+                modifier = Modifier.align(Alignment.Center),
+            )
             PlayerText(
                 text = formatTime(durationMs),
                 style = MaterialTheme.type.footnote,
                 color = contentVariantColor,
+                modifier = Modifier.align(Alignment.CenterEnd),
             )
         }
+    }
+}
+
+@Composable
+private fun PlayerAudioQuality(song: NowPlaying?, color: ColorProducer, modifier: Modifier = Modifier) {
+    val audio = koinInject<AudioQualityStore>()
+    val resolved by audio.resolved.collectAsState()
+    val key = song?.queueEntryUid?.let { "${song.id}@$it" }
+    val quality = resolved[key]?.takeIf { it.songId == song?.id }?.quality
+    val iconRes = when (quality) {
+        AudioQuality.LOSSLESS, AudioQuality.HIRES -> R.drawable.lossless
+        AudioQuality.DOLBY -> R.drawable.dolby
+        else -> return
+    }
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Icon(
+            painter = painterResource(iconRes),
+            contentDescription = null,
+            tint = color,
+            modifier = Modifier.size(16.dp),
+        )
+        PlayerText(text = quality.displayName, style = MaterialTheme.type.footnote, color = color)
     }
 }
 

@@ -173,6 +173,19 @@ pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeAppl
 }
 
 #[no_mangle]
+pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeAppleSongCredits<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    id: JString<'local>,
+    storefront: JString<'local>,
+) -> jstring {
+    let id = jni_in(&mut env, &id);
+    let storefront = jni_in(&mut env, &storefront);
+    let value = engine::RUNTIME.block_on(api::apple_song_credits(id, storefront));
+    jni_out(&mut env, value)
+}
+
+#[no_mangle]
 pub extern "system" fn Java_com_nevoit_cirro_lyrics_data_LyricsBridge_nativeAppleArtistHeader<'local>(
     mut env: JNIEnv<'local>,
     _this: JObject<'local>,

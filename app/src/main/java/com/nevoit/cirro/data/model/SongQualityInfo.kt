@@ -15,6 +15,14 @@ data class SongQualityInfo(
 ) {
     fun supports(quality: AudioQuality): Boolean = quality in sizes
 
+    val displayQualities: List<AudioQuality>
+        get() = buildList {
+            AudioQuality.supported.filter {
+                it != AudioQuality.DOLBY && (sizes[it] ?: 0L) > 0L
+            }.maxByOrNull { it.bitrate }?.let { add(it) }
+            if ((sizes[AudioQuality.DOLBY] ?: 0L) > 0L) add(AudioQuality.DOLBY)
+        }
+
     companion object {
         /** 查不到时的空壳：所有档都当"不支持"，界面据此全灰但仍可点。 */
         val Empty = SongQualityInfo(0L, emptyMap())

@@ -62,6 +62,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.nevoit.kinetic.layout.rememberKineticFlingBehavior
+import com.nevoit.material.core.interaction.LocalIndicationColorProducer
 import com.nevoit.material.core.utility.rememberColorProducer
 import com.nevoit.material.navigation.shape.deviceCornerShape
 import com.nevoit.material.theme.MaterialTheme
@@ -84,11 +85,20 @@ object BottomPopupMenuDefaults {
     val Padding = 8.dp
 }
 
+class BottomPopupMenuColors(
+    val container: ColorProducer,
+    val content: ColorProducer,
+    val contentVariant: ColorProducer,
+    val actionContainer: ColorProducer,
+    val actionContent: ColorProducer,
+)
+
 internal class BottomPopupMenuRequest(
     val owner: Any,
     val originInWindow: Offset,
     val padding: Dp,
     val shape: androidx.compose.runtime.State<Shape>,
+    val colors: androidx.compose.runtime.State<BottomPopupMenuColors?> = mutableStateOf(null),
     val content: @Composable BottomPopupMenuScope.() -> Unit,
 )
 
@@ -125,6 +135,7 @@ fun BottomPopupMenu(
     padding: Dp = BottomPopupMenuDefaults.Padding,
     shape: Shape = deviceCornerShape(padding = padding, minRadius = 24.dp),
     enabled: Boolean = true,
+    colors: BottomPopupMenuColors? = null,
     content: @Composable (openMenu: () -> Unit) -> Unit,
 ) {
     require(padding.value.isFinite() && padding >= 0.dp)
@@ -133,6 +144,7 @@ fun BottomPopupMenu(
     val origin = remember { mutableStateOf<Offset?>(null) }
     val latestMenu = rememberUpdatedState(menuContent)
     val latestShape = rememberUpdatedState(shape)
+    val latestColors = rememberUpdatedState(colors)
     val callerLocals = currentCompositionLocalContext
 
     val openMenu = remember(host, owner, padding, enabled, callerLocals) {
@@ -140,10 +152,12 @@ fun BottomPopupMenu(
             val center = origin.value
             if (enabled && center != null) {
                 host.show(
-                    BottomPopupMenuRequest(owner, center, padding, latestShape) {
+                    BottomPopupMenuRequest(owner, center, padding, latestShape, latestColors) {
                         CompositionLocalProvider(callerLocals) {
-                            ProvideContentColor(MaterialTheme.colors.content) {
-                                latestMenu.value(this@BottomPopupMenuRequest)
+                            CompositionLocalProvider(LocalIndicationColorProducer provides this@BottomPopupMenuRequest.contentColor) {
+                                ProvideContentColor(MaterialTheme.colors.content) {
+                                    latestMenu.value(this@BottomPopupMenuRequest)
+                                }
                             }
                         }
                     }
@@ -206,11 +220,11 @@ fun BottomPopupMenuHost(
                         request = request,
                         expanded = state.expanded,
                         scrimColor = scrimColor,
-                        containerColor = containerColor,
-                        contentColor = contentColor,
-                        contentVariantColor = contentVariantColor,
-                        actionContainerColor = actionContainerColor,
-                        actionContentColor = actionContentColor,
+                        containerColor = request.colors.value?.container ?: containerColor,
+                        contentColor = request.colors.value?.content ?: contentColor,
+                        contentVariantColor = request.colors.value?.contentVariant ?: contentVariantColor,
+                        actionContainerColor = request.colors.value?.actionContainer ?: actionContainerColor,
+                        actionContentColor = request.colors.value?.actionContent ?: actionContentColor,
                         onDismiss = { state.dismiss(request.owner) },
                         onClosed = { state.finishDismiss(request) },
                     )

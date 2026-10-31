@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.BasicText
@@ -19,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,14 +38,19 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.kyant.shapes.RoundedRectangle
 import com.nevoit.cirro.R
+import com.nevoit.cirro.data.LibraryRepository
 import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.data.model.Song
+import com.nevoit.cirro.data.model.forSession
 import com.nevoit.material.core.animation.rememberPressAnimatable
 import com.nevoit.material.core.component.BottomPopupMenuScope
 import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
 import com.nevoit.material.theme.MaterialTheme
 import com.nevoit.material.theme.tokens.Springs
+import org.koin.compose.koinInject
+
+val LocalOpenSongCredits = staticCompositionLocalOf<(Song) -> Unit> { {} }
 
 @Composable
 fun BottomPopupMenuScope.SongMenuContent(
@@ -57,11 +64,13 @@ fun BottomPopupMenuScope.SongMenuContent(
     onShare: () -> Unit,
     onOpenAlbum: (Song) -> Unit,
     onOpenArtist: (Long, String) -> Unit,
-    canReduceRecommendation: Boolean = false,
+    playerMenu: Boolean = false,
 ) {
     val state by viewModel.state.collectAsState()
     val snapshot by viewModel.likeSnapshot.collectAsState()
     val session by viewModel.session.collectAsState()
+    val librarySnapshot by koinInject<LibraryRepository>().snapshot.collectAsState()
+    val openCredits = LocalOpenSongCredits.current
     val userId = (session as? Session.LoggedIn)?.profile?.userId?.takeIf { it > 0 }
     val knownLike =
         snapshot.takeIf { userId != null && it.userId == userId }?.likedIds?.contains(song.id)
@@ -155,14 +164,16 @@ fun BottomPopupMenuScope.SongMenuContent(
                     .padding(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                SongMenuAction(
-                    "播放",
-                    R.drawable.play,
-                    actionContentColor,
-                    backgroundColor = actionContainerColor
-                ) {
-                    onPlay()
-                    dismiss()
+                if (!playerMenu) {
+                    SongMenuAction(
+                        "播放",
+                        R.drawable.play,
+                        actionContentColor,
+                        backgroundColor = actionContainerColor
+                    ) {
+                        onPlay()
+                        dismiss()
+                    }
                 }
                 SongMenuAction(
                     text = if (liked == true) "取消喜爱" else "喜爱",
@@ -207,6 +218,7 @@ fun BottomPopupMenuScope.SongMenuContent(
                     dismiss()
                 }
             }
+            SongMenuDivider(contentVariantColor)
             SongMenuItem(
                 text = "前往专辑",
                 icon = R.drawable.album,
@@ -231,7 +243,23 @@ fun BottomPopupMenuScope.SongMenuContent(
                     onOpenArtist(artists.single().first, artists.single().second)
                 } else choosingArtist = true
             }
-            if (canReduceRecommendation) {
+            SongMenuItem(
+                "查看制作人员",
+                R.drawable.info_circle,
+                contentColor,
+            ) {
+                dismiss()
+                openCredits(navigationSong)
+            }
+            val library = librarySnapshot?.forSession(session)
+            val outsideLibrary =
+                if (library != null && library.likesLoaded && library.albumsLoaded) {
+                    liked != true && library.likedTracks.none { it.id == song.id } &&
+                            library.likedSongs.none { it.id == song.id } &&
+                            (navigationSong.albumId > 0 && library.albums.none { it.info.id == navigationSong.albumId })
+                } else false
+            if (outsideLibrary) {
+                SongMenuDivider(contentVariantColor)
                 SongMenuItem("减少推荐", R.drawable.heart_slash, contentColor) {
                     viewModel.reduceRecommendation(song.id)
                     dismiss()
@@ -239,6 +267,17 @@ fun BottomPopupMenuScope.SongMenuContent(
             }
         }
     }
+}
+
+@Composable
+private fun SongMenuDivider(color: ColorProducer) {
+    Box(Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 20.dp)
+        .height(1.dp)
+        .drawBehind {
+            drawRect(color().let { it.copy(alpha = it.alpha * 0.2f) })
+        })
 }
 
 @Composable
@@ -317,7 +356,8 @@ private fun SongMenuItem(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 16.dp),
+            .heightIn(min = 56.dp)
+            .padding(horizontal = 20.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {

@@ -87,6 +87,7 @@ data class NowPlaying(
     val title: String,
     val artist: String,
     val cover: String?,
+    val queueEntryUid: Long? = null,
 )
 
 data class PlaybackState(
@@ -985,6 +986,7 @@ private fun MediaItem.toNowPlaying(): NowPlaying? {
         title = mediaMetadata.title?.toString().orEmpty(),
         artist = mediaMetadata.artist?.toString().orEmpty(),
         cover = mediaMetadata.artworkUri?.toString(),
+        queueEntryUid = queueEntryUid,
     )
 }
 

@@ -10,7 +10,8 @@ package com.nevoit.cirro.data.model
  * [bitrate] 是网易云给这一档标的**虚拟码率**（bps），跟真实码率不等同，界面显示
  * "约 xxx kbps" 用。取自官方 `rn-audio-quality-layer` 的常量表。
  *
- * **声明顺序就是优先级，从高到低** —— 界面直接照 [entries] 正序排，不用另外排序。
+ * 枚举保留可识别的服务端响应；应用允许请求的档位由 [supported] 限定。
+ * 杜比与立体声分别展示，不参与同一条音质高低排序。
  *
  * ⚠️ 别把这里当成"用户能播什么"：能不能播取决于**这首歌有没有这一档**（问
  * [SongQualityInfo]）和**账号权益**（只能由直链响应回答）。
@@ -41,6 +42,8 @@ enum class AudioQuality(
         }
 
     companion object {
+        val supported: List<AudioQuality> = listOf(STANDARD, EXHIGH, LOSSLESS, HIRES, DOLBY)
+
         /** 认不出来的 `level` 返回 null，调用方自己决定兜底（一般退回 [STANDARD]）。 */
         fun fromWire(value: String): AudioQuality? = entries.find { it.wire == value }
     }

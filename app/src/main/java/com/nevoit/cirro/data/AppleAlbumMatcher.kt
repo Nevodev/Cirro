@@ -16,6 +16,11 @@ internal object AppleAlbumMatcher {
         RegexOption.IGNORE_CASE,
     )
     private val trailingFeaturedCredit = Regex("\\s+(?:feat(?:uring)?\\.?|ft\\.?)\\s+.+$", RegexOption.IGNORE_CASE)
+    private val videoEdition = Regex("\\s*\\[video deluxe]\\s*$", RegexOption.IGNORE_CASE)
+    private val catalogTrackLabel = Regex(
+        """\s*[（(\[]\s*(?:bonus track|pop mix)\s*[）)\]]""",
+        RegexOption.IGNORE_CASE,
+    )
 
     fun candidates(info: CollectionInfo, albums: List<AppleAlbum>): List<AppleAlbum> =
         albums.distinctBy { it.id }.filter {
@@ -23,7 +28,8 @@ internal object AppleAlbumMatcher {
                 title(it.name).isNotEmpty() && title(it.name) == title(info.title) &&
                 normalize(it.artist).isNotEmpty() &&
                 normalize(it.artist) in setOf(normalize(info.author), normalize(info.primaryArtistName)) &&
-                (info.trackCount <= 0 || it.trackCount >= info.trackCount)
+                (info.trackCount <= 0 || it.trackCount >= info.trackCount ||
+                    canOmitTrailingBonusTracks(info.trackCount, it.trackCount))
         }
 
     fun match(info: CollectionInfo, songs: List<Song>, albums: List<AppleAlbum>): AppleAlbum? {
@@ -31,8 +37,18 @@ internal object AppleAlbumMatcher {
             (info.trackCount > 0 && songs.size != info.trackCount)
         ) return null
         val verified = candidates(info, albums).filter { album ->
-            if (album.trackCount != songs.size || album.tracks.size != songs.size) return@filter false
-            tracksMatch(songs.map { Track(it.name, it.durationMs) }, album.tracks.map { Track(it.name, it.durationMs) }, 3_000)
+            if (album.trackCount != album.tracks.size) return@filter false
+            val source = songs.map { Track(it.name, it.durationMs) }
+            val target = album.tracks.map { Track(it.name, it.durationMs) }
+            if (source.size == target.size) tracksMatch(source, target, 3_000)
+            else {
+                // Regional releases can append bonus songs to the complete standard album.
+                // Require every standard track in order; arbitrary subsets cannot prove identity.
+                canOmitTrailingBonusTracks(source.size, target.size) &&
+                    source.take(target.size).zip(target).all { (a, b) ->
+                        trackTitle(a.name) == trackTitle(b.name) && abs(a.durationMs - b.durationMs) <= 3_000
+                    }
+            }
         }
         if (verified.isEmpty()) return null
         // 曲目不等价时用发行日消歧；等价重发版可以共享封面，优先选择含动态封面的版本。
@@ -53,7 +69,10 @@ internal object AppleAlbumMatcher {
             .thenByDescending { it.releaseDate == date }.thenBy { it.id }).first()
     }
 
-    private fun title(text: String) = normalize(suffix.replace(text, ""))
+    private fun title(text: String) = normalize(suffix.replace(videoEdition.replace(text, ""), ""))
+
+    private fun canOmitTrailingBonusTracks(sourceCount: Int, targetCount: Int): Boolean =
+        targetCount >= 10 && sourceCount - targetCount in 1..2 && targetCount * 5 >= sourceCount * 4
 
     private data class Track(val name: String, val durationMs: Long)
 
@@ -83,8 +102,10 @@ internal object AppleAlbumMatcher {
     }
 
     private fun trackTitle(text: String): String {
-        // 只移除合作艺人署名，保留 live、remix、extended 等会改变录音版本的括号内容。
-        val stripped = trailingFeaturedCredit.replace(featuredCredit.replace(text, ""), "")
+        // 移除合作艺人署名和曲库附注，保留 live、remix、extended 等录音版本标记。
+        val stripped = catalogTrackLabel.replace(
+            trailingFeaturedCredit.replace(featuredCredit.replace(text, ""), ""), "",
+        )
         val normalized = normalize(stripped)
         if (normalized.isNotEmpty()) return normalized
         return Normalizer.normalize(stripped, Normalizer.Form.NFKC)

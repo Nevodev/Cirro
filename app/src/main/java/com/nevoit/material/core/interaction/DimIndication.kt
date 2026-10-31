@@ -8,9 +8,11 @@ import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawOutline
@@ -30,6 +32,8 @@ object DimIndicationDefaults {
     val ReleaseOut = tween<Float>(200)
     val ReleaseOutFast = tween<Float>(100)
 }
+
+internal val LocalIndicationColorProducer = staticCompositionLocalOf<ColorProducer?> { null }
 
 data class DimIndication(
     val color: Color = Color.Unspecified,
@@ -90,7 +94,7 @@ private class DimIndicationNode(
             val targetColor = if (color != Color.Unspecified) {
                 color
             } else {
-                currentValueOf(LocalContentColor)
+                currentValueOf(LocalIndicationColorProducer)?.invoke() ?: currentValueOf(LocalContentColor)
             }
 
             val outline = shape.createOutline(size, layoutDirection, this)

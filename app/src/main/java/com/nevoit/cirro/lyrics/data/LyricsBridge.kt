@@ -75,6 +75,16 @@ data class AppleSongCandidate(
 )
 
 @Serializable
+data class AppleCreditPerson(
+    val name: String = "",
+    val roles: List<String> = emptyList(),
+    val avatarUrl: String = "",
+)
+
+@Serializable
+data class AppleCreditGroup(val title: String = "", val people: List<AppleCreditPerson> = emptyList())
+
+@Serializable
 data class AppleArtistCandidate(
     val id: String,
     val name: String = "",
@@ -252,6 +262,9 @@ object LyricsBridge {
     fun appleArtistHeader(id: String, storefront: String): Result<AppleArtistHeader> =
         decode(nativeAppleArtistHeader(id, storefront)).map { it.header }
 
+    fun appleSongCredits(id: String, storefront: String): Result<List<AppleCreditGroup>> =
+        decode(nativeAppleSongCredits(id, storefront)).map { it.credits }
+
     fun appleArtistVideo(id: String, storefront: String): Result<String?> =
         appleArtistHeader(id, storefront).map { it.videoUrl }
 
@@ -328,6 +341,8 @@ object LyricsBridge {
 
     private external fun nativeAppleArtistHeader(id: String, storefront: String): String
 
+    private external fun nativeAppleSongCredits(id: String, storefront: String): String
+
     private external fun nativeAppleAlbumSearch(term: String, storefront: String): String
 
     private external fun nativeAppleAlbumDetail(id: String, storefront: String): String
@@ -370,6 +385,7 @@ private data class BridgeResponse(
     val storefrontProbed: Boolean = false,
     // Apple 搜索
     val songs: List<AppleSongCandidate> = emptyList(),
+    val credits: List<AppleCreditGroup> = emptyList(),
     val header: AppleArtistHeader = AppleArtistHeader(),
     val albums: List<AppleAlbum> = emptyList(),
     val album: AppleAlbum = AppleAlbum(),

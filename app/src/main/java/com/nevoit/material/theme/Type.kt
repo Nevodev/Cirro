@@ -125,7 +125,7 @@ val MaterialTypeStandard = MaterialType(
         fontWeight = FontWeight.Normal,
         fontSize = 14.sp,
         lineHeight = 18.sp,
-        letterSpacing = 0.sp
+        letterSpacing = 0.1.sp
     ),
     subHeadlineEmphasized = TextStyle(
         fontFamily = FontFamily.Default,

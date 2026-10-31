@@ -143,6 +143,13 @@ pub async fn apple_artist_header(id: String, storefront: String) -> Value {
     }
 }
 
+pub async fn apple_song_credits(id: String, storefront: String) -> Value {
+    match apple::song_credits(&id, &storefront).await {
+        Ok(credits) => json!({"ok": true, "credits": credits}),
+        Err(error) => fail(error),
+    }
+}
+
 pub async fn apple_album_search(term: String, storefront: String) -> Value {
     match apple::albums::search(&term, &storefront).await {
         Ok((albums, storefront)) => json!({"ok": true, "albums": albums, "storefront": storefront}),

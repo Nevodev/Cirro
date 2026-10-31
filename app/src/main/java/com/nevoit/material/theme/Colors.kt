@@ -102,6 +102,7 @@ data class MaterialColors(
     // alpha through the transition, which reads as mud over a menu that is also animating.
     val menuActionBackground: Color = secondaryContainer,
     val onMenuAction: Color = onSecondaryContainer,
+    val menuSelectionIndicator: Color = Color.Unspecified,
 
     val shadow: Color
 )

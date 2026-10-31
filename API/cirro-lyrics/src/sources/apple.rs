@@ -739,6 +739,63 @@ pub struct ArtistNameLogo {
     pub height: i32,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreditPerson {
+    name: String,
+    roles: Vec<String>,
+    avatar_url: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct CreditGroup {
+    title: String,
+    people: Vec<CreditPerson>,
+}
+
+pub async fn song_credits(id: &str, storefront: &str) -> Result<Vec<CreditGroup>, String> {
+    if id.is_empty() || !id.bytes().all(|c| c.is_ascii_digit()) ||
+        storefront.len() != 2 || !storefront.bytes().all(|c| c.is_ascii_lowercase()) {
+        return Err("Apple 歌曲 id 或区域无效".into());
+    }
+    let place = Place::for_storefront(storefront);
+    let url = format!("{AMP_API}/v1/catalog/{storefront}/songs/{id}?include=credits&l={}", urlencoding::encode(&place.language));
+    let mut response = get_authorized(&url, None, &place.accept_language).await?;
+    if should_refresh_access_token(&response) {
+        invalidate_access_token();
+        response = get_authorized(&url, None, &place.accept_language).await?;
+    }
+    if !(200..300).contains(&response.status) {
+        return Err(format!("Apple 制作人员返回 HTTP {}", response.status));
+    }
+    let value: Value = serde_json::from_str(&response.body)
+        .map_err(|error| format!("Apple 制作人员响应不是 JSON: {error}"))?;
+    let song = value.pointer("/data/0").ok_or("Apple 歌曲不存在")?;
+    if song.get("id").and_then(Value::as_str) != Some(id) {
+        return Err("Apple 歌曲 id 不一致".into());
+    }
+    Ok(parse_credit_groups(song))
+}
+
+fn parse_credit_groups(song: &Value) -> Vec<CreditGroup> {
+    let groups = song.pointer("/relationships/credits/data").and_then(Value::as_array);
+    groups.into_iter().flatten().filter_map(|group| {
+        let title = group.pointer("/attributes/title").and_then(Value::as_str).unwrap_or("").to_string();
+        let people: Vec<_> = group.pointer("/relationships/credit-artists/data")
+            .and_then(Value::as_array).into_iter().flatten().filter_map(|person| {
+                let attrs = person.get("attributes")?;
+                let name = attrs.get("name")?.as_str()?.trim();
+                if name.is_empty() { return None; }
+                let roles = attrs.get("roleNames").and_then(Value::as_array).into_iter().flatten()
+                    .filter_map(Value::as_str).map(str::to_string).collect();
+                let avatar_url = attrs.pointer("/artwork/url").and_then(Value::as_str)
+                    .unwrap_or("").to_string();
+                Some(CreditPerson { name: name.to_string(), roles, avatar_url })
+            }).collect();
+        if people.is_empty() { None } else { Some(CreditGroup { title, people }) }
+    }).collect()
+}
+
 pub async fn artist_header(id: &str, storefront: &str) -> Result<ArtistHeader, String> {
     if id.is_empty() || !id.bytes().all(|c| c.is_ascii_digit()) {
         return Err("Apple 艺人 id 无效".into());
@@ -1045,6 +1102,49 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod credit_tests {
+    use super::parse_credit_groups;
+    use serde_json::json;
+
+    #[test]
+    fn credit_artwork_survives_the_bridge() {
+        let artwork = "https://example.com/artist/{w}x{h}bb.jpg";
+        let song = json!({"relationships": {"credits": {"data": [{
+            "attributes": {"title": "作曲和作词"},
+            "relationships": {"credit-artists": {"data": [{
+                "attributes": {
+                    "name": " Composer ",
+                    "roleNames": ["词曲作者", "编曲"],
+                    "artwork": {"url": artwork}
+                }
+            }, {
+                "attributes": {"name": "Singer", "roleNames": ["领唱"]}
+            }, {
+                "attributes": {"name": " "}
+            }]}}
+        }]}}});
+        let groups = serde_json::to_value(parse_credit_groups(&song)).unwrap();
+        assert_eq!(groups, json!([{
+            "title": "作曲和作词",
+            "people": [{
+                "name": "Composer",
+                "roles": ["词曲作者", "编曲"],
+                "avatarUrl": artwork
+            }, {
+                "name": "Singer",
+                "roles": ["领唱"],
+                "avatarUrl": ""
+            }]
+        }]));
+    }
+
+    #[test]
+    fn missing_credits_are_empty() {
+        assert!(parse_credit_groups(&json!({})).is_empty());
+    }
 }
 
 #[cfg(test)]

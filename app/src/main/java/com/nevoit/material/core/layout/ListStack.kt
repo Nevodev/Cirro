@@ -2,6 +2,8 @@
 
 package com.nevoit.material.core.layout
 
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.OverscrollEffect
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -14,7 +16,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
@@ -38,7 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kyant.shapes.RoundedRectangle
 import com.kyant.shapes.UnevenRoundedRectangle
-import com.nevoit.kinetic.layout.rememberKineticFlingBehavior
+import com.nevoit.kinetic.layout.indicator.ScrollIndicatorSpec
 import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.InternalIcons
 import com.nevoit.material.core.component.Switch
@@ -100,7 +101,9 @@ class ListScope internal constructor(
             key = key,
             contentType = contentType
         ) {
-            content()
+            Box(modifier = itemAnimation()) {
+                content()
+            }
         }
     }
 
@@ -367,17 +370,22 @@ fun ListStack(
     state: LazyListState = rememberLazyListState(),
     style: ListStyle = ListStyle.InsetGrouped,
     colors: ListColors? = null,
-    contentPadding: PaddingValues = PaddingValues(),
+    contentPadding: PaddingValues? = null,
     cornerRadius: Dp = ListDefaults.cornerRadius(style),
+    overscrollEffect: OverscrollEffect? = null,
+    alwaysOverscroll: Boolean = true,
+    scrollIndicator: ScrollIndicatorSpec? = null,
     content: ListScope.() -> Unit
 ) {
     val resolvedColors = colors ?: ListDefaults.colors(style)
 
-    LazyColumn(
+    VerticalStack(
         modifier = modifier.background(resolvedColors.background),
         state = state,
         contentPadding = contentPadding,
-        flingBehavior = rememberKineticFlingBehavior()
+        overscrollEffect = overscrollEffect,
+        alwaysOverscroll = alwaysOverscroll,
+        scrollIndicator = scrollIndicator,
     ) {
         ListScope(
             lazyListScope = this,
@@ -403,7 +411,7 @@ private fun LazyListScope.renderSectionHeader(
         key = key?.let { "$it-header" } ?: "section-$sectionIndex-header",
         contentType = "section-header"
     ) {
-        Column {
+        Column(modifier = itemAnimation()) {
             Spacer(Modifier.height(resolvedTopSpacing))
 
             header?.invoke()?.let { header ->
@@ -421,7 +429,7 @@ private fun LazyListScope.renderSectionHeader(
                                 start = 12.dp,
                                 top = 0.dp,
                                 end = 12.dp,
-                                bottom = 8.dp
+                                bottom = 12.dp
                             )
                     )
                 }
@@ -500,7 +508,7 @@ private fun LazyListScope.renderSectionFooter(
         ) {
             footer()?.let { footerText ->
                 Box(
-                    modifier = Modifier
+                    modifier = itemAnimation()
                         .fillMaxWidth()
                         .padding(horizontal = ListDefaults.horizontalPadding(style))
                 ) {
@@ -511,7 +519,7 @@ private fun LazyListScope.renderSectionFooter(
                         modifier = Modifier
                             .padding(
                                 start = 12.dp,
-                                top = 8.dp,
+                                top = 12.dp,
                                 end = 12.dp,
                                 bottom = 0.dp
                             )
@@ -568,7 +576,9 @@ private fun ListRowFrame(
     }
 
     ListRowContainer(
+        modifier = with(lazyItemScope) { itemAnimation() },
         rowPadding = rowPadding ?: when {
+            accessory != ListRowAccessory.None -> if (hasLeading) RichAccessoryRowPadding else AccessoryRowPadding
             hasLeading -> RichRowPadding
             else -> DefaultRowPadding
         },
@@ -888,6 +898,7 @@ private fun SwitchRowTrailingLayout(
 
 @Composable
 private fun ListRowContainer(
+    modifier: Modifier,
     rowPadding: PaddingValues,
     separator: Boolean,
     separatorHorizontalPadding: Dp,
@@ -902,8 +913,8 @@ private fun ListRowContainer(
     cornerRadius: Dp,
     content: @Composable () -> Unit
 ) {
-    val separatorColor =
-        if (style == ListStyle.InsetGrouped) LocalContentColor.current.copy(.1f) else LocalColors.current.scrimMedium
+    val separatorColor = LocalColors.current.scrimMedium
+    val innerCornerRadius = minOf(cornerRadius, DefaultInnerCornerRadius)
     val shape = when (style) {
         ListStyle.Plain -> RectangleShape
 
@@ -911,24 +922,29 @@ private fun ListRowContainer(
             isFirst && isLast -> RoundedRectangle(cornerRadius)
             isFirst -> UnevenRoundedRectangle(
                 topStart = cornerRadius,
-                topEnd = cornerRadius
+                topEnd = cornerRadius,
+                bottomStart = innerCornerRadius,
+                bottomEnd = innerCornerRadius,
             )
 
             isLast -> UnevenRoundedRectangle(
+                topStart = innerCornerRadius,
+                topEnd = innerCornerRadius,
                 bottomStart = cornerRadius,
-                bottomEnd = cornerRadius
+                bottomEnd = cornerRadius,
             )
 
-            else -> RectangleShape
+            else -> RoundedRectangle(innerCornerRadius)
         }
     }
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = ListDefaults.horizontalPadding(style))
+            .padding(bottom = if (style == ListStyle.InsetGrouped && !isLast) DefaultRowSpacing else 0.dp)
             .then(
-                if (separator && !isLast) {
+                if (style == ListStyle.Plain && separator && !isLast) {
                     Modifier.drawWithCache {
                         val strokeWidth = DefaultSeparatorWidth.toPx()
                         val horizontalPadding = separatorHorizontalPadding.toPx()
@@ -987,6 +1003,12 @@ private class SectionRows {
     var count: Int = 0
 }
 
+private fun LazyItemScope.itemAnimation(): Modifier = Modifier.animateItem(
+    fadeInSpec = tween(200),
+    placementSpec = null,
+    fadeOutSpec = tween(200),
+)
+
 private fun sectionRowPosition(
     rowCount: Int,
     indexInSection: Int
@@ -1008,11 +1030,15 @@ data class ListColors(
 )
 
 private val DefaultSectionSpacing = 24.dp
-private val DefaultRowPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-private val DefaultRowMinHeight = 52.dp
+private val DefaultRowPadding = PaddingValues(start = 16.dp, top = 12.dp, end = 12.dp, bottom = 12.dp)
+private val AccessoryRowPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+private val RichAccessoryRowPadding = PaddingValues(start = 12.dp, top = 12.dp, end = 16.dp, bottom = 12.dp)
+private val DefaultRowMinHeight = 56.dp
+private val DefaultRowSpacing = 4.dp
+private val DefaultInnerCornerRadius = 8.dp
 private val DefaultSeparatorPadding = 16.dp
 private val DefaultSeparatorWidth = 1.dp
-private val DefaultLeadingSize = 32.dp
+private val DefaultLeadingSize = 40.dp
 private val DefaultLeadingSpacing = 12.dp
 private val DefaultTrailingSpacing = 12.dp
 private val DefaultSwitchTrailingSpacing = 8.dp
@@ -1021,7 +1047,7 @@ private val DefaultAccessoryWidth = 14.dp
 private val DefaultAccessoryHeight = 20.dp
 private const val DisabledContentAlpha = 0.5f
 private val RichRowPadding =
-    PaddingValues(start = 12.dp, top = 8.dp, end = 16.dp, bottom = 8.dp)
+    PaddingValues(12.dp)
 private val NoRowPadding = PaddingValues(0.dp)
 private val DefaultDimIndication = DimIndication()
 
@@ -1083,7 +1109,7 @@ object ListDefaults {
     fun cornerRadius(style: ListStyle): Dp {
         return when (style) {
             ListStyle.Plain -> 0.dp
-            ListStyle.InsetGrouped -> 12.dp
+            ListStyle.InsetGrouped -> 20.dp
         }
     }
 

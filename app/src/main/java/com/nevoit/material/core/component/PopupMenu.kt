@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -78,11 +79,13 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.text
 import androidx.compose.ui.text.AnnotatedString
@@ -90,6 +93,7 @@ import androidx.compose.ui.text.style.TextMotion
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
@@ -98,12 +102,14 @@ import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.round
 import com.kyant.shapes.RoundedRectangle
+import com.nevoit.cirro.R
 import com.nevoit.kinetic.layout.overscroll.OffsetOverscrollAnchor
 import com.nevoit.kinetic.layout.overscroll.OffsetOverscrollBinding
 import com.nevoit.kinetic.layout.overscroll.rememberOffsetOverscrollEffect
 import com.nevoit.kinetic.layout.rememberKineticFlingBehavior
 import com.nevoit.material.clip.cornerMaskClip
 import com.nevoit.material.core.interaction.DimIndication
+import com.nevoit.material.core.interaction.LocalIndicationColorProducer
 import com.nevoit.material.core.interaction.rememberRetainedDimIndication
 import com.nevoit.material.core.utility.rememberColorProducer
 import com.nevoit.material.theme.MaterialTheme
@@ -122,6 +128,7 @@ sealed interface PopupMenuEntry {
         val enabled: Boolean = true,
         val submenu: List<PopupMenuEntry> = emptyList(),
         val leadingContent: (@Composable () -> Unit)? = null,
+        val selected: Boolean = false,
         val onClick: () -> Unit = {},
     ) : PopupMenuEntry {
         val hasSubmenu: Boolean get() = submenu.isNotEmpty()
@@ -137,6 +144,7 @@ object PopupMenuDefaults {
     val Padding = 12.dp
     val Width = 280.dp
     val MinWidth = 224.dp
+    val ItemMinHeight = 48.dp
     val Gap = 12.dp
 }
 
@@ -152,6 +160,7 @@ internal class PopupMenuRequest(
     val contentColor: ColorProducer? = null,
     val contentVariantColor: ColorProducer? = null,
     val minWidth: Dp = PopupMenuDefaults.MinWidth,
+    val offset: DpOffset = DpOffset.Zero,
 )
 
 internal class PopupMenuHostState {
@@ -192,18 +201,21 @@ fun PopupMenu(
     contentColor: ColorProducer? = null,
     contentVariantColor: ColorProducer? = null,
     minWidth: Dp = PopupMenuDefaults.MinWidth,
+    /** Positive x moves toward layout end (left in RTL); positive y moves down. */
+    offset: DpOffset = DpOffset.Zero,
     content: @Composable (openMenu: () -> Unit) -> Unit,
 ) {
     require(padding.value.isFinite() && padding >= 0.dp)
     require(width == null || (width.value.isFinite() && width > 0.dp))
     require(minWidth.value.isFinite() && minWidth >= 0.dp)
     require(gap.value.isFinite() && gap >= 0.dp)
+    require(offset.x.value.isFinite() && offset.y.value.isFinite())
     val host = LocalPopupMenuHost.current
     val owner = remember { Any() }
     val bounds = remember { mutableStateOf<Rect?>(null) }
     val latestItems = rememberUpdatedState(items)
     val openMenu = remember(
-        host, owner, anchor, padding, width, enabled, gap, minWidth,
+        host, owner, anchor, padding, width, enabled, gap, minWidth, offset,
         containerColor, contentColor, contentVariantColor,
     ) {
         {
@@ -223,6 +235,7 @@ fun PopupMenu(
                         contentColor,
                         contentVariantColor,
                         minWidth,
+                        offset,
                     )
                 )
             }
@@ -249,14 +262,17 @@ fun PopupMenuHost(
             content()
             val request = state.request
             if (request != null) key(request) {
-                PopupMenuLayer(
-                    request, state.expanded,
-                    request.containerColor ?: containerColor,
-                    request.contentColor ?: contentColor,
-                    request.contentVariantColor ?: contentVariantColor,
-                    onDismiss = { state.dismiss(request.owner) },
-                    onClosed = { state.finishDismiss(request) },
-                )
+                val menuContentColor = request.contentColor ?: contentColor
+                CompositionLocalProvider(LocalIndicationColorProducer provides menuContentColor) {
+                    PopupMenuLayer(
+                        request, state.expanded,
+                        request.containerColor ?: containerColor,
+                        menuContentColor,
+                        request.contentVariantColor ?: contentVariantColor,
+                        onDismiss = { state.dismiss(request.owner) },
+                        onClosed = { state.finishDismiss(request) },
+                    )
+                }
             }
         }
     }
@@ -740,6 +756,7 @@ private fun PopupMenuSurface(
                     request.anchor,
                     layoutDirection,
                     request.gap.roundToPx(),
+                    IntOffset(request.offset.x.roundToPx(), request.offset.y.roundToPx()),
                 )
                 page.transformOrigin = placement.transformOrigin
                 page.targetBounds = Rect(
@@ -799,7 +816,9 @@ private fun PopupMenuItem(
     Row(
         modifier
             .fillMaxWidth()
-            .graphicsLayer { alpha = if (item.enabled) 1f else 0.38f }
+            .heightIn(min = PopupMenuDefaults.ItemMinHeight)
+            .semantics { selected = item.selected }
+            .graphicsLayer { alpha = if (item.enabled) 1f else 0.5f }
             // Feedback outlives the input node while a submenu collapses.
             .indication(interactionSource, indication)
             .then(
@@ -812,7 +831,12 @@ private fun PopupMenuItem(
                 )
                 else Modifier
             )
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(
+                start = if (item.leadingContent != null || item.icon != null) 12.dp else 16.dp,
+                top = 12.dp,
+                end = 16.dp,
+                bottom = 12.dp,
+            ),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -843,6 +867,15 @@ private fun PopupMenuItem(
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+        if (item.selected) {
+            val indicatorColor = MaterialTheme.colors.menuSelectionIndicator
+            Icon(
+                painter = painterResource(R.drawable.checkmark),
+                tint = if (indicatorColor != Color.Unspecified) rememberColorProducer(indicatorColor) else color,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+            )
         }
         if (item.hasSubmenu) Icon(
             rememberVectorPainter(InternalIcons.ChevronRight),
@@ -882,6 +915,7 @@ internal fun popupMenuPlacement(
     anchor: PopupMenuAnchor,
     layoutDirection: LayoutDirection,
     gap: Int = 0,
+    offset: IntOffset = IntOffset.Zero,
 ): PopupMenuPlacement {
     val caller = callerInWindow.translate(-viewportPosition)
     val maxX = (viewportSize.width - menuSize.width).coerceAtLeast(0).toFloat()
@@ -910,7 +944,11 @@ internal fun popupMenuPlacement(
         else -> 0.5f
     }
     return PopupMenuPlacement(
-        position = Offset(x.coerceIn(0f, maxX), y.coerceIn(0f, maxY)).round(),
+        position = Offset(
+            (x + if (layoutDirection == LayoutDirection.Ltr) offset.x.toFloat() else -offset.x.toFloat())
+                .coerceIn(0f, maxX),
+            (y + offset.y.toFloat()).coerceIn(0f, maxY),
+        ).round(),
         transformOrigin = TransformOrigin(pivotX, if (useBelow) 0f else 1f),
     )
 }

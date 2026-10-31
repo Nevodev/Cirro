@@ -126,7 +126,11 @@ private fun emitCorner(
     descending: Boolean,
     p: DoubleArray? = null
 ) {
-    if (radius <= 0.0) return
+    if (radius <= 0.0) {
+        // A square corner still contributes its vertex; skipping it cuts off that side on close.
+        acc.line(cx, cy)
+        return
+    }
     val points = p ?: cornerPointsOf(width, height, radius)
     if (points.size < 20) return
 

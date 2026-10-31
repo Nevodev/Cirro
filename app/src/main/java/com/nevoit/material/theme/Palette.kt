@@ -24,6 +24,8 @@ fun paletteColors(isDark: Boolean): MaterialColors {
         background = if (isDark) Color.Black else Color.White,
         activeTrack = accent,
         inactiveTrack = InactiveTrack,
+        activeThumb = Color.White,
+        inactiveThumb = Color.White,
         pageBackground = pageBackground,
         cardBackground = cardBackground,
         elevatedPageBackground = if (isDark) Color(0xFF1C1C1E) else pageBackground,
@@ -52,6 +54,7 @@ fun paletteColors(isDark: Boolean): MaterialColors {
         onSecondaryButton = accent,
         menuActionBackground = scrimNormal.compositeOver(elevatedCardBackground),
         onMenuAction = content,
+        menuSelectionIndicator = accent,
         shadow = if (isDark) Color.Black else Color.Black.copy(alpha = .5f),
     )
 }

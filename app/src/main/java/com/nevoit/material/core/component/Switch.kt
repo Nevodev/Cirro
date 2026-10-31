@@ -13,8 +13,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.drawOutline
-import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
@@ -135,17 +135,11 @@ internal fun Switch(
                         color = trackColor.value
                     )
 
-                    withTransform(transformBlock = {
-                        translate(
-                            left = leftX + moveDistance * thumbProgress.value,
-                            top = centerY
-                        )
-                    }) {
-                        drawCircle(
-                            color = thumbColor.value,
-                            radius = thumbRadius,
-                        )
-                    }
+                    drawCircle(
+                        color = thumbColor.value,
+                        radius = thumbRadius,
+                        center = Offset(leftX + moveDistance * thumbProgress.value, centerY),
+                    )
                 }
             }
     )

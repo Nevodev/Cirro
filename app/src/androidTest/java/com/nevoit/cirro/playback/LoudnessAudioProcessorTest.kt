@@ -32,6 +32,27 @@ import org.junit.Test
 @OptIn(UnstableApi::class)
 class LoudnessAudioProcessorTest {
     @Test
+    fun togglingBalanceBypassesGainAndRestoresTheCurrentStreamWithoutFlushing() {
+        val processor = processor()
+        processor.rememberTrack("1@10", db(0.5), null)
+        processor.flush(stream(1, 10))
+        assertEquals(5_000, sample(processor))
+
+        processor.enabled = false
+        assertTrue(processor.isActive)
+        assertEquals(10_000, sample(processor))
+        processor.rememberTrack("2@20", db(0.25), null)
+        processor.enabled = true
+        assertEquals(5_000, sample(processor))
+
+        processor.enabled = false
+        processor.flush(stream(2, 20))
+        assertEquals(10_000, sample(processor))
+        processor.enabled = true
+        assertEquals(2_500, sample(processor))
+    }
+
+    @Test
     fun preloadingDoesNotChangeTheCurrentStreamAndNextStreamStartsWithItsOwnGain() {
         val processor = processor()
         processor.rememberTrack("1@10", db(0.5), null)

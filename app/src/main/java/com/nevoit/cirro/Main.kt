@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -83,7 +82,6 @@ import com.nevoit.cirro.ui.BottomShade
 import com.nevoit.cirro.ui.StatusBarAppearance
 import com.nevoit.material.clip.cornerMaskCover
 import com.nevoit.material.core.component.BottomPopupMenuHost
-import com.nevoit.material.core.component.HGap
 import com.nevoit.material.core.component.Icon
 import com.nevoit.material.core.component.NavigationBar
 import com.nevoit.material.core.component.NavigationBarItem
@@ -95,12 +93,15 @@ import com.nevoit.material.navigation.NavigationHostHandle
 import com.nevoit.material.navigation.rememberNavigator
 import com.nevoit.material.navigation.shape.deviceCornerShape
 import com.nevoit.material.theme.MaterialTheme
-import com.nevoit.material.theme.local.ProvideContentColor
 import com.nevoit.material.theme.paletteColors
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+import androidx.compose.runtime.CompositionLocalProvider
+import com.nevoit.cirro.data.model.Song
+import com.nevoit.cirro.ui.LocalOpenSongCredits
+import com.nevoit.cirro.ui.SongCreditsScreen
 import org.koin.compose.koinInject
 
 data class NavItem(
@@ -126,13 +127,13 @@ enum class MainDestinations {
 // 详情页在顶时底栏跟封面走：胶囊底 深色页 T98 / 浅色页 T94；指示器 深色页 T30 / 浅色页 T90。
 // 图标跟自己坐的底拉开：激活图标在指示器上（深色页亮 T90 / 浅色页暗 T20），
 // 未激活图标在胶囊上（深色页暗 T40 / 浅色页暗 T50）。标签页在顶时全跟主题。
-private const val BarToneDark = 12
+internal const val BarToneDark = 12
 
-private const val BarToneLight = 98
+internal const val BarToneLight = 98
 
-private const val MenuActionToneDark = 20
+internal const val MenuActionToneDark = 20
 
-private const val MenuActionToneLight = 95
+internal const val MenuActionToneLight = 95
 
 private const val BarIndicatorToneDark = 20
 
@@ -148,13 +149,13 @@ private const val BarInactiveIconToneLight = 40
 
 // MiniPlayer 跟色时胶囊底与导航栏同色（BarTone*），文字/进度自己配档：
 // 主文字 T10/T20、次级文字与进度条 T40/T50（都坐在胶囊上，跟底拉开）。
-private const val MiniContentToneDark = 90
+internal const val MiniContentToneDark = 90
 
-private const val MiniContentToneLight = 10
+internal const val MiniContentToneLight = 10
 
-private const val MiniVariantToneDark = 60
+internal const val MiniVariantToneDark = 60
 
-private const val MiniVariantToneLight = 50
+internal const val MiniVariantToneLight = 50
 
 private const val MiniPrimaryToneDark = 80
 
@@ -188,6 +189,9 @@ sealed interface MainDestination {
 
     @Serializable
     data object LibrarySongs : MainDestination
+
+    @Serializable
+    data class SongCredits(val song: Song) : MainDestination
 
     /**
      * 统一详情页（歌单 / 专辑 / 每日推荐）。
@@ -397,6 +401,10 @@ fun BoxScope.Main() {
     }
     RequestNotificationPermissionOnce()
 
+    CompositionLocalProvider(LocalOpenSongCredits provides { song ->
+        playerDestination = MainDestination.SongCredits(song)
+        if (playerUi.present) playerUi.close()
+    }) {
     BottomPopupMenuHost(
         modifier = Modifier
             .fillMaxSize()
@@ -633,6 +641,22 @@ fun BoxScope.Main() {
                             }
                         }
 
+                        is MainDestination.SongCredits -> SongCreditsScreen(
+                            song = destination.song,
+                            onBack = ::back,
+                            onOpenCollection = { kind, id, titleHint, coverHint, authorHint ->
+                                navigate(
+                                    MainDestination.Collection(
+                                        kind,
+                                        id,
+                                        titleHint,
+                                        coverHint,
+                                        authorHint = authorHint,
+                                    )
+                                )
+                            },
+                        )
+
                         is MainDestination.ArtistShelf -> ArtistShelfRoute(
                             artistId = destination.artistId,
                             artistName = destination.artistName,
@@ -713,10 +737,11 @@ fun BoxScope.Main() {
             },
         )
 
-        // 设置页整层盖在最上面，不进导航栈。
+        // 账户面板盖住播放器和底栏，关闭动画结束后再移除。
         if (settingsOpen) {
             SettingsScreen(onBack = { settingsOpen = false })
         }
+    }
     }
 }
 
@@ -736,6 +761,8 @@ private fun BoxScope.MainTabs(
     onOpenLibrarySongs: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
+
+    val profile by koinInject<AccountRepository>().profile.collectAsState()
 
     CrossfadeNavContainer(
         destination = MainDestinations.entries[selectedIndex],
@@ -775,48 +802,29 @@ private fun BoxScope.MainTabs(
             .fillMaxWidth()
             .height(48.dp)
     ) {
-        ProvideContentColor(MaterialTheme.colors.onIconButton) {
-            Row(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .size(48.dp)
-                        .background(MaterialTheme.colors.iconButtonBackground),
-                    contentAlignment = Alignment.Center
-                ) {
-                    val avatarUrl = (session as? Session.LoggedIn)?.profile?.avatarUrl
-                    if (avatarUrl.isNullOrEmpty()) {
-                        Icon(
-                            painter = painterResource(R.drawable.person),
-                            tint = MaterialTheme.colors.onIconButton,
-                            contentDescription = "我的"
-                        )
-                    } else {
-                        AsyncImage(
-                            model = avatarUrl,
-                            contentDescription = "我的",
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop,
-                        )
-                    }
-                }
-                HGap()
-                Box(
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .size(48.dp)
-                        .background(MaterialTheme.colors.iconButtonBackground)
-                        .clickable { onOpenSettings() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ellipsis),
-                        contentDescription = "设置"
-                    )
-                }
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .clip(CircleShape)
+                .size(48.dp)
+                .background(MaterialTheme.colors.iconButtonBackground)
+                .clickable(onClick = onOpenSettings),
+            contentAlignment = Alignment.Center
+        ) {
+            val avatarUrl = profile?.avatarUrl
+            if (avatarUrl.isNullOrEmpty()) {
+                Icon(
+                    painter = painterResource(R.drawable.person),
+                    tint = MaterialTheme.colors.onIconButton,
+                    contentDescription = "我的"
+                )
+            } else {
+                AsyncImage(
+                    model = avatarUrl,
+                    contentDescription = "我的",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
             }
         }
     }

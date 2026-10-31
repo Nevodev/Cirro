@@ -9,6 +9,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.ResolvingDataSource
@@ -80,6 +81,11 @@ class PlaybackService : MediaSessionService(), KoinComponent {
 
     override fun onCreate() {
         super.onCreate()
+        qualityStore.retainResolved(emptySet())
+        loudness.enabled = qualityStore.volumeBalance.value
+        serviceScope.launch {
+            qualityStore.volumeBalance.collect { loudness.enabled = it }
+        }
         val player = ExoPlayer.Builder(this, AudioRenderersFactory(this, loudness, beatAnalyzer, outputAccounting))
             .setMediaSourceFactory(mediaSourceFactory())
             .setAudioAttributes(
@@ -93,6 +99,16 @@ class PlaybackService : MediaSessionService(), KoinComponent {
             .build()
 
         player.addListener(object : Player.Listener {
+            override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+                val window = Timeline.Window()
+                qualityStore.retainResolved(buildSet {
+                    for (index in 0 until timeline.windowCount) {
+                        timeline.getWindow(index, window).mediaItem.localConfiguration?.customCacheKey
+                            ?.let { add(it) }
+                    }
+                })
+            }
+
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 queueStore.finishPlaybackHistory(
                     nextUid = mediaItem?.queueEntryUid,
@@ -219,6 +235,7 @@ class PlaybackService : MediaSessionService(), KoinComponent {
             release()
         }
         session = null
+        qualityStore.retainResolved(emptySet())
         super.onDestroy()
     }
 
@@ -253,7 +270,7 @@ class PlaybackService : MediaSessionService(), KoinComponent {
             val audio = NcmBridge.songUrl(id, quality.wire).getOrThrow()
             loudness.rememberTrack(spec.key ?: id.toString(), audio.gainDb, audio.peak)
             // 服务端可能降级，如实记下实得档位
-            qualityStore.reportResolved(id, audio.level)
+            qualityStore.reportResolved(spec.key ?: id.toString(), id, audio.level)
             spec.withUri(audio.url.toUri())
         }
         return DefaultMediaSourceFactory(
