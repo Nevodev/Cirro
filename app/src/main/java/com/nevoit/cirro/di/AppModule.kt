@@ -35,6 +35,7 @@ import com.nevoit.cirro.palette.CoverPalette
 import com.nevoit.cirro.playback.AudioAnalysisStore
 import com.nevoit.cirro.playback.PlaybackConnection
 import com.nevoit.cirro.playback.PlaybackReportRepository
+import com.nevoit.cirro.playback.PlaybackAudioCache
 import com.nevoit.cirro.playback.PlayerLikeViewModel
 import com.nevoit.cirro.playback.PlayerUiController
 import kotlinx.coroutines.CoroutineScope
@@ -63,6 +64,7 @@ val appModule = module {
     single { SessionStore(get()) }
 
     single { AudioQualityStore(androidContext()) }
+    single { PlaybackAudioCache(androidContext(), get(ApplicationScope), get(), get()) }
 
     // 播放队列的真相源：PlaybackConnection 写（它拿着 MediaController），
     // PlaybackService 读（打卡要 sourceId）。
@@ -74,7 +76,7 @@ val appModule = module {
 
     single { IntelligenceRepository() }
     single { RadioRepository() }
-    single { PlaybackConnection(androidContext(), get(ApplicationScope), get(), get(), get(), get(), get()) }
+    single { PlaybackConnection(androidContext(), get(ApplicationScope), get(), get(), get(), get(), get(), get()) }
     single { AudioAnalysisStore() }
 
     // 播放页的展开进度。迷你条和播放页分属两层，要由同一个值驱动，所以由 App 持有。

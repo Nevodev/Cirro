@@ -1,5 +1,6 @@
 package com.nevoit.cirro.data
 
+import com.nevoit.cirro.data.model.AudioQuality
 import com.nevoit.cirro.data.model.PlaybackQueue
 import kotlinx.serialization.Serializable
 
@@ -8,9 +9,20 @@ import kotlinx.serialization.Serializable
 data class PlaybackSnapshot(
     val queue: PlaybackQueue,
     val positionMs: Long = 0L,
+    val audioQuality: String? = null,
+    val requestedAudioQuality: String? = null,
 ) {
+    val resolvedAudioQuality: ResolvedAudioQuality?
+        get() {
+            val entry = queue.entries.getOrNull(queue.currentIndex) ?: return null
+            val actual = AudioQuality.fromWire(audioQuality.orEmpty()) ?: return null
+            return ResolvedAudioQuality(
+                entry.song.id, actual, AudioQuality.fromWire(requestedAudioQuality.orEmpty()),
+            )
+        }
+
     internal fun validated(): PlaybackSnapshot? {
-        if (queue.entries.isEmpty()) return copy(positionMs = 0L)
+        if (queue.entries.isEmpty()) return copy(positionMs = 0L, audioQuality = null, requestedAudioQuality = null)
         if (queue.currentIndex !in queue.entries.indices) return null
         val uids = HashSet<Long>(queue.entries.size)
         if (queue.entries.any { it.song.id <= 0L || it.uid <= 0L || it.uid == Long.MAX_VALUE || !uids.add(it.uid) }) {
@@ -18,6 +30,11 @@ data class PlaybackSnapshot(
         }
         val duration = queue.entries[queue.currentIndex].song.durationMs
         val position = positionMs.coerceAtLeast(0L).let { if (duration > 0L) it.coerceAtMost(duration) else it }
-        return copy(positionMs = position)
+        val resolved = resolvedAudioQuality
+        return copy(
+            positionMs = position,
+            audioQuality = resolved?.quality?.wire,
+            requestedAudioQuality = resolved?.requestedQuality?.wire,
+        )
     }
 }

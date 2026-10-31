@@ -33,6 +33,7 @@ class PlayQueueStore(private val onPlaybackChanged: (PlaybackSnapshot) -> Unit =
 
     private var playing: PlaybackHistoryEntry? = null
     private var nextHistoryId = 0L
+    private var audioQuality: ResolvedAudioQuality? = null
     var positionMs: Long = 0L
         private set
 
@@ -40,14 +41,29 @@ class PlayQueueStore(private val onPlaybackChanged: (PlaybackSnapshot) -> Unit =
         val restored = snapshot.validated() ?: return
         restored.queue.reserveEntryUids()
         positionMs = restored.positionMs
+        audioQuality = restored.resolvedAudioQuality
         _queue.value = restored.queue
+    }
+
+    fun snapshot(): PlaybackSnapshot {
+        val queue = _queue.value
+        val actual = audioQuality?.takeIf { it.songId == queue.entries.getOrNull(queue.currentIndex)?.song?.id }
+        return PlaybackSnapshot(queue, positionMs, actual?.quality?.wire, actual?.requestedQuality?.wire)
+    }
+
+    fun updateAudioQuality(entryUid: Long?, quality: ResolvedAudioQuality?) {
+        val entry = _queue.value.entries.getOrNull(_queue.value.currentIndex) ?: return
+        if (entryUid == null || entry.uid != entryUid || (quality != null && quality.songId != entry.song.id)) return
+        if (audioQuality == quality) return
+        audioQuality = quality
+        onPlaybackChanged(snapshot())
     }
 
     fun updatePosition(entryUid: Long?, positionMs: Long) {
         val queue = _queue.value
         if (entryUid == null || queue.entries.getOrNull(queue.currentIndex)?.uid != entryUid) return
         this.positionMs = positionMs.coerceAtLeast(0L)
-        onPlaybackChanged(PlaybackSnapshot(queue, this.positionMs))
+        onPlaybackChanged(snapshot())
     }
 
     fun markPlaying(entry: QueueEntry, startedAtMillis: Long = System.currentTimeMillis()) {
@@ -68,9 +84,10 @@ class PlayQueueStore(private val onPlaybackChanged: (PlaybackSnapshot) -> Unit =
         val previous = _queue.value
         if (previous.entries.getOrNull(previous.currentIndex)?.uid != queue.entries.getOrNull(queue.currentIndex)?.uid) {
             positionMs = 0L
+            audioQuality = null
         }
         _queue.value = queue
-        onPlaybackChanged(PlaybackSnapshot(queue, positionMs))
+        onPlaybackChanged(snapshot())
     }
 
     fun clear() {

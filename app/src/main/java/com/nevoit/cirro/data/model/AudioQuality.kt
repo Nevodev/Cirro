@@ -5,7 +5,7 @@ package com.nevoit.cirro.data.model
  *
  * [wire] 是请求直链时传的 `level`，也是响应里回显的值。⚠️ **服务端会自己降级**：实测
  * 请求 `hires` 得 `lossless`、请求 `dolby` 得 `jyeffect`，所以"实得档位"一律看响应回显的
- * `level`，别信请求参数。也正因如此，客户端**不需要**自己写一条降级链。
+ * `level`，别信请求参数。实际档位不在 [supported] 中时不能播放；杜比请求会重新尝试普通档位。
  *
  * [bitrate] 是网易云给这一档标的**虚拟码率**（bps），跟真实码率不等同，界面显示
  * "约 xxx kbps" 用。取自官方 `rn-audio-quality-layer` 的常量表。

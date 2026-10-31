@@ -92,26 +92,39 @@ object NcmBridge {
      * - [SongUnavailableException]：无版权 / 下架 / VIP 未开通，重试没有意义
      * - 其它失败：请求本身没成功（网络、超时），值得重试
      *
-     * [level] 拿不到目标档时会由服务端自己降级（实测请求 `hires` 回 `lossless`），但**降不下去
-     * 时**可能直接回 `code=-110` + 空 url —— 那说明这一档这首歌给不了，跟"整首不能播"不同，
-     * 提示语会区分开。
+     * 只接受 App 支持的实际档位。杜比缺失或被服务端替换成其它特殊档位时，按 App 的普通
+     * 音质顺序重新请求；网络失败直接交给播放重试，不能当成歌曲不支持杜比。
      *
      * 返回的直链有效期很短（[SongAudio.expiresInSeconds]，实测 1200 秒），别囤。
      */
     fun songUrl(id: Long, level: String = "standard"): Result<SongAudio> = runCatching {
-        val body = decode(nativeSongUrl(id.toString(), level)).getOrThrow()
-        if (body.url.isEmpty()) {
-            throw SongUnavailableException(unavailableMessage(body.code, level, body.message))
+        val requested = AudioQuality.fromWire(level)
+        require(requested in AudioQuality.supported) { "Unsupported audio quality: $level" }
+        val candidates = if (requested == AudioQuality.DOLBY) {
+            listOf(requested) + AudioQuality.supported.asReversed().filterNot { it == AudioQuality.DOLBY }
+        } else listOf(requireNotNull(requested))
+        var unavailable = "这首歌暂无 App 支持的可播放音质"
+        for (candidate in candidates) {
+            val body = decode(nativeSongUrl(id.toString(), candidate.wire)).getOrThrow()
+            if (body.url.isEmpty()) {
+                unavailable = unavailableMessage(body.code, candidate.wire, body.message)
+                continue
+            }
+            if (AudioQuality.fromWire(body.level) !in AudioQuality.supported) {
+                unavailable = "这首歌暂无 App 支持的可播放音质"
+                continue
+            }
+            return@runCatching SongAudio(
+                url = body.url,
+                level = body.level,
+                type = body.type,
+                sizeBytes = body.size,
+                expiresInSeconds = body.expi,
+                gainDb = body.gain,
+                peak = body.peak,
+            )
         }
-        SongAudio(
-            url = body.url,
-            level = body.level,
-            type = body.type,
-            sizeBytes = body.size,
-            expiresInSeconds = body.expi,
-            gainDb = body.gain,
-            peak = body.peak,
-        )
+        throw SongUnavailableException(unavailable)
     }
 
     /**

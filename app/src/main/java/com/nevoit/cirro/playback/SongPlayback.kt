@@ -13,7 +13,7 @@ import com.nevoit.cirro.data.model.Song
  *
  * 为什么非要绕这一下：网易云的直链只有 20 分钟有效期（响应里的 `expi`）。如果在建队列时
  * 就把直链烧进 MediaItem，一首排在半小时后才轮到的歌，等到它时链接早就死了。
- * 换成占位地址之后还有个附带好处——每次 load 重试都会重新换一次链接，链接过期可以自愈。
+ * 缓存数据源在实际读取时选择音源，缓存命中直接读取，缺失范围才使用或刷新短期直链。
  */
 internal const val SongScheme = "cirro"
 internal const val SongHost = "song"

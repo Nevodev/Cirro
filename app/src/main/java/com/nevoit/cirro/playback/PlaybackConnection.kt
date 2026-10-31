@@ -12,11 +12,11 @@ import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.nevoit.cirro.data.AccountRepository
+import com.nevoit.cirro.data.AudioQualityStore
 import com.nevoit.cirro.data.IntelligenceRepository
 import com.nevoit.cirro.data.IntelligenceSeed
 import com.nevoit.cirro.data.NcmBridge
 import com.nevoit.cirro.data.PlayQueueStore
-import com.nevoit.cirro.data.PlaybackSnapshot
 import com.nevoit.cirro.data.PlaybackStore
 import com.nevoit.cirro.data.RadioOpening
 import com.nevoit.cirro.data.RadioRepository
@@ -153,6 +153,7 @@ class PlaybackConnection(
     private val intelligence: IntelligenceRepository,
     private val radio: RadioRepository,
     private val playbackStore: PlaybackStore,
+    private val qualityStore: AudioQualityStore,
 ) {
 
     private val appContext = context.applicationContext
@@ -337,9 +338,11 @@ class PlaybackConnection(
             val saved = withContext(Dispatchers.IO) { playbackStore.read() }
             if (queueStore.queue.value.entries.isEmpty() && saved != null) {
                 queueStore.restore(saved)
-                val song = saved.queue.entries.getOrNull(saved.queue.currentIndex)?.song
+                qualityStore.restorePlaybackQuality(saved)
+                val entry = saved.queue.entries.getOrNull(saved.queue.currentIndex)
+                val song = entry?.song
                 _state.value = PlaybackState(
-                    song = song?.let { NowPlaying(it.id, it.name, it.artistText, it.cover) },
+                    song = entry?.let { NowPlaying(it.song.id, it.song.name, it.song.artistText, it.song.cover, it.uid) },
                     positionMs = saved.positionMs,
                     durationMs = song?.durationMs?.coerceAtLeast(0L) ?: 0L,
                 )
@@ -353,7 +356,7 @@ class PlaybackConnection(
                         .onSuccess { controller ->
                             this@PlaybackConnection.controller = controller
                             val queue = queueStore.queue.value
-                            controller.restorePlayback(PlaybackSnapshot(queue, queueStore.positionMs))
+                            controller.restorePlayback(queueStore.snapshot())
                             controller.repeatMode = queue.repeatMode()
                             controller.addListener(listener)
                             syncCurrentIndex(controller)

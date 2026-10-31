@@ -53,11 +53,18 @@ class AudioQualityStore(context: Context) {
     /**
      * 按 MediaItem 的 customCacheKey 记录实际档位，避免下一首的预加载覆盖当前条目。
      * 加载线程写入，主线程读取或裁剪；未知档位清除旧结果，不能沿用之前的标签。
+     * 请求档位必须来自该音源，不能用已经改过的当前设置倒推，否则切歌会复用旧标签。
      */
-    fun reportResolved(key: String, songId: Long, level: String) =
-        resolvedState.report(key, songId, level)
+    fun reportResolved(key: String, songId: Long, level: String, requestedQuality: AudioQuality? = null) =
+        resolvedState.report(key, songId, level, requestedQuality)
 
     fun retainResolved(keys: Set<String>) = resolvedState.retain(keys)
+
+    fun restorePlaybackQuality(snapshot: PlaybackSnapshot) {
+        val entry = snapshot.queue.entries.getOrNull(snapshot.queue.currentIndex) ?: return
+        val quality = snapshot.resolvedAudioQuality ?: return
+        resolvedState.restore("${entry.song.id}@${entry.uid}", quality)
+    }
 
     private fun read(): AudioQuality =
         AudioQuality.fromWire(prefs.getString(KeyQuality, null).orEmpty())

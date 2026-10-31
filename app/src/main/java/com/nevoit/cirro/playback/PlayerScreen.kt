@@ -4,14 +4,18 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.updateTransition
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -105,6 +109,7 @@ import com.nevoit.cirro.MiniContentToneLight
 import com.nevoit.cirro.MiniVariantToneDark
 import com.nevoit.cirro.MiniVariantToneLight
 import com.nevoit.cirro.data.AudioQualityStore
+import com.nevoit.cirro.data.ResolvedAudioQuality
 import com.nevoit.cirro.data.model.AudioQuality
 import com.nevoit.cirro.data.model.CollectionKind
 import com.nevoit.cirro.data.model.Song
@@ -258,6 +263,8 @@ private const val PlayIconToneLight = 90
 
 /** 换歌时的主题色过渡时长，跟详情页一致。 */
 private const val ThemeColorMs = 500
+
+private const val AudioQualityFadeMs = 500
 
 /** 进度补间时长。要跟 PlaybackConnection 的位置心跳（500ms）对齐：短了进度头会走走停停，长了会滞后。 */
 private const val ProgressTweenMs = 500
@@ -1820,6 +1827,7 @@ private fun PlayerProgress(
             )
             PlayerAudioQuality(
                 song = state.song,
+                resolving = state.isBuffering || state.pendingPlay,
                 color = contentVariantColor,
                 modifier = Modifier.align(Alignment.Center),
             )
@@ -1834,28 +1842,61 @@ private fun PlayerProgress(
 }
 
 @Composable
-private fun PlayerAudioQuality(song: NowPlaying?, color: ColorProducer, modifier: Modifier = Modifier) {
+private fun PlayerAudioQuality(
+    song: NowPlaying?,
+    resolving: Boolean,
+    color: ColorProducer,
+    modifier: Modifier = Modifier,
+) {
     val audio = koinInject<AudioQualityStore>()
     val resolved by audio.resolved.collectAsState()
+    val requestedQuality by audio.quality.collectAsState()
     val key = song?.queueEntryUid?.let { "${song.id}@$it" }
-    val quality = resolved[key]?.takeIf { it.songId == song?.id }?.quality
-    val iconRes = when (quality) {
-        AudioQuality.LOSSLESS, AudioQuality.HIRES -> R.drawable.lossless
-        AudioQuality.DOLBY -> R.drawable.dolby
-        else -> return
+    var retained by remember(audio) { mutableStateOf<Pair<String?, ResolvedAudioQuality>?>(null) }
+    val sameEntry = key != null && retained?.first == key
+    val actual = resolved[key]?.takeIf {
+        it.songId == song?.id && (!resolving || sameEntry || it.requestedQuality == requestedQuality)
     }
-    Row(
+    // 当前歌曲仍显示实际加载的档位；跨歌曲的过渡只能复用同一设置下的结果，不能把旧档位带到新曲。
+    val shown = actual ?: retained?.second?.takeIf {
+        song != null && resolving && (sameEntry || it.requestedQuality == requestedQuality)
+    }
+    SideEffect {
+        if (actual != null) retained = key to actual
+        else if (shown == null) retained = null
+    }
+    val badgeQuality = shown?.quality?.takeIf {
+        it == AudioQuality.LOSSLESS || it == AudioQuality.HIRES || it == AudioQuality.DOLBY
+    }
+    val displayRequest = shown?.requestedQuality ?: requestedQuality
+    var lastBadgeQuality by remember(audio, displayRequest) { mutableStateOf<AudioQuality?>(null) }
+    // 淡出结束前仍需保留标签内容，不能在音质变为有损时先移除文字和图标。
+    SideEffect { if (badgeQuality != null) lastBadgeQuality = badgeQuality }
+    val visibility = remember(audio, displayRequest) { MutableTransitionState(false) }
+    visibility.targetState = badgeQuality != null
+    AnimatedVisibility(
+        visibleState = visibility,
         modifier = modifier,
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        enter = fadeIn(tween(AudioQualityFadeMs)),
+        exit = fadeOut(tween(AudioQualityFadeMs)),
     ) {
-        Icon(
-            painter = painterResource(iconRes),
-            contentDescription = null,
-            tint = color,
-            modifier = Modifier.size(16.dp),
-        )
-        PlayerText(text = quality.displayName, style = MaterialTheme.type.footnote, color = color)
+        val displayedQuality = badgeQuality ?: lastBadgeQuality ?: return@AnimatedVisibility
+        val iconRes = when (displayedQuality) {
+            AudioQuality.DOLBY -> R.drawable.dolby
+            else -> R.drawable.lossless
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Icon(
+                painter = painterResource(iconRes),
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(16.dp),
+            )
+            PlayerText(text = displayedQuality.displayName, style = MaterialTheme.type.footnote, color = color)
+        }
     }
 }
 

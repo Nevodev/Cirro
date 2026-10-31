@@ -3,7 +3,6 @@ package com.nevoit.cirro.playback
 import android.app.PendingIntent
 import android.content.Intent
 import androidx.annotation.OptIn
-import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -11,8 +10,6 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
@@ -21,10 +18,9 @@ import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.nevoit.cirro.MainActivity
 import com.nevoit.cirro.data.AudioQualityStore
-import com.nevoit.cirro.data.NcmBridge
 import com.nevoit.cirro.data.AccountRepository
 import com.nevoit.cirro.data.PlayQueueStore
-import com.nevoit.cirro.data.SongUnavailableException
+import com.nevoit.cirro.data.model.AudioQuality
 import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.data.model.Session
 import com.nevoit.cirro.data.model.PlayMode
@@ -69,6 +65,9 @@ class PlaybackService : MediaSessionService(), KoinComponent {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val account: AccountRepository by inject()
     private val reports: PlaybackReportRepository by inject()
+    private val audioCache: PlaybackAudioCache by inject()
+    private val nextTrackPreloader by lazy { NextTrackPreloader(audioCache, qualityStore, serviceScope) }
+    private var countedPlaybackUid: Long? = null
     private val listening by lazy {
         PlaybackListeningSession(emit = reports::enqueue, checkpoint = reports::checkpoint)
     }
@@ -81,13 +80,17 @@ class PlaybackService : MediaSessionService(), KoinComponent {
 
     override fun onCreate() {
         super.onCreate()
-        qualityStore.retainResolved(emptySet())
+        val restored = queueStore.snapshot()
+        val restoredEntry = restored.queue.entries.getOrNull(restored.queue.currentIndex)
+        qualityStore.retainResolved(setOfNotNull(restoredEntry?.let { "${it.song.id}@${it.uid}" }))
+        qualityStore.restorePlaybackQuality(restored)
         loudness.enabled = qualityStore.volumeBalance.value
         serviceScope.launch {
             qualityStore.volumeBalance.collect { loudness.enabled = it }
         }
         val player = ExoPlayer.Builder(this, AudioRenderersFactory(this, loudness, beatAnalyzer, outputAccounting))
             .setMediaSourceFactory(mediaSourceFactory())
+            .setPriorityTaskManager(audioCache.priority)
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -110,6 +113,12 @@ class PlaybackService : MediaSessionService(), KoinComponent {
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                if (reason != Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED ||
+                    countedPlaybackUid != mediaItem?.queueEntryUid
+                ) countedPlaybackUid = null
+                audioCache.setPlayingSong(
+                    mediaItem?.mediaId?.toLongOrNull(), mediaItem?.localConfiguration?.customCacheKey,
+                )
                 queueStore.finishPlaybackHistory(
                     nextUid = mediaItem?.queueEntryUid,
                     repeated = reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT,
@@ -137,6 +146,7 @@ class PlaybackService : MediaSessionService(), KoinComponent {
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_ENDED) {
+                    countedPlaybackUid = null
                     queueStore.finishPlaybackHistory()
                     sampleListening(player)
                     listening.finish(ListeningEnd.Natural)
@@ -158,8 +168,13 @@ class PlaybackService : MediaSessionService(), KoinComponent {
             override fun onEvents(player: Player, events: Player.Events) {
                 savePlayback(player)
                 sampleListening(player)
+                nextTrackPreloader.update(player)
                 if (!player.isPlaying) return
                 val uid = player.currentMediaItem?.queueEntryUid ?: return
+                if (countedPlaybackUid != uid) {
+                    countedPlaybackUid = uid
+                    player.currentMediaItem?.mediaId?.toLongOrNull()?.let(audioCache::recordPlay)
+                }
                 // 同一首歌可重复入队，索引也会因拖拽改变，必须按条目身份匹配实际出声的歌曲。
                 val entry = queueStore.queue.value.entries.firstOrNull { it.uid == uid } ?: return
                 queueStore.markPlaying(entry)
@@ -181,13 +196,20 @@ class PlaybackService : MediaSessionService(), KoinComponent {
             .setCallback(PlaybackSessionCallback())
             .build()
         serviceScope.launch {
-            account.session.collect { sampleListening(player) }
+            account.session.collect {
+                sampleListening(player)
+                nextTrackPreloader.update(player)
+            }
+        }
+        serviceScope.launch {
+            qualityStore.quality.collect { nextTrackPreloader.update(player) }
         }
         serviceScope.launch {
             while (isActive) {
                 delay(5_000L)
                 if (player.isPlaying) savePlayback(player)
                 sampleListening(player)
+                nextTrackPreloader.update(player)
             }
         }
     }
@@ -229,6 +251,9 @@ class PlaybackService : MediaSessionService(), KoinComponent {
         }
         listening.finish(ListeningEnd.Interrupted)
         queueStore.finishPlaybackHistory()
+        nextTrackPreloader.cancel()
+        audioCache.setPlayingSong(null)
+        audioCache.setNextSong(null)
         serviceScope.cancel()
         session?.run {
             player.release()
@@ -246,37 +271,24 @@ class PlaybackService : MediaSessionService(), KoinComponent {
             else queue.entries.indexOfFirst { it.uid == uid }
         if (index < 0) return
         if (index != queue.currentIndex) queueStore.set(queue.withCurrent(index))
+        val key = player.currentMediaItem?.localConfiguration?.customCacheKey
+        qualityStore.resolved.value[key]?.let { queueStore.updateAudioQuality(uid, it) }
         queueStore.updatePosition(uid, player.currentPosition)
     }
 
-    /**
-     * 在数据源那一层把 `cirro://song/<id>` 换成真实直链。
-     *
-     * 换链接发生在 ExoPlayer 自己的加载线程上，不在主线程——Rust 侧是阻塞调用，
-     * 放主线程会 ANR。
-     *
-     * 档位在这里**现取**（[qualityStore]）：改档后下一次换直链就用新的，已在缓冲的不受影响。
-     * 拿不到目标档时由服务端自己降级（实测请求 `hires` 回 `lossless`），客户端不做降级链，
-     * 实得档位看响应回显。
-     *
-     * 顺带把这首歌的响度记下来：直链和 `gain` / `peak` 本来就在同一个响应里，一起拿最省事。
-     * 只记不设——这里拿到的可能是预读的下一首，见 [LoudnessAudioProcessor] 的类注释。
-     */
-    private fun mediaSourceFactory(): DefaultMediaSourceFactory {
-        val resolver = ResolvingDataSource.Resolver { spec ->
-            val id = spec.uri.songIdOrNull()
-                ?: throw SongUnavailableException("无法识别的歌曲地址")
-            val quality = qualityStore.current
-            val audio = NcmBridge.songUrl(id, quality.wire).getOrThrow()
-            loudness.rememberTrack(spec.key ?: id.toString(), audio.gainDb, audio.peak)
-            // 服务端可能降级，如实记下实得档位
-            qualityStore.reportResolved(spec.key ?: id.toString(), id, audio.level)
-            spec.withUri(audio.url.toUri())
+    private fun mediaSourceFactory(): DefaultMediaSourceFactory = DefaultMediaSourceFactory(
+        audioCache.factory { entryKey, audio ->
+            // 命中磁盘也恢复实得音质和响度；后台预缓存不改变当前音频处理链。
+            loudness.rememberTrack(entryKey, audio.gainDb, audio.peak)
+            qualityStore.reportResolved(
+                entryKey, audio.songId, audio.level, AudioQuality.fromWire(audio.requestedQuality),
+            )
+            serviceScope.launch {
+                val uid = entryKey.substringAfter('@', "").toLongOrNull()
+                queueStore.updateAudioQuality(uid, qualityStore.resolved.value[entryKey])
+            }
         }
-        return DefaultMediaSourceFactory(
-            ResolvingDataSource.Factory(DefaultDataSource.Factory(this), resolver)
-        ).setLoadErrorHandlingPolicy(SongLoadErrorPolicy())
-    }
+    ).setLoadErrorHandlingPolicy(SongLoadErrorPolicy())
 }
 
 /**
@@ -289,7 +301,9 @@ private class SongLoadErrorPolicy : LoadErrorHandlingPolicy {
     private val delegate = DefaultLoadErrorHandlingPolicy()
 
     override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long =
-        if (loadErrorInfo.exception.songUnavailable() != null) C.TIME_UNSET
+        if (loadErrorInfo.exception.songUnavailable() != null ||
+            loadErrorInfo.exception is AudioResourceChangedException
+        ) C.TIME_UNSET
         else delegate.getRetryDelayMsFor(loadErrorInfo)
 
     override fun getMinimumLoadableRetryCount(dataType: Int): Int =
