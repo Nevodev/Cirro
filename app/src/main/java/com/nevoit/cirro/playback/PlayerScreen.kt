@@ -82,6 +82,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextMotion
 import androidx.compose.ui.unit.Dp
@@ -962,7 +963,14 @@ private fun PlayerOverlay(
         val onSeek = remember(connection) { { ms: Long -> connection.seekTo(ms) } }
         val onLyrics = remember { {} }
         val onQueue = remember { {} }
-        val onAirplay = remember { {} }
+        val context = LocalContext.current
+        val onAirplay = remember(context) {
+            {
+                if (!showAudioOutputPicker(context)) {
+                    Toast.makeText(context, "系统暂时无法打开音频输出选择器", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
 
         // 面板切换的规则只有一条：**选中的再点一次就取消选中**（回到"都不选"），没选中的点了就
         // 选中它（另一个自然让位，因为状态只有一个）。写成一份，别在两个 onClick 里各抄一遍。
@@ -1158,12 +1166,26 @@ private fun PlayerOverlay(
                             onLyrics()
                         },
                     )
-                    Icon(
-                        painter = painterResource(R.drawable.airplay),
-                        contentDescription = "投放",
-                        tint = contentVariantColor,
-                        modifier = Modifier.size(28.dp)
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .wrapContentSize(Alignment.Center, unbounded = true)
+                            .requiredSize(PanelTouchTargetSize)
+                            .clickable(
+                                onClick = onAirplay,
+                                role = Role.Button,
+                                interactionSource = null,
+                                indication = null,
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.airplay),
+                            contentDescription = "音频输出",
+                            tint = contentVariantColor,
+                            modifier = Modifier.size(28.dp),
+                        )
+                    }
                     PlayerPanelIcon(
                         iconRes = R.drawable.list_play,
                         label = "待播列表",
