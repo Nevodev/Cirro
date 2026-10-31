@@ -1,6 +1,7 @@
 package com.nevoit.material.core.component
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -32,13 +33,14 @@ fun CircleIconButton(
     enabled: Boolean = true,
     size: Dp = CircleIconButtonSize,
     iconSize: Dp = CircleIconButtonIconSize,
+    interactionSource: MutableInteractionSource? = null,
 ) {
     Box(
         modifier = modifier
             .size(size)
             .clip(CircleShape)
             .drawBackground(background)
-            .clickable(enabled = enabled, onClick = onClick),
+            .clickable(enabled = enabled, interactionSource = interactionSource, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
@@ -61,6 +63,7 @@ fun CircleIconButton(
     enabled: Boolean = true,
     size: Dp = CircleIconButtonSize,
     iconSize: Dp = CircleIconButtonIconSize,
+    interactionSource: MutableInteractionSource? = null,
 ) = CircleIconButton(
     iconRes = iconRes,
     label = label,
@@ -71,4 +74,5 @@ fun CircleIconButton(
     enabled = enabled,
     size = size,
     iconSize = iconSize,
+    interactionSource = interactionSource,
 )

@@ -41,6 +41,10 @@ fun paletteColors(isDark: Boolean): MaterialColors {
         highlightText = Yellow500,
         error = Red500,
         onError = Color.White,
+        segmentedControlBackground = scrimNormal,
+        onSegmentedControlBackground = contentVariant,
+        segmentedControlIndicator = if (isDark) Color(0xFF636366) else Color.White,
+        onSegmentedControlIndicator = content,
         // Opaque on purpose: the bar animates this colour, and a translucent start
         // value drags the alpha through the transition.
         navigationBarIndicator = scrimNormal.compositeOver(cardBackground),

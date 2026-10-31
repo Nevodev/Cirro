@@ -48,6 +48,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import coil3.compose.AsyncImage
@@ -67,6 +68,8 @@ import com.nevoit.cirro.library.LibraryPlaylistsRoute
 import com.nevoit.cirro.library.LibraryRoute
 import com.nevoit.cirro.library.LibrarySongsRoute
 import com.nevoit.cirro.settings.SettingsScreen
+import com.nevoit.cirro.search.SearchRoute
+import com.nevoit.cirro.search.rememberSearchPresentation
 import com.nevoit.cirro.palette.CoverPalette
 import com.nevoit.cirro.palette.CoverSeed
 import com.nevoit.cirro.playback.MiniPlayer
@@ -763,6 +766,11 @@ private fun BoxScope.MainTabs(
 ) {
 
     val profile by koinInject<AccountRepository>().profile.collectAsState()
+    val search = rememberSearchPresentation()
+    val searching = selectedIndex == MainDestinations.Search.ordinal && search.active
+    LaunchedEffect(selectedIndex) {
+        if (selectedIndex != MainDestinations.Search.ordinal) search.close()
+    }
 
     CrossfadeNavContainer(
         destination = MainDestinations.entries[selectedIndex],
@@ -786,7 +794,12 @@ private fun BoxScope.MainTabs(
                 onOpenSongs = onOpenLibrarySongs,
             )
 
-            MainDestinations.Search -> {}
+            MainDestinations.Search -> SearchRoute(
+                presentation = search,
+                visible = selectedIndex == MainDestinations.Search.ordinal,
+                onOpenCollection = onOpenCollection,
+                onOpenLibraryAlbum = onOpenLibraryAlbum,
+            )
         }
     }
 
@@ -805,10 +818,15 @@ private fun BoxScope.MainTabs(
         Box(
             modifier = Modifier
                 .align(Alignment.CenterEnd)
+                .graphicsLayer {
+                    alpha = if (selectedIndex == MainDestinations.Search.ordinal) {
+                        1f - search.activationProgress.value.coerceIn(0f, 1f)
+                    } else 1f
+                }
                 .clip(CircleShape)
                 .size(48.dp)
                 .background(MaterialTheme.colors.iconButtonBackground)
-                .clickable(onClick = onOpenSettings),
+                .then(if (searching) Modifier.clearAndSetSemantics {} else Modifier.clickable(onClick = onOpenSettings)),
             contentAlignment = Alignment.Center
         ) {
             val avatarUrl = profile?.avatarUrl

@@ -7,6 +7,7 @@
 
 use ncm_api_rs::{create_client, ApiClient, NcmError, Query};
 mod library;
+mod search;
 use once_cell::sync::Lazy;
 use std::ffi::{c_char, CString};
 use std::sync::Mutex;

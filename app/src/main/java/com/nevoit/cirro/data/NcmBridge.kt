@@ -15,6 +15,8 @@ import com.nevoit.cirro.data.model.Song
 import com.nevoit.cirro.data.model.SongAudio
 import com.nevoit.cirro.data.model.SongQualityInfo
 import com.nevoit.cirro.data.model.UserProfile
+import com.nevoit.cirro.data.model.SearchCandidates
+import com.nevoit.cirro.data.model.SearchResultsPage
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -43,6 +45,15 @@ data class QrCheckStatus(
 object NcmBridge {
 
     private val json = Json { ignoreUnknownKeys = true }
+
+    internal fun searchCandidates(keywords: String): Result<Pair<SearchCandidates, Boolean>> = runCatching {
+        val body = decode(nativeSearchCandidates(keywords)).getOrThrow()
+        body.candidates to body.partial
+    }
+
+    internal fun searchResults(keywords: String, type: String = "1018", offset: Int = 0, cursor: String? = null): Result<SearchResultsPage> = runCatching {
+        decode(nativeSearchResults(keywords, type, offset, cursor.orEmpty())).getOrThrow().searchPage
+    }
 
     init {
         System.loadLibrary("ncm_android")
@@ -492,11 +503,17 @@ object NcmBridge {
         val body = json.decodeFromString<BridgeResponse>(
             raw ?: throw IllegalStateException("原生层返回空")
         )
-        if (!body.ok) throw IllegalStateException(body.message.ifEmpty { "未知错误" })
+        if (!body.ok) throw IllegalStateException(
+            body.message.ifEmpty { "未知错误" },
+            body.detail.takeIf { it.isNotBlank() }?.let(::IllegalStateException),
+        )
         body
     }
 
     private external fun nativeQrKey(): String
+
+    private external fun nativeSearchCandidates(keywords: String): String
+    private external fun nativeSearchResults(keywords: String, type: String, offset: Int, cursor: String): String
 
     private external fun nativeQrCreate(key: String): String
 
@@ -581,6 +598,7 @@ object NcmBridge {
 private data class BridgeResponse(
     val ok: Boolean = false,
     val message: String = "",
+    val detail: String = "",
     val unikey: String = "",
     val qrurl: String = "",
     val code: Int = 0,
@@ -628,6 +646,9 @@ private data class BridgeResponse(
     val primaryArtistName: String = "",
     val albums: List<CollectionInfo> = emptyList(),
     val videos: List<ArtistVideo> = emptyList(),
+    val candidates: SearchCandidates = SearchCandidates(),
+    val partial: Boolean = false,
+    val searchPage: SearchResultsPage = SearchResultsPage(),
 )
 
 /** [NcmBridge.songQuality] 原生层返回的一档：`level` 是 wire 名，`size` 是这一档的体积（字节）。 */

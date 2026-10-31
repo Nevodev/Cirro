@@ -26,6 +26,8 @@ import com.nevoit.cirro.detail.ArtistShelfViewModel
 import com.nevoit.cirro.detail.CollectionViewModel
 import com.nevoit.cirro.home.HomeViewModel
 import com.nevoit.cirro.library.LibraryViewModel
+import com.nevoit.cirro.search.SearchHistoryStore
+import com.nevoit.cirro.search.SearchViewModel
 import com.nevoit.cirro.login.QrLoginViewModel
 import com.nevoit.cirro.lyrics.data.AppleMusicAccountRepository
 import com.nevoit.cirro.lyrics.data.AppleMusicTokenStore
@@ -126,6 +128,8 @@ val appModule = module {
 
     viewModelOf(::HomeViewModel)
     viewModelOf(::LibraryViewModel)
+    single { SearchHistoryStore(androidContext()) }
+    viewModelOf(::SearchViewModel)
 
     viewModelOf(::PlayerLikeViewModel)
 

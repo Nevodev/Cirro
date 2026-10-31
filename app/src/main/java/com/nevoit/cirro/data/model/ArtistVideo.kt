@@ -3,7 +3,7 @@ package com.nevoit.cirro.data.model
 import kotlinx.serialization.Serializable
 
 /**
- * 艺人页「音乐视频」里的一条。
+ * 艺人页和搜索结果中的音乐视频。
  *
  * [width] / [height] 是**视频画面**的真实宽高（原生层取最高一档 mp4 的 `width`/`height`），
  * 卡片按它算缩略图比例；[cover] 的比例可能跟视频不一样（竖版视频的封面常被裁成 16:9），
@@ -20,4 +20,5 @@ data class ArtistVideo(
     val playCount: Long = 0L,
     val publishTimeMs: Long = 0L,
     val url: String = "",
+    val artist: String = "",
 )

@@ -22,6 +22,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
@@ -94,6 +95,8 @@ internal fun TrackRow(
     onClick: () -> Unit,
     menuContent: @Composable BottomPopupMenuScope.() -> Unit,
     modifier: Modifier = Modifier,
+    coverSize: Dp = 40.dp,
+    coverVerticalPadding: Dp = 0.dp,
 ) {
     val shape = position.roundedShape()
     val liked = showStar && rememberIsLiked(song.id)
@@ -119,7 +122,8 @@ internal fun TrackRow(
             if (index == null) {
                 Box(
                     modifier = Modifier
-                        .size(40.dp)
+                        .padding(vertical = coverVerticalPadding)
+                        .size(coverSize)
                         .clip(RoundedRectangle(8.dp)),
                 ) {
                     AsyncImage(
@@ -208,6 +212,8 @@ internal fun TrackRow(
     onClick: () -> Unit,
     menuContent: @Composable BottomPopupMenuScope.() -> Unit,
     modifier: Modifier = Modifier,
+    coverSize: Dp = 40.dp,
+    coverVerticalPadding: Dp = 0.dp,
 ) = TrackRow(
     song = song,
     backgroundColor = rememberColorProducer(backgroundColor),
@@ -223,6 +229,8 @@ internal fun TrackRow(
     onClick = onClick,
     menuContent = menuContent,
     modifier = modifier,
+    coverSize = coverSize,
+    coverVerticalPadding = coverVerticalPadding,
 )
 
 // 文字色是组合期输入（要落进 TextStyle），只能在叶子这一层读——补间期间重组的就只有这几行字，
